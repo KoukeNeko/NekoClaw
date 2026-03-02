@@ -1,0 +1,20 @@
+{
+  "accounts": [
+    {
+      "id": "mock-default",
+      "provider": "mock",
+      "type": "api_key",
+      "token": "mock"
+    },
+    {
+      "id": "gemini-main",
+      "provider": "google-gemini-cli",
+      "type": "oauth",
+      "token": "<oauth-token>",
+      "metadata": {
+        "project_id": "my-project-id",
+        "endpoint": "https://cloudcode-pa.googleapis.com"
+      }
+    }
+  ]
+}
