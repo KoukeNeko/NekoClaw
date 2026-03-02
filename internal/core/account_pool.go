@@ -116,6 +116,9 @@ func (p *AccountPool) MarkFailure(accountID string, reason FailureReason) {
 	if _, ok := p.accounts[accountID]; !ok {
 		return
 	}
+	if p.isCooldownBypassedLocked(accountID) {
+		return
+	}
 	if reason == "" {
 		reason = FailureUnknown
 	}
@@ -139,7 +142,7 @@ func (p *AccountPool) MarkFailure(accountID string, reason FailureReason) {
 	stats.FailureCounts[reason] = stats.FailureCounts[reason] + 1
 
 	switch reason {
-	case FailureBilling, FailureAuth, FailureAuthPermanent:
+	case FailureBilling, FailureAuthPermanent:
 		count := stats.FailureCounts[reason]
 		disableFor := calculateBillingDisableDuration(count, p.cooldown)
 		stats.DisabledUntil = keepActiveWindowOrRecompute(stats.DisabledUntil, now, now.Add(disableFor))
@@ -217,9 +220,6 @@ func (p *AccountPool) SetCredential(profileID string, account Account) {
 		account.Provider = p.provider
 	}
 	p.accounts[profileID] = account
-	if !contains(p.order, profileID) {
-		p.order = append([]string{profileID}, p.order...)
-	}
 }
 
 func (p *AccountPool) SetPreferred(accountID string) bool {
@@ -229,22 +229,8 @@ func (p *AccountPool) SetPreferred(accountID string) bool {
 	if _, ok := p.accounts[accountID]; !ok {
 		return false
 	}
-	next := []string{accountID}
-	for _, id := range p.order {
-		if id == accountID {
-			continue
-		}
-		if _, ok := p.accounts[id]; ok {
-			next = append(next, id)
-		}
-	}
-	for id := range p.accounts {
-		if id == accountID || contains(next, id) {
-			continue
-		}
-		next = append(next, id)
-	}
-	p.order = next
+	// OpenClaw-style selection keeps preferred as a caller input (Acquire(preferredID))
+	// and does not mutate explicit order storage.
 	return true
 }
 
@@ -330,32 +316,90 @@ func (p *AccountPool) resolveOrderLocked(preferredID string, now time.Time) []st
 		return nil
 	}
 
-	available := make([]string, 0, len(base))
-	inCooldown := make([]string, 0, len(base))
-	for _, id := range base {
-		if p.isInCooldownLocked(id, now) {
-			inCooldown = append(inCooldown, id)
-			continue
+	// If user specified explicit order (store override or config), respect it
+	// exactly, but still apply cooldown sorting to avoid repeatedly selecting
+	// known-bad/rate-limited accounts as the first candidate.
+	if len(p.order) > 0 {
+		available := make([]string, 0, len(base))
+		type cooldownEntry struct {
+			id    string
+			until time.Time
 		}
-		available = append(available, id)
-	}
-
-	if len(p.order) == 0 {
-		sort.SliceStable(available, func(i, j int) bool {
-			a := p.accounts[available[i]]
-			b := p.accounts[available[j]]
-			as := accountTypeScore(a.Type)
-			bs := accountTypeScore(b.Type)
-			if as != bs {
-				return as < bs
+		inCooldown := make([]cooldownEntry, 0, len(base))
+		for _, id := range base {
+			if p.isInCooldownLocked(id, now) {
+				inCooldown = append(inCooldown, cooldownEntry{id: id, until: p.unusableUntilLocked(id)})
+			} else {
+				available = append(available, id)
 			}
-			return p.lastUsedOrZeroLocked(available[i]).Before(p.lastUsedOrZeroLocked(available[j]))
+		}
+		sort.SliceStable(inCooldown, func(i, j int) bool {
+			a, b := inCooldown[i].until, inCooldown[j].until
+			if a.IsZero() {
+				return false
+			}
+			if b.IsZero() {
+				return true
+			}
+			return a.Before(b)
 		})
+		cooldownIDs := make([]string, len(inCooldown))
+		for i, e := range inCooldown {
+			cooldownIDs[i] = e.id
+		}
+		ordered := append(append([]string{}, available...), cooldownIDs...)
+		return p.putPreferredFirst(ordered, preferredID)
 	}
 
+	// Otherwise, use round-robin: sort by type preference, then by lastUsed
+	// (oldest first for round-robin within type).
+	// preferredProfile goes first if specified (for explicit user choice).
+	ordered := p.orderProfilesByModeLocked(base, now)
+	return p.putPreferredFirst(ordered, preferredID)
+}
+
+// orderProfilesByModeLocked mirrors OpenClaw's orderProfilesByMode:
+//   - Partition accounts into available and in-cooldown.
+//   - Sort available by type (OAuth > Token > APIKey), then by lastUsed (oldest first = round-robin).
+//   - Append in-cooldown accounts sorted by soonest-available.
+func (p *AccountPool) orderProfilesByModeLocked(ids []string, now time.Time) []string {
+	type scoredEntry struct {
+		id        string
+		typeScore int
+		lastUsed  time.Time
+	}
+	available := make([]scoredEntry, 0, len(ids))
+	type cooldownEntry struct {
+		id    string
+		until time.Time
+	}
+	inCooldown := make([]cooldownEntry, 0, len(ids))
+
+	for _, id := range ids {
+		if p.isInCooldownLocked(id, now) {
+			inCooldown = append(inCooldown, cooldownEntry{id: id, until: p.unusableUntilLocked(id)})
+		} else {
+			account := p.accounts[id]
+			available = append(available, scoredEntry{
+				id:        id,
+				typeScore: accountTypeScore(account.Type),
+				lastUsed:  p.lastUsedOrZeroLocked(id),
+			})
+		}
+	}
+
+	// Primary sort: type preference (oauth > token > api_key).
+	// Secondary sort: lastUsed (oldest first for round-robin within type).
+	sort.SliceStable(available, func(i, j int) bool {
+		if available[i].typeScore != available[j].typeScore {
+			return available[i].typeScore < available[j].typeScore
+		}
+		return available[i].lastUsed.Before(available[j].lastUsed)
+	})
+
+	// Append cooldown accounts at the end, sorted by soonest available.
 	sort.SliceStable(inCooldown, func(i, j int) bool {
-		a := p.unusableUntilLocked(inCooldown[i])
-		b := p.unusableUntilLocked(inCooldown[j])
+		a, b := inCooldown[i].until, inCooldown[j].until
 		if a.IsZero() {
 			return false
 		}
@@ -365,19 +409,28 @@ func (p *AccountPool) resolveOrderLocked(preferredID string, now time.Time) []st
 		return a.Before(b)
 	})
 
-	ordered := append(append([]string{}, available...), inCooldown...)
-	if preferredID == "" {
+	out := make([]string, 0, len(ids))
+	for _, e := range available {
+		out = append(out, e.id)
+	}
+	for _, e := range inCooldown {
+		out = append(out, e.id)
+	}
+	return out
+}
+
+// putPreferredFirst moves the preferredID to the front of the ordered slice
+// if it is present, without otherwise disturbing the order.
+func (p *AccountPool) putPreferredFirst(ordered []string, preferredID string) []string {
+	if preferredID == "" || !contains(ordered, preferredID) {
 		return ordered
 	}
-	if !contains(ordered, preferredID) {
-		return ordered
-	}
-	out := []string{preferredID}
+	out := make([]string, 0, len(ordered))
+	out = append(out, preferredID)
 	for _, id := range ordered {
-		if id == preferredID {
-			continue
+		if id != preferredID {
+			out = append(out, id)
 		}
-		out = append(out, id)
 	}
 	return out
 }
@@ -423,6 +476,9 @@ func (p *AccountPool) clearExpiredCooldownsLocked(now time.Time) {
 }
 
 func (p *AccountPool) isInCooldownLocked(accountID string, now time.Time) bool {
+	if p.isCooldownBypassedLocked(accountID) {
+		return false
+	}
 	stats := p.usage[accountID]
 	if stats == nil {
 		return false
@@ -432,6 +488,14 @@ func (p *AccountPool) isInCooldownLocked(accountID string, now time.Time) bool {
 		return false
 	}
 	return now.Before(until)
+}
+
+func (p *AccountPool) isCooldownBypassedLocked(accountID string) bool {
+	account, ok := p.accounts[accountID]
+	if !ok {
+		return false
+	}
+	return isOpenRouterProvider(account.Provider) || isOpenRouterProvider(p.provider)
 }
 
 func (p *AccountPool) unusableUntilLocked(accountID string) time.Time {
@@ -528,6 +592,16 @@ func accountTypeScore(accountType AccountType) int {
 	default:
 		return 3
 	}
+}
+
+func isOpenRouterProvider(provider string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(provider))
+	if normalized == "" {
+		return false
+	}
+	normalized = strings.ReplaceAll(normalized, "_", "")
+	normalized = strings.ReplaceAll(normalized, "-", "")
+	return normalized == "openrouter"
 }
 
 func contains(items []string, target string) bool {

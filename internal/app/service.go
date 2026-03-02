@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +20,7 @@ import (
 
 var ErrProviderNotFound = errors.New("provider not found")
 var ErrNoAvailableAccount = errors.New("no available account")
+var ErrGeminiMissingProject = errors.New("gemini project is required")
 
 type Service struct {
 	mu                sync.RWMutex
@@ -108,19 +112,21 @@ type GeminiOAuthCompleteResult struct {
 }
 
 type GeminiProfileStatus struct {
-	ProfileID      string    `json:"profile_id"`
-	Provider       string    `json:"provider"`
-	Type           string    `json:"type"`
-	Email          string    `json:"email,omitempty"`
-	ProjectID      string    `json:"project_id,omitempty"`
-	Endpoint       string    `json:"endpoint,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	Available      bool      `json:"available"`
-	CooldownUntil  time.Time `json:"cooldown_until,omitempty"`
-	DisabledUntil  time.Time `json:"disabled_until,omitempty"`
-	DisabledReason string    `json:"disabled_reason,omitempty"`
-	Preferred      bool      `json:"preferred"`
+	ProfileID         string    `json:"profile_id"`
+	Provider          string    `json:"provider"`
+	Type              string    `json:"type"`
+	Email             string    `json:"email,omitempty"`
+	ProjectID         string    `json:"project_id,omitempty"`
+	Endpoint          string    `json:"endpoint,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+	Available         bool      `json:"available"`
+	CooldownUntil     time.Time `json:"cooldown_until,omitempty"`
+	DisabledUntil     time.Time `json:"disabled_until,omitempty"`
+	DisabledReason    string    `json:"disabled_reason,omitempty"`
+	Preferred         bool      `json:"preferred"`
+	ProjectReady      bool      `json:"project_ready"`
+	UnavailableReason string    `json:"unavailable_reason,omitempty"`
 }
 
 func (s *Service) StartGeminiOAuth(ctx context.Context, req GeminiOAuthStartRequest) (auth.StartResult, error) {
@@ -210,6 +216,7 @@ func (s *Service) ListGeminiProfiles() ([]GeminiProfileStatus, error) {
 
 	result := make([]GeminiProfileStatus, 0, len(profiles))
 	now := time.Now()
+	envProject := resolveGoogleCloudProject()
 	for _, profile := range profiles {
 		status := GeminiProfileStatus{
 			ProfileID: profile.ProfileID,
@@ -222,18 +229,33 @@ func (s *Service) ListGeminiProfiles() ([]GeminiProfileStatus, error) {
 			UpdatedAt: profile.UpdatedAt,
 			Preferred: profile.ProfileID == preferred,
 		}
-		if snap, ok := snapByID[profile.ProfileID]; ok && snap.Usage != nil {
-			status.CooldownUntil = snap.Usage.CooldownUntil
-			status.DisabledUntil = snap.Usage.DisabledUntil
-			status.DisabledReason = string(snap.Usage.DisabledReason)
-			status.Available = (snap.Usage.CooldownUntil.IsZero() || now.After(snap.Usage.CooldownUntil)) &&
-				(snap.Usage.DisabledUntil.IsZero() || now.After(snap.Usage.DisabledUntil))
+		if snap, ok := snapByID[profile.ProfileID]; ok {
+			if projectID := strings.TrimSpace(snap.Metadata["project_id"]); projectID != "" {
+				status.ProjectID = projectID
+			}
+			if endpoint := strings.TrimSpace(snap.Metadata["endpoint"]); endpoint != "" {
+				status.Endpoint = endpoint
+			}
+			if snap.Usage != nil {
+				status.CooldownUntil = snap.Usage.CooldownUntil
+				status.DisabledUntil = snap.Usage.DisabledUntil
+				status.DisabledReason = string(snap.Usage.DisabledReason)
+				status.Available = (snap.Usage.CooldownUntil.IsZero() || now.After(snap.Usage.CooldownUntil)) &&
+					(snap.Usage.DisabledUntil.IsZero() || now.After(snap.Usage.DisabledUntil))
+			} else {
+				status.Available = true
+			}
 		} else {
 			status.CooldownUntil = profile.CooldownUntil
 			status.DisabledUntil = profile.DisabledUntil
 			status.DisabledReason = profile.DisabledReason
 			status.Available = (profile.CooldownUntil.IsZero() || now.After(profile.CooldownUntil)) &&
 				(profile.DisabledUntil.IsZero() || now.After(profile.DisabledUntil))
+		}
+		status.ProjectReady = strings.TrimSpace(status.ProjectID) != "" || envProject != ""
+		if !status.ProjectReady {
+			status.UnavailableReason = "missing_project"
+			status.Available = false
 		}
 		result = append(result, status)
 	}
@@ -255,6 +277,13 @@ func (s *Service) UseGeminiProfile(profileID string) error {
 	}
 	if profile.ProfileID == "" {
 		return auth.ErrProfileNotFound
+	}
+	if strings.TrimSpace(profile.ProjectID) == "" && resolveGoogleCloudProject() == "" {
+		return fmt.Errorf(
+			"%w: profile=%s. Re-run Gemini OAuth or set GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_PROJECT_ID.",
+			ErrGeminiMissingProject,
+			profileID,
+		)
 	}
 
 	s.mu.Lock()
@@ -278,9 +307,7 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 	if modelID == "" {
 		modelID = "default"
 	}
-	if providerID == "google-gemini-cli" && strings.EqualFold(modelID, "default") {
-		modelID = "gemini-2.5-pro"
-	}
+	isGeminiDefaultModel := providerID == "google-gemini-cli" && strings.EqualFold(modelID, "default")
 	sessionID := strings.TrimSpace(req.SessionID)
 	if sessionID == "" {
 		sessionID = "main"
@@ -315,6 +342,10 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		if !ok {
 			reason := pool.ResolveUnavailableReason()
 			if lastErr == nil {
+				if inferred := s.inferGeminiMissingProjectFromPool(providerID, reason, pool); inferred != nil {
+					lastErr = inferred
+					break
+				}
 				soonest := pool.SoonestAvailableAt()
 				if soonest.IsZero() {
 					lastErr = fmt.Errorf("%w: provider=%s reason=%s", ErrNoAvailableAccount, providerID, reason)
@@ -325,7 +356,20 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 			break
 		}
 
-		account, refreshErr := s.maybeRefreshAccountCredential(ctx, providerID, modelID, prov, pool, account)
+		attemptModelID := modelID
+		if isGeminiDefaultModel {
+			resolvedModel, source := s.resolveDefaultGeminiModel(ctx, prov, account)
+			attemptModelID = resolvedModel
+			log.Printf(
+				"event=default_model_resolved provider=%s profile_id=%s source=%s model=%s",
+				providerID,
+				account.ID,
+				source,
+				attemptModelID,
+			)
+		}
+
+		account, refreshErr := s.maybeRefreshAccountCredential(ctx, providerID, attemptModelID, prov, pool, account)
 		if refreshErr != nil {
 			reason := deriveFailureReason(refreshErr)
 			pool.MarkFailure(account.ID, reason)
@@ -338,8 +382,28 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 			continue
 		}
 
+		if providerID == "google-gemini-cli" {
+			projectID := strings.TrimSpace(account.Metadata["project_id"])
+			if projectID == "" {
+				projectID = resolveGoogleCloudProject()
+			}
+			if projectID == "" {
+				lastErr = fmt.Errorf(
+					"%w: profile=%s. Re-run Gemini OAuth or set GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_PROJECT_ID.",
+					ErrGeminiMissingProject,
+					account.ID,
+				)
+				break
+			}
+			if account.Metadata == nil {
+				account.Metadata = core.Metadata{}
+			}
+			account.Metadata["project_id"] = projectID
+			pool.SetCredential(account.ID, account)
+		}
+
 		resp, err := prov.Generate(ctx, provider.GenerateRequest{
-			Model:    modelID,
+			Model:    attemptModelID,
 			Messages: compressedMessages,
 			Account:  account,
 		})
@@ -351,7 +415,7 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 			return core.ChatResponse{
 				SessionID:   sessionID,
 				Provider:    providerID,
-				Model:       modelID,
+				Model:       attemptModelID,
 				Reply:       resp.Text,
 				Compressed:  compressed,
 				Compression: compressionMeta,
@@ -397,6 +461,18 @@ func (s *Service) completeGeminiOAuth(
 		RedirectURI: pending.RedirectURI,
 	})
 	if err != nil {
+		if errors.Is(err, provider.ErrProjectDiscoveryFailed) {
+			log.Printf("event=project_discovery_failed provider=google-gemini-cli error=%q", err)
+		}
+		return GeminiOAuthCompleteResult{}, err
+	}
+	credential.ProjectID = strings.TrimSpace(credential.ProjectID)
+	if credential.ProjectID == "" {
+		err := fmt.Errorf(
+			"%w: Could not discover or provision a Google Cloud project. Set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID, then retry OAuth.",
+			provider.ErrProjectDiscoveryFailed,
+		)
+		log.Printf("event=project_discovery_failed provider=google-gemini-cli error=%q", err)
 		return GeminiOAuthCompleteResult{}, err
 	}
 
@@ -421,7 +497,7 @@ func (s *Service) completeGeminiOAuth(
 		Provider:  "google-gemini-cli",
 		Type:      string(core.AccountOAuth),
 		Email:     strings.TrimSpace(credential.Email),
-		ProjectID: strings.TrimSpace(credential.ProjectID),
+		ProjectID: credential.ProjectID,
 		Endpoint:  strings.TrimSpace(credential.ActiveEndpoint),
 	}
 	if err := store.UpsertProfile(meta); err != nil {
@@ -442,7 +518,7 @@ func (s *Service) completeGeminiOAuth(
 			Token:    credential.AccessToken,
 			Email:    strings.TrimSpace(credential.Email),
 			Metadata: core.Metadata{
-				"project_id": strings.TrimSpace(credential.ProjectID),
+				"project_id": credential.ProjectID,
 				"endpoint":   strings.TrimSpace(credential.ActiveEndpoint),
 				"profile_id": profileID,
 			},
@@ -451,12 +527,17 @@ func (s *Service) completeGeminiOAuth(
 		s.syncProfileState("google-gemini-cli", profileID)
 	}
 
-	log.Printf("event=oauth_complete provider=google-gemini-cli profile_id=%s endpoint=%s", profileID, credential.ActiveEndpoint)
+	log.Printf(
+		"event=oauth_complete provider=google-gemini-cli profile_id=%s endpoint=%s project_hash=%s",
+		profileID,
+		credential.ActiveEndpoint,
+		hashProjectIDForLog(credential.ProjectID),
+	)
 	return GeminiOAuthCompleteResult{
 		ProfileID:      profileID,
 		Provider:       "google-gemini-cli",
 		Email:          strings.TrimSpace(credential.Email),
-		ProjectID:      strings.TrimSpace(credential.ProjectID),
+		ProjectID:      credential.ProjectID,
 		ActiveEndpoint: strings.TrimSpace(credential.ActiveEndpoint),
 	}, nil
 }
@@ -636,6 +717,22 @@ func deriveFailureReason(err error) core.FailureReason {
 	return core.ClassifyFailure(err.Error())
 }
 
+func (s *Service) resolveDefaultGeminiModel(
+	ctx context.Context,
+	prov provider.Provider,
+	account core.Account,
+) (string, string) {
+	discoveryProvider, ok := prov.(provider.ModelDiscoveryProvider)
+	if !ok {
+		return "gemini-3-pro-preview", "fallback"
+	}
+	modelID, source, err := discoveryProvider.DiscoverPreferredModel(ctx, account)
+	if err != nil || strings.TrimSpace(modelID) == "" {
+		return "gemini-3-pro-preview", "fallback"
+	}
+	return strings.TrimSpace(modelID), chooseFirstNonEmpty(source, "fetchAvailableModels")
+}
+
 func chooseFirstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if trimmed := strings.TrimSpace(value); trimmed != "" {
@@ -643,6 +740,65 @@ func chooseFirstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (s *Service) inferGeminiMissingProjectFromPool(
+	providerID string,
+	reason core.FailureReason,
+	pool *core.AccountPool,
+) error {
+	if providerID != "google-gemini-cli" || reason != core.FailureUnknown {
+		return nil
+	}
+	if resolveGoogleCloudProject() != "" {
+		return nil
+	}
+	if pool != nil && len(pool.Snapshot()) > 0 {
+		return nil
+	}
+	store := s.authStoreSafe()
+	if store == nil {
+		return nil
+	}
+	profiles, err := store.ListProfiles("google-gemini-cli")
+	if err != nil || len(profiles) == 0 {
+		return nil
+	}
+	readyCount := 0
+	missingCount := 0
+	for _, profile := range profiles {
+		if strings.TrimSpace(profile.ProjectID) == "" {
+			missingCount++
+			continue
+		}
+		readyCount++
+	}
+	if readyCount == 0 && missingCount > 0 {
+		return fmt.Errorf(
+			"%w: all gemini profiles are missing project_id. Re-run Gemini OAuth or set GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_PROJECT_ID.",
+			ErrGeminiMissingProject,
+		)
+	}
+	return nil
+}
+
+func resolveGoogleCloudProject() string {
+	if project := strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT")); project != "" {
+		return project
+	}
+	if project := strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT_ID")); project != "" {
+		return project
+	}
+	return ""
+}
+
+func hashProjectIDForLog(projectID string) string {
+	trimmed := strings.TrimSpace(projectID)
+	if trimmed == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(trimmed))
+	return hex.EncodeToString(sum[:8])
 }
 
 func deriveProfileID(email string) string {

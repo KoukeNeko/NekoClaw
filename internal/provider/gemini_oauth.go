@@ -128,17 +128,13 @@ func (p *GeminiInternalProvider) CompleteOAuth(ctx context.Context, req OAuthCom
 		Token: tokenResp.AccessToken,
 	})
 	if err != nil {
-		fallbackEndpoint := resolveEndpointFallback(p.endpoints)
-		projectID := resolveGoogleCloudProject()
-		// Keep OAuth usable even if project discovery endpoints are temporarily unavailable.
-		if strings.Contains(strings.ToLower(err.Error()), "loadcodeassist failed on all configured endpoints") {
-			discovered = DiscoverProjectResult{
-				ProjectID:      projectID,
-				ActiveEndpoint: fallbackEndpoint,
-			}
-		} else {
-			return OAuthCredential{}, err
-		}
+		return OAuthCredential{}, fmt.Errorf("%w: %v", ErrProjectDiscoveryFailed, err)
+	}
+	if strings.TrimSpace(discovered.ProjectID) == "" {
+		return OAuthCredential{}, fmt.Errorf(
+			"%w: Could not discover or provision a Google Cloud project. Set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID, then retry OAuth.",
+			ErrProjectDiscoveryFailed,
+		)
 	}
 
 	expiresAt := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Add(-5 * time.Minute)
@@ -154,15 +150,6 @@ func (p *GeminiInternalProvider) CompleteOAuth(ctx context.Context, req OAuthCom
 		ProjectID:      discovered.ProjectID,
 		ActiveEndpoint: discovered.ActiveEndpoint,
 	}, nil
-}
-
-func resolveEndpointFallback(endpoints []string) string {
-	if len(endpoints) > 0 {
-		if endpoint := strings.TrimSpace(endpoints[0]); endpoint != "" {
-			return endpoint
-		}
-	}
-	return defaultGeminiProdEndpoint
 }
 
 func (p *GeminiInternalProvider) RefreshOAuthIfNeeded(

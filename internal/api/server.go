@@ -93,6 +93,10 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 			respondPlain(w, http.StatusBadRequest, "State mismatch. Please restart OAuth login.")
 			return
 		}
+		if errors.Is(err, provider.ErrProjectDiscoveryFailed) {
+			respondGeminiProjectDiscoveryError(w, err)
+			return
+		}
 		respondPlain(w, http.StatusBadGateway, "OAuth completion failed: "+err.Error())
 		return
 	}
@@ -131,6 +135,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := s.svc.HandleChat(r.Context(), req)
 	if err != nil {
+		if errors.Is(err, app.ErrGeminiMissingProject) {
+			respondErrorDetail(
+				w,
+				http.StatusBadRequest,
+				"missing_project",
+				err.Error(),
+			)
+			return
+		}
 		status := http.StatusBadGateway
 		if errors.Is(err, app.ErrNoAvailableAccount) {
 			status = http.StatusConflict
@@ -173,6 +186,15 @@ func (s *Server) handleDiscordEvent(w http.ResponseWriter, r *http.Request) {
 		Message:   payload.Message,
 	})
 	if err != nil {
+		if providerID == "google-gemini-cli" && errors.Is(err, app.ErrGeminiMissingProject) {
+			respondJSON(w, http.StatusOK, map[string]any{
+				"session_id": sessionID,
+				"provider":   providerID,
+				"reply":      "Gemini profiles 缺少 project_id。請重新 OAuth 或設定 GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_PROJECT_ID。",
+				"is_error":   true,
+			})
+			return
+		}
 		if providerID == "google-gemini-cli" && errors.Is(err, app.ErrNoAvailableAccount) {
 			respondJSON(w, http.StatusOK, map[string]any{
 				"session_id": sessionID,
@@ -287,6 +309,10 @@ func (s *Server) handleGeminiAuthManualComplete(w http.ResponseWriter, r *http.R
 	}
 	result, err := s.svc.CompleteGeminiOAuthManual(r.Context(), req)
 	if err != nil {
+		if errors.Is(err, provider.ErrProjectDiscoveryFailed) {
+			respondGeminiProjectDiscoveryError(w, err)
+			return
+		}
 		status := http.StatusBadGateway
 		if errors.Is(err, auth.ErrStateMismatch) || errors.Is(err, auth.ErrStateExpired) || errors.Is(err, auth.ErrStateNotFound) {
 			status = http.StatusBadRequest
@@ -365,8 +391,38 @@ func respondError(w http.ResponseWriter, status int, message string) {
 	respondJSON(w, status, map[string]any{"error": strings.TrimSpace(message)})
 }
 
+func respondErrorDetail(w http.ResponseWriter, status int, code, message string) {
+	respondJSON(w, status, map[string]any{
+		"error": map[string]any{
+			"code":    strings.TrimSpace(code),
+			"message": strings.TrimSpace(message),
+		},
+	})
+}
+
+func respondGeminiProjectDiscoveryError(w http.ResponseWriter, err error) {
+	respondErrorDetail(
+		w,
+		http.StatusBadRequest,
+		"project_discovery_failed",
+		chooseNonEmpty(
+			strings.TrimSpace(err.Error()),
+			"Could not discover or provision a Google Cloud project. Set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID, then retry OAuth.",
+		),
+	)
+}
+
 func respondPlain(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(message))
+}
+
+func chooseNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

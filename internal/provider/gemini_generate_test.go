@@ -111,3 +111,73 @@ func TestGenerateReturnsErrorWhenConfiguredPathReturns404(t *testing.T) {
 		t.Fatalf("expected error for invalid endpoint path")
 	}
 }
+
+func TestGenerateParsesSSEWhenSingleEventUsesMultipleDataLines(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello\"}]}}]}\n"))
+		_, _ = w.Write([]byte("data: }\n\n"))
+	}))
+	defer srv.Close()
+
+	p := NewGeminiInternalProvider(GeminiInternalOptions{
+		Endpoints: []string{srv.URL},
+	})
+	resp, err := p.Generate(context.Background(), GenerateRequest{
+		Model: "gemini-2.5-pro",
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: "hi"},
+		},
+		Account: core.Account{
+			ID:       "a1",
+			Provider: "google-gemini-cli",
+			Type:     core.AccountOAuth,
+			Token:    "token-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("generate failed: %v", err)
+	}
+	if resp.Text != "Hello" {
+		t.Fatalf("unexpected response text: %q", resp.Text)
+	}
+}
+
+func TestGenerateFallsBackWhenEndpointReturnsNoTextPayload(t *testing.T) {
+	noText := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"response\":{\"candidates\":[]}}\n\n"))
+	}))
+	defer noText.Close()
+
+	okText := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Recovered\"}]}}]}}\n\n"))
+	}))
+	defer okText.Close()
+
+	p := NewGeminiInternalProvider(GeminiInternalOptions{
+		Endpoints: []string{noText.URL, okText.URL},
+	})
+	resp, err := p.Generate(context.Background(), GenerateRequest{
+		Model: "gemini-2.5-pro",
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: "hi"},
+		},
+		Account: core.Account{
+			ID:       "a1",
+			Provider: "google-gemini-cli",
+			Type:     core.AccountOAuth,
+			Token:    "token-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("generate failed: %v", err)
+	}
+	if resp.Text != "Recovered" {
+		t.Fatalf("unexpected response text: %q", resp.Text)
+	}
+	if resp.Endpoint != okText.URL {
+		t.Fatalf("expected second endpoint, got %q", resp.Endpoint)
+	}
+}

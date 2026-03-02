@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -155,6 +157,189 @@ func TestOAuthStartSupportsRemoteModeAndRedirectOverride(t *testing.T) {
 	}
 }
 
+func TestGeminiOAuthManualCompleteProjectDiscoveryFailure(t *testing.T) {
+	svc := app.NewService()
+	svc.RegisterProvider(fakeGeminiProviderProjectDiscoveryFail{})
+	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
+
+	store, err := auth.NewStore(auth.StoreOptions{
+		BaseDir: t.TempDir(),
+		Keyring: newMemoryKeyring(),
+	})
+	if err != nil {
+		t.Fatalf("new auth store: %v", err)
+	}
+	manager := auth.NewGeminiOAuthManager(auth.ManagerOptions{
+		StateTTL: 5 * time.Minute,
+		IsRemote: func() bool { return true },
+	})
+	svc.SetAuthIntegration(manager, store)
+
+	server := NewServer(svc)
+	handler := server.Handler()
+
+	startResp := performJSONRequest(t, handler, http.MethodPost, "/v1/auth/gemini/start", `{}`)
+	if startResp.Code != http.StatusOK {
+		t.Fatalf("unexpected start status: %d body=%s", startResp.Code, startResp.Body.String())
+	}
+	var started map[string]any
+	if err := json.Unmarshal(startResp.Body.Bytes(), &started); err != nil {
+		t.Fatalf("decode start response: %v", err)
+	}
+	state, _ := started["state"].(string)
+
+	completeBody := `{"state":"` + state + `","callback_url_or_code":"http://localhost:8085/oauth2callback?code=code-1&state=` + state + `"}`
+	completeResp := performJSONRequest(t, handler, http.MethodPost, "/v1/auth/gemini/manual/complete", completeBody)
+	if completeResp.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected complete status: %d body=%s", completeResp.Code, completeResp.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(completeResp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	errorPayload, _ := payload["error"].(map[string]any)
+	if code, _ := errorPayload["code"].(string); code != "project_discovery_failed" {
+		t.Fatalf("unexpected error code: %#v", errorPayload)
+	}
+}
+
+func TestChatMissingProjectReturnsStructuredError(t *testing.T) {
+	provider := &fakeGeminiProviderWithCounter{}
+	svc := app.NewService()
+	svc.RegisterProvider(provider)
+	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", []core.Account{
+		{
+			ID:       "p1",
+			Provider: "google-gemini-cli",
+			Type:     core.AccountOAuth,
+			Token:    "token-1",
+			Metadata: core.Metadata{
+				"endpoint": "https://cloudcode-pa.googleapis.com",
+			},
+		},
+	}, nil, core.DefaultCooldownConfig()))
+	server := NewServer(svc)
+	handler := server.Handler()
+
+	chatReq := `{"session_id":"s1","surface":"tui","provider":"google-gemini-cli","model":"default","message":"hello"}`
+	chatResp := performJSONRequest(t, handler, http.MethodPost, "/v1/chat", chatReq)
+	if chatResp.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected chat status: %d body=%s", chatResp.Code, chatResp.Body.String())
+	}
+	if provider.generateCalls != 0 {
+		t.Fatalf("expected no generate calls when project is missing, got %d", provider.generateCalls)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(chatResp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	errorPayload, _ := payload["error"].(map[string]any)
+	if code, _ := errorPayload["code"].(string); code != "missing_project" {
+		t.Fatalf("unexpected error code: %#v", errorPayload)
+	}
+}
+
+func TestGeminiAuthProfilesIncludesProjectReadiness(t *testing.T) {
+	svc := app.NewService()
+	svc.RegisterProvider(fakeGeminiProvider{})
+	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
+
+	store, err := auth.NewStore(auth.StoreOptions{
+		BaseDir: t.TempDir(),
+		Keyring: newMemoryKeyring(),
+	})
+	if err != nil {
+		t.Fatalf("new auth store: %v", err)
+	}
+	if err := store.UpsertProfile(auth.ProfileMetadata{
+		ProfileID: "missing-project",
+		Provider:  "google-gemini-cli",
+		Type:      string(core.AccountOAuth),
+		Email:     "tester@example.com",
+		ProjectID: "",
+	}); err != nil {
+		t.Fatalf("upsert profile: %v", err)
+	}
+	manager := auth.NewGeminiOAuthManager(auth.ManagerOptions{
+		StateTTL: 5 * time.Minute,
+		IsRemote: func() bool { return true },
+	})
+	svc.SetAuthIntegration(manager, store)
+
+	server := NewServer(svc)
+	handler := server.Handler()
+
+	resp := performJSONRequest(t, handler, http.MethodGet, "/v1/auth/gemini/profiles", "")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected profiles status: %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var payload struct {
+		Profiles []app.GeminiProfileStatus `json:"profiles"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode profiles response: %v", err)
+	}
+	if len(payload.Profiles) != 1 {
+		t.Fatalf("unexpected profiles length: %d", len(payload.Profiles))
+	}
+	profile := payload.Profiles[0]
+	if profile.ProjectReady {
+		t.Fatalf("expected project_ready false")
+	}
+	if profile.UnavailableReason != "missing_project" {
+		t.Fatalf("unexpected unavailable reason: %q", profile.UnavailableReason)
+	}
+}
+
+func TestChatNoAvailableGeminiProfilesWithMissingProjectReturnsStructuredError(t *testing.T) {
+	svc := app.NewService()
+	svc.RegisterProvider(fakeGeminiProvider{})
+	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
+
+	store, err := auth.NewStore(auth.StoreOptions{
+		BaseDir: t.TempDir(),
+		Keyring: newMemoryKeyring(),
+	})
+	if err != nil {
+		t.Fatalf("new auth store: %v", err)
+	}
+	if err := store.UpsertProfile(auth.ProfileMetadata{
+		ProfileID: "legacy-no-project",
+		Provider:  "google-gemini-cli",
+		Type:      string(core.AccountOAuth),
+		Email:     "legacy@example.com",
+		ProjectID: "",
+	}); err != nil {
+		t.Fatalf("upsert profile: %v", err)
+	}
+	manager := auth.NewGeminiOAuthManager(auth.ManagerOptions{
+		StateTTL: 5 * time.Minute,
+		IsRemote: func() bool { return true },
+	})
+	svc.SetAuthIntegration(manager, store)
+
+	server := NewServer(svc)
+	handler := server.Handler()
+
+	chatReq := `{"session_id":"s1","surface":"tui","provider":"google-gemini-cli","model":"default","message":"hello"}`
+	chatResp := performJSONRequest(t, handler, http.MethodPost, "/v1/chat", chatReq)
+	if chatResp.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected chat status: %d body=%s", chatResp.Code, chatResp.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(chatResp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	errorPayload, _ := payload["error"].(map[string]any)
+	if code, _ := errorPayload["code"].(string); code != "missing_project" {
+		t.Fatalf("unexpected error code: %#v", errorPayload)
+	}
+}
+
 func performJSONRequest(t *testing.T, handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	var reader *bytes.Reader
@@ -207,6 +392,31 @@ func (fakeGeminiProvider) CompleteOAuth(_ context.Context, req provider.OAuthCom
 
 func (fakeGeminiProvider) RefreshOAuthIfNeeded(_ context.Context, credential provider.OAuthCredential) (provider.OAuthCredential, bool, error) {
 	return credential, false, nil
+}
+
+type fakeGeminiProviderProjectDiscoveryFail struct {
+	fakeGeminiProvider
+}
+
+func (fakeGeminiProviderProjectDiscoveryFail) CompleteOAuth(_ context.Context, _ provider.OAuthCompleteRequest) (provider.OAuthCredential, error) {
+	return provider.OAuthCredential{}, fmt.Errorf("%w: test failure", provider.ErrProjectDiscoveryFailed)
+}
+
+type fakeGeminiProviderWithCounter struct {
+	generateCalls int
+}
+
+func (p *fakeGeminiProviderWithCounter) ID() string {
+	return "google-gemini-cli"
+}
+
+func (p *fakeGeminiProviderWithCounter) ContextWindow(string) int {
+	return 32000
+}
+
+func (p *fakeGeminiProviderWithCounter) Generate(_ context.Context, _ provider.GenerateRequest) (provider.GenerateResponse, error) {
+	p.generateCalls++
+	return provider.GenerateResponse{Text: "unexpected"}, errors.New("should not be called")
 }
 
 type memoryKeyring struct {

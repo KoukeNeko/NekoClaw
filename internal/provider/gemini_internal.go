@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doeshing/nekoclaw/internal/core"
@@ -26,6 +28,7 @@ const (
 
 	discoveryPollMaxAttempts = 24
 	discoveryPollInterval    = 5 * time.Second
+	modelDiscoveryTTL        = 10 * time.Minute
 )
 
 type GeminiInternalOptions struct {
@@ -40,6 +43,14 @@ type GeminiInternalProvider struct {
 	endpoints     []string
 	generatePath  string
 	contextWindow int
+	modelCacheMu  sync.Mutex
+	modelCache    map[string]geminiModelCacheEntry
+}
+
+type geminiModelCacheEntry struct {
+	Model     string
+	Source    string
+	ExpiresAt time.Time
 }
 
 type GeminiQuotaResponse struct {
@@ -86,6 +97,7 @@ func NewGeminiInternalProvider(opts GeminiInternalOptions) *GeminiInternalProvid
 		endpoints:     endpoints,
 		generatePath:  generatePath,
 		contextWindow: contextWindow,
+		modelCache:    map[string]geminiModelCacheEntry{},
 	}
 }
 
@@ -99,6 +111,34 @@ func (p *GeminiInternalProvider) ContextWindow(_ string) int {
 
 func (p *GeminiInternalProvider) Endpoints() []string {
 	return append([]string(nil), p.endpoints...)
+}
+
+func (p *GeminiInternalProvider) DiscoverPreferredModel(
+	ctx context.Context,
+	account core.Account,
+) (string, string, error) {
+	if strings.TrimSpace(account.Token) == "" {
+		return "", "", fmt.Errorf("missing account token")
+	}
+	cacheKey := strings.TrimSpace(account.ID)
+	if cacheKey != "" {
+		if model, source, ok := p.loadModelCache(cacheKey); ok {
+			return model, source, nil
+		}
+	}
+
+	model, source := p.discoverPreferredModelNoCache(ctx, account)
+	if model == "" {
+		model = "gemini-3-pro-preview"
+		source = "fallback"
+	}
+	if source == "" {
+		source = "fallback"
+	}
+	if cacheKey != "" {
+		p.storeModelCache(cacheKey, model, source)
+	}
+	return model, source, nil
 }
 
 func (p *GeminiInternalProvider) Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
@@ -153,12 +193,13 @@ func (p *GeminiInternalProvider) Generate(ctx context.Context, req GenerateReque
 
 		text, ok := extractTextFromGeminiResponse(respBody)
 		if !ok {
-			return GenerateResponse{}, &FailureError{
+			lastErr = &FailureError{
 				Reason:   core.FailureFormat,
-				Message:  "gemini internal response did not include text",
+				Message:  "gemini internal response did not include text: " + summarizeForError(respBody, 280),
 				Endpoint: endpoint,
 				Status:   resp.StatusCode,
 			}
+			continue
 		}
 		return GenerateResponse{Text: text, Endpoint: endpoint, Raw: respBody}, nil
 	}
@@ -198,6 +239,66 @@ func (p *GeminiInternalProvider) RetrieveQuota(ctx context.Context, token string
 		return GeminiQuotaResponse{}, err
 	}
 	return quota, nil
+}
+
+func (p *GeminiInternalProvider) discoverPreferredModelNoCache(
+	ctx context.Context,
+	account core.Account,
+) (string, string) {
+	endpointOrder := p.resolveEndpointOrder(account)
+	for _, endpoint := range endpointOrder {
+		payload, status, err := p.postJSON(
+			ctx,
+			strings.TrimRight(endpoint, "/")+"/v1internal:fetchAvailableModels",
+			account.Token,
+			map[string]any{},
+			nil,
+		)
+		if err != nil || status < 200 || status >= 300 {
+			continue
+		}
+		if model, ok := selectPreferredModelFromFetchAvailable(payload); ok {
+			return model, "fetchAvailableModels"
+		}
+	}
+
+	quota, err := p.RetrieveQuota(ctx, account.Token)
+	if err == nil {
+		modelIDs := make([]string, 0, len(quota.Buckets))
+		for _, bucket := range quota.Buckets {
+			if modelID := strings.TrimSpace(bucket.ModelID); modelID != "" {
+				modelIDs = append(modelIDs, modelID)
+			}
+		}
+		if model, ok := pickPreferredGeminiModel(modelIDs); ok {
+			return model, "quota"
+		}
+	}
+	return "gemini-3-pro-preview", "fallback"
+}
+
+func (p *GeminiInternalProvider) loadModelCache(cacheKey string) (string, string, bool) {
+	p.modelCacheMu.Lock()
+	defer p.modelCacheMu.Unlock()
+	entry, ok := p.modelCache[cacheKey]
+	if !ok {
+		return "", "", false
+	}
+	if time.Now().After(entry.ExpiresAt) {
+		delete(p.modelCache, cacheKey)
+		return "", "", false
+	}
+	return entry.Model, entry.Source, true
+}
+
+func (p *GeminiInternalProvider) storeModelCache(cacheKey, model, source string) {
+	p.modelCacheMu.Lock()
+	defer p.modelCacheMu.Unlock()
+	p.modelCache[cacheKey] = geminiModelCacheEntry{
+		Model:     strings.TrimSpace(model),
+		Source:    strings.TrimSpace(source),
+		ExpiresAt: time.Now().Add(modelDiscoveryTTL),
+	}
 }
 
 func (p *GeminiInternalProvider) DiscoverProject(
@@ -258,12 +359,6 @@ func (p *GeminiInternalProvider) DiscoverProject(
 	}
 
 	if activeEndpoint == "" {
-		if projectIDFromEnv != "" {
-			return DiscoverProjectResult{
-				ProjectID:      projectIDFromEnv,
-				ActiveEndpoint: resolveEndpointFallback(endpointOrder),
-			}, nil
-		}
 		if loadErr != nil {
 			return DiscoverProjectResult{}, fmt.Errorf("loadCodeAssist failed on all configured endpoints: %w", loadErr)
 		}
@@ -461,6 +556,56 @@ func sanitizeEndpoints(endpoints []string) []string {
 	return out
 }
 
+func selectPreferredModelFromFetchAvailable(payload map[string]any) (string, bool) {
+	modelsRaw, ok := payload["models"].(map[string]any)
+	if !ok || len(modelsRaw) == 0 {
+		return "", false
+	}
+	modelIDs := make([]string, 0, len(modelsRaw))
+	for modelID := range modelsRaw {
+		trimmed := strings.TrimSpace(modelID)
+		if trimmed != "" {
+			modelIDs = append(modelIDs, trimmed)
+		}
+	}
+	return pickPreferredGeminiModel(modelIDs)
+}
+
+func pickPreferredGeminiModel(modelIDs []string) (string, bool) {
+	priority := []string{
+		"gemini-3-pro-preview",
+		"gemini-2.5-pro",
+		"gemini-3-flash-preview",
+		"gemini-2.5-flash",
+	}
+	normalized := make([]string, 0, len(modelIDs))
+	seen := map[string]struct{}{}
+	for _, modelID := range modelIDs {
+		m := strings.TrimSpace(modelID)
+		if m == "" {
+			continue
+		}
+		if _, ok := seen[m]; ok {
+			continue
+		}
+		seen[m] = struct{}{}
+		normalized = append(normalized, m)
+	}
+	if len(normalized) == 0 {
+		return "", false
+	}
+	for _, target := range priority {
+		for _, candidate := range normalized {
+			if candidate == target {
+				return candidate, true
+			}
+		}
+	}
+	// Keep deterministic fallback if only unknown IDs are available.
+	sort.Strings(normalized)
+	return normalized[0], true
+}
+
 func (p *GeminiInternalProvider) resolveEndpointOrder(account core.Account) []string {
 	preferred := strings.TrimSpace(account.Metadata["endpoint"])
 	return p.resolveEndpointOrderFromPreference(preferred)
@@ -537,7 +682,7 @@ func extractTextFromGeminiResponse(body []byte) (string, bool) {
 	}
 
 	// SSE mode from streamGenerateContent emits lines like: data: {...}
-	if strings.Contains(trimmed, "\n") && strings.Contains(trimmed, "data:") {
+	if strings.Contains(trimmed, "data:") {
 		if text, ok := extractTextFromGeminiSSE(trimmed); ok {
 			return text, true
 		}
@@ -558,21 +703,19 @@ func extractTextFromGeminiResponse(body []byte) (string, bool) {
 func extractTextFromGeminiSSE(raw string) (string, bool) {
 	lines := strings.Split(raw, "\n")
 	var joined strings.Builder
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+	var eventData []string
+	flush := func() {
+		if len(eventData) == 0 {
+			return
 		}
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		chunk := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		chunk := strings.TrimSpace(strings.Join(eventData, "\n"))
+		eventData = eventData[:0]
 		if chunk == "" || chunk == "[DONE]" {
-			continue
+			return
 		}
 		var payload map[string]any
 		if err := json.Unmarshal([]byte(chunk), &payload); err != nil {
-			continue
+			return
 		}
 		root := payload
 		if response, ok := payload["response"].(map[string]any); ok {
@@ -582,6 +725,20 @@ func extractTextFromGeminiSSE(raw string) (string, bool) {
 			joined.WriteString(text)
 		}
 	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			flush()
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "data:") {
+			continue
+		}
+		eventData = append(eventData, strings.TrimSpace(strings.TrimPrefix(trimmed, "data:")))
+	}
+	flush()
+
 	result := strings.TrimSpace(joined.String())
 	if result == "" {
 		return "", false
@@ -622,6 +779,17 @@ func extractTextFromGeminiMap(root map[string]any) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func summarizeForError(body []byte, limit int) string {
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
+		return "<empty>"
+	}
+	if limit <= 0 || len(trimmed) <= limit {
+		return trimmed
+	}
+	return strings.TrimSpace(trimmed[:limit]) + "..."
 }
 
 func extractProjectID(payload map[string]any) string {
@@ -690,14 +858,31 @@ func resolveGoogleCloudProject() string {
 }
 
 func resolveCodeAssistPlatform() string {
-	switch runtime.GOOS {
-	case "windows":
-		return "WINDOWS"
+	return resolveCodeAssistPlatformFor(runtime.GOOS, runtime.GOARCH)
+}
+
+func resolveCodeAssistPlatformFor(goos, goarch string) string {
+	switch goos {
 	case "darwin":
-		return "MACOS"
-	default:
-		return "LINUX"
+		switch goarch {
+		case "amd64":
+			return "DARWIN_AMD64"
+		case "arm64":
+			return "DARWIN_ARM64"
+		}
+	case "linux":
+		switch goarch {
+		case "amd64":
+			return "LINUX_AMD64"
+		case "arm64":
+			return "LINUX_ARM64"
+		}
+	case "windows":
+		if goarch == "amd64" {
+			return "WINDOWS_AMD64"
+		}
 	}
+	return "PLATFORM_UNSPECIFIED"
 }
 
 func extractOperationName(payload map[string]any) string {

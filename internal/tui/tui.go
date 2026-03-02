@@ -32,7 +32,6 @@ const (
 	pickModel        pickerPurpose = "model"
 	pickSession      pickerPurpose = "session"
 	pickUseProfile   pickerPurpose = "use_profile"
-	pickAuthProfile  pickerPurpose = "auth_profile"
 	pickAuthRedirect pickerPurpose = "auth_redirect"
 	pickManualState  pickerPurpose = "manual_state"
 	pickAuthStatus   pickerPurpose = "auth_status"
@@ -58,7 +57,6 @@ const (
 	actionAuthStatus
 	actionAuthUseProfile
 	actionAuthManualComplete
-	actionSetAuthProfile
 	actionSetAuthRedirect
 	actionQuit
 )
@@ -69,20 +67,54 @@ type menuItem struct {
 	Action menuAction
 }
 
-var menuItems = []menuItem{
-	{Title: "Chat", Detail: "Open conversation panel", Action: actionOpenChat},
-	{Title: "Provider", Detail: "Select provider from list", Action: actionSetProvider},
-	{Title: "Model", Detail: "Select model from list", Action: actionSetModel},
-	{Title: "Session", Detail: "Select session from list", Action: actionSetSession},
-	{Title: "OAuth Auto", Detail: "Start OAuth with auto mode", Action: actionAuthLoginAuto},
-	{Title: "OAuth Local", Detail: "Force localhost callback mode", Action: actionAuthLoginLocal},
-	{Title: "OAuth Remote", Detail: "Force remote/manual mode", Action: actionAuthLoginRemote},
-	{Title: "Profiles", Detail: "Show Gemini profile status", Action: actionAuthStatus},
-	{Title: "Use Profile", Detail: "Switch runtime profile from list", Action: actionAuthUseProfile},
-	{Title: "Manual Complete", Detail: "Complete OAuth with pasted callback/code", Action: actionAuthManualComplete},
-	{Title: "Auth Profile", Detail: "Select default profile_id for OAuth start", Action: actionSetAuthProfile},
-	{Title: "Auth Redirect", Detail: "Select redirect_uri override", Action: actionSetAuthRedirect},
-	{Title: "Quit", Detail: "Exit TUI", Action: actionQuit},
+type menuSection struct {
+	Title string
+	Items []menuItem
+}
+
+var menuSections = []menuSection{
+	{
+		Title: "Chat",
+		Items: []menuItem{
+			{Title: "Chat", Detail: "Open conversation panel", Action: actionOpenChat},
+			{Title: "Session", Detail: "Select session from list", Action: actionSetSession},
+		},
+	},
+	{
+		Title: "Runtime",
+		Items: []menuItem{
+			{Title: "Provider", Detail: "Select provider from list", Action: actionSetProvider},
+			{Title: "Model", Detail: "Select model from list", Action: actionSetModel},
+			{Title: "Use Profile", Detail: "List pool profiles (runtime auto-select)", Action: actionAuthUseProfile},
+		},
+	},
+	{
+		Title: "Gemini OAuth",
+		Items: []menuItem{
+			{Title: "OAuth Auto", Detail: "Start OAuth with auto mode", Action: actionAuthLoginAuto},
+			{Title: "OAuth Local", Detail: "Force localhost callback mode", Action: actionAuthLoginLocal},
+			{Title: "OAuth Remote", Detail: "Force remote/manual mode", Action: actionAuthLoginRemote},
+			{Title: "Profiles", Detail: "Show Gemini profile status", Action: actionAuthStatus},
+			{Title: "Manual Complete", Detail: "Complete OAuth with pasted callback/code", Action: actionAuthManualComplete},
+			{Title: "Auth Redirect", Detail: "Select redirect_uri override", Action: actionSetAuthRedirect},
+		},
+	},
+	{
+		Title: "System",
+		Items: []menuItem{
+			{Title: "Quit", Detail: "Exit TUI", Action: actionQuit},
+		},
+	},
+}
+
+var menuItems = flattenMenuSections(menuSections)
+
+func flattenMenuSections(sections []menuSection) []menuItem {
+	out := make([]menuItem, 0, len(sections)*2)
+	for _, section := range sections {
+		out = append(out, section.Items...)
+	}
+	return out
 }
 
 type pickerOption struct {
@@ -154,11 +186,12 @@ type model struct {
 	provider  string
 	modelID   string
 
-	authProfileID string
-	authRedirect  string
+	authRedirect string
 
 	manualState   string
 	lastAuthState string
+	activeProfile string
+	defaultModel  string
 
 	knownProfiles []client.GeminiAuthProfile
 	knownSessions []string
@@ -209,8 +242,7 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
+		m.applyWindowSize(msg.Width, msg.Height)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -222,6 +254,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "error"
 			m.lines = append(m.lines, chatLine{role: "error", text: msg.err.Error()})
 			return m, nil
+		}
+		if m.provider == "google-gemini-cli" {
+			if strings.EqualFold(m.modelID, "default") {
+				m.defaultModel = strings.TrimSpace(msg.response.Model)
+			}
+			m.activeProfile = strings.TrimSpace(msg.response.AccountID)
 		}
 		m.status = fmt.Sprintf("ok · account=%s", msg.response.AccountID)
 		m.lines = append(m.lines, chatLine{role: "assistant", text: msg.response.Reply})
@@ -289,6 +327,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.status = "oauth_complete"
 		m.provider = "google-gemini-cli"
+		m.activeProfile = strings.TrimSpace(msg.response.ProfileID)
+		m.defaultModel = ""
 		m.lines = append(m.lines, chatLine{role: "system", text: fmt.Sprintf(
 			"OAuth complete: profile=%s email=%s project=%s endpoint=%s",
 			msg.response.ProfileID,
@@ -308,6 +348,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.knownProfiles = sortedProfiles(msg.profiles)
+		m.refreshActiveProfileFromKnown()
 		switch msg.purpose {
 		case pickAuthStatus:
 			m.renderProfileStatusLines(m.knownProfiles)
@@ -315,17 +356,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.view = viewMenu
 			return m, nil
 		case pickUseProfile:
-			opts := profilePickerOptions(m.knownProfiles, false)
-			if len(opts) == 0 {
-				m.lines = append(m.lines, chatLine{role: "system", text: "No Gemini profiles available."})
-				m.view = viewMenu
-				return m, nil
-			}
-			m.openPicker(pickUseProfile, "Select Runtime Profile", "Choose profile to use now", opts)
-			return m, nil
-		case pickAuthProfile:
-			opts := profilePickerOptions(m.knownProfiles, true)
-			m.openPicker(pickAuthProfile, "Select OAuth profile_id", "Choose default profile_id for login", opts)
+			m.renderProfileStatusLines(m.knownProfiles)
+			m.status = fmt.Sprintf("profiles=%d", len(m.knownProfiles))
+			m.view = viewMenu
 			return m, nil
 		}
 		m.view = viewMenu
@@ -461,38 +494,23 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) menuMoveUp() {
-	const columns = 2
-	next := m.menuIndex - columns
-	if next >= 0 {
-		m.menuIndex = next
+	if m.menuIndex > 0 {
+		m.menuIndex--
 	}
 }
 
 func (m *model) menuMoveDown() {
-	const columns = 2
-	next := m.menuIndex + columns
-	if next < len(menuItems) {
-		m.menuIndex = next
+	if m.menuIndex+1 < len(menuItems) {
+		m.menuIndex++
 	}
 }
 
 func (m *model) menuMoveLeft() {
-	const columns = 2
-	if m.menuIndex%columns == 0 {
-		return
-	}
-	m.menuIndex--
+	m.menuMoveUp()
 }
 
 func (m *model) menuMoveRight() {
-	const columns = 2
-	if m.menuIndex%columns == columns-1 {
-		return
-	}
-	next := m.menuIndex + 1
-	if next < len(menuItems) {
-		m.menuIndex = next
-	}
+	m.menuMoveDown()
 }
 
 func (m model) executeMenuAction() (tea.Model, tea.Cmd) {
@@ -547,11 +565,6 @@ func (m model) executeMenuAction() (tea.Model, tea.Cmd) {
 		}
 		m.openPicker(pickManualState, "Select OAuth state", "Choose recent state or custom", opts)
 		return m, nil
-
-	case actionSetAuthProfile:
-		m.pending = true
-		m.status = "loading_profiles"
-		return m, listGeminiProfilesCmd(m.client, pickAuthProfile)
 
 	case actionSetAuthRedirect:
 		opts := redirectOptions(m.authRedirect)
@@ -626,13 +639,6 @@ func (m model) applyPickerSelection() (tea.Model, tea.Cmd) {
 		m.view = viewMenu
 		return m, useGeminiProfileCmd(m.client, profileID)
 
-	case pickAuthProfile:
-		m.authProfileID = strings.TrimSpace(picked.Value)
-		m.lines = append(m.lines, chatLine{role: "system", text: "oauth profile_id set to " + fallback(m.authProfileID, "<empty>")})
-		m.status = "updated"
-		m.view = viewMenu
-		return m, nil
-
 	case pickAuthRedirect:
 		if picked.Value == "<default>" {
 			m.authRedirect = ""
@@ -691,7 +697,7 @@ func (m model) startOAuthWithMode(mode string) (tea.Model, tea.Cmd) {
 	m.status = "oauth_starting"
 	m.view = viewMenu
 	return m, startGeminiOAuthCmd(m.client, client.GeminiAuthStartRequest{
-		ProfileID:   strings.TrimSpace(m.authProfileID),
+		ProfileID:   "",
 		Mode:        strings.TrimSpace(mode),
 		RedirectURI: strings.TrimSpace(m.authRedirect),
 	})
@@ -747,84 +753,78 @@ func (m model) View() string {
 }
 
 func (m model) menuLayoutWidths() (menuWidth int, summaryWidth int, stacked bool) {
-	// Use a safe fallback for environments where terminal size isn't reported yet.
 	total := m.width
 	if total <= 0 {
 		total = 100
 	}
-	// Very narrow screens: stack panels vertically so nothing overflows.
+	// Always keep at least one visible character after borders/padding.
+	minPanel := 12
+	stackedWidth := total - 2
+	if stackedWidth < minPanel {
+		stackedWidth = minPanel
+	}
+
+	// Narrow screens should stack panels.
 	if total < 90 {
-		w := total - 2
-		if w < 34 {
-			w = 34
-		}
-		return w, w, true
+		return stackedWidth, stackedWidth, true
 	}
 
 	gap := 1
 	menuWidth = total * 45 / 100
-	if menuWidth < 34 {
-		menuWidth = 34
+	if menuWidth < minPanel {
+		menuWidth = minPanel
 	}
 	if menuWidth > 60 {
 		menuWidth = 60
 	}
 	summaryWidth = total - gap - menuWidth
-	if summaryWidth < 34 {
-		summaryWidth = 34
-		menuWidth = total - gap - summaryWidth
-		if menuWidth < 34 {
-			// Cannot maintain side-by-side safely; fall back to stacked mode.
-			w := total - 2
-			if w < 34 {
-				w = 34
-			}
-			return w, w, true
-		}
+	if summaryWidth < minPanel {
+		return stackedWidth, stackedWidth, true
 	}
 	return menuWidth, summaryWidth, false
 }
 
 func (m model) renderMenuPanel(selectedStyle, normalStyle lipgloss.Style, width int) string {
-	const columns = 2
+	const columns = 1
 	outerWidth := width
 	if outerWidth <= 0 {
 		outerWidth = 36
 	}
-	textWidth := outerWidth - 4 // border(2) + horizontal padding(2)
-	if textWidth < 24 {
-		textWidth = 24
+	blockWidth := outerWidth - 2 // exclude border
+	if blockWidth < 8 {
+		blockWidth = 8
 	}
-	blockWidth := textWidth + 2 // include horizontal padding, exclude border
-	if blockWidth > outerWidth-2 {
-		blockWidth = outerWidth - 2
-		if blockWidth < 24 {
-			blockWidth = 24
+	textWidth := blockWidth - 2 // exclude horizontal padding
+	colWidth := textWidth
+	if colWidth < 4 {
+		colWidth = 4
+	}
+	sectionStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
+	rows := make([]string, 0, len(menuItems)+len(menuSections)+2)
+	globalIdx := 0
+	for sectionIndex, section := range menuSections {
+		if sectionIndex > 0 {
+			rows = append(rows, "")
 		}
-		textWidth = blockWidth - 2
-	}
-	colWidth := (textWidth - 2) / columns
-	if colWidth < 14 {
-		colWidth = 14
-	}
-
-	rows := make([]string, 0, (len(menuItems)+columns-1)/columns)
-	for row := 0; row*columns < len(menuItems); row++ {
-		cells := make([]string, 0, columns)
-		for col := 0; col < columns; col++ {
-			idx := row*columns + col
-			if idx >= len(menuItems) {
-				break
+		rows = append(rows, sectionStyle.Render(clampLine("["+section.Title+"]", textWidth)))
+		for row := 0; row*columns < len(section.Items); row++ {
+			cells := make([]string, 0, columns)
+			for col := 0; col < columns; col++ {
+				localIdx := row*columns + col
+				if localIdx >= len(section.Items) {
+					break
+				}
+				item := section.Items[localIdx]
+				label := item.Title
+				if globalIdx+localIdx == m.menuIndex {
+					cells = append(cells, selectedStyle.Width(colWidth).Render(label))
+				} else {
+					cells = append(cells, normalStyle.Width(colWidth).Render(label))
+				}
 			}
-			item := menuItems[idx]
-			label := item.Title
-			if idx == m.menuIndex {
-				cells = append(cells, selectedStyle.Width(colWidth).Render(label))
-			} else {
-				cells = append(cells, normalStyle.Width(colWidth).Render(label))
-			}
+			rows = append(rows, strings.Join(cells, "  "))
 		}
-		rows = append(rows, strings.Join(cells, "  "))
+		globalIdx += len(section.Items)
 	}
 
 	detail := ""
@@ -842,27 +842,21 @@ func (m model) renderSummaryPanel(statusStyle, errorStyle, assistantStyle, youSt
 	if outerWidth <= 0 {
 		outerWidth = 42
 	}
-	textWidth := outerWidth - 4 // border(2) + horizontal padding(2)
-	if textWidth < 20 {
-		textWidth = 20
+	blockWidth := outerWidth - 2 // exclude border
+	if blockWidth < 8 {
+		blockWidth = 8
 	}
-	blockWidth := textWidth + 2 // include horizontal padding, exclude border
-	if blockWidth > outerWidth-2 {
-		blockWidth = outerWidth - 2
-		if blockWidth < 20 {
-			blockWidth = 20
-		}
-		textWidth = blockWidth - 2
-	}
+	textWidth := blockWidth - 2 // exclude horizontal padding
 	lines := []string{
 		"Context",
 		clampLine(fmt.Sprintf("provider: %s", m.provider), textWidth),
 		clampLine(fmt.Sprintf("model: %s", m.modelID), textWidth),
+		clampLine(fmt.Sprintf("default-model: %s", m.defaultModelDisplay()), textWidth),
 		clampLine(fmt.Sprintf("session: %s", m.sessionID), textWidth),
 		"",
 		"OAuth Draft",
-		clampLine(fmt.Sprintf("profile_id: %s", fallback(m.authProfileID, "<empty>")), textWidth),
-		clampLine("project: <auto discovery>", textWidth),
+		clampLine(fmt.Sprintf("profile_id: %s", m.profileDisplay()), textWidth),
+		clampLine(fmt.Sprintf("project: %s", m.projectDisplay()), textWidth),
 		clampLine("endpoint: <auto selection>", textWidth),
 		clampLine(fmt.Sprintf("redirect: %s", fallback(m.authRedirect, "<default localhost>")), textWidth),
 		clampLine(fmt.Sprintf("last_state: %s", fallback(m.lastAuthState, "<none>")), textWidth),
@@ -884,6 +878,18 @@ func (m model) renderSummaryPanel(statusStyle, errorStyle, assistantStyle, youSt
 	}
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(blockWidth)
 	return box.Render(strings.Join(lines, "\n"))
+}
+
+func (m *model) applyWindowSize(width, height int) {
+	m.width = width
+	m.height = height
+
+	inputWidth := width - 6
+	if inputWidth < 12 {
+		inputWidth = 12
+	}
+	m.chatInput.Width = inputWidth
+	m.promptInput.Width = inputWidth
 }
 
 func (m model) renderPicker(panelStyle, selectedStyle, normalStyle, statusStyle lipgloss.Style) string {
@@ -956,6 +962,89 @@ func (m *model) renderProfileStatusLines(profiles []client.GeminiAuthProfile) {
 	}
 }
 
+func (m *model) refreshActiveProfileFromKnown() {
+	if len(m.knownProfiles) == 0 {
+		m.activeProfile = ""
+		return
+	}
+	active := strings.TrimSpace(m.activeProfile)
+	if active != "" {
+		for _, profile := range m.knownProfiles {
+			if profile.ProfileID == active {
+				return
+			}
+		}
+	}
+	for _, profile := range m.knownProfiles {
+		if profile.Preferred {
+			m.activeProfile = profile.ProfileID
+			return
+		}
+	}
+	for _, profile := range m.knownProfiles {
+		if profile.Available {
+			m.activeProfile = profile.ProfileID
+			return
+		}
+	}
+	m.activeProfile = m.knownProfiles[0].ProfileID
+}
+
+func (m model) profileDisplay() string {
+	profile, ok := m.currentProfile()
+	if ok {
+		return profile.ProfileID
+	}
+	if active := strings.TrimSpace(m.activeProfile); active != "" {
+		return active
+	}
+	return "<auto by pool>"
+}
+
+func (m model) projectDisplay() string {
+	profile, ok := m.currentProfile()
+	if !ok {
+		return "<auto discovery>"
+	}
+	if !profile.ProjectReady {
+		return "<missing>"
+	}
+	return "<auto discovered>"
+}
+
+func (m model) defaultModelDisplay() string {
+	if m.provider != "google-gemini-cli" {
+		return "<n/a>"
+	}
+	if !strings.EqualFold(m.modelID, "default") {
+		return "<explicit>"
+	}
+	if resolved := strings.TrimSpace(m.defaultModel); resolved != "" {
+		return resolved
+	}
+	return "<runtime auto>"
+}
+
+func (m model) currentProfile() (client.GeminiAuthProfile, bool) {
+	if len(m.knownProfiles) == 0 {
+		return client.GeminiAuthProfile{}, false
+	}
+	active := strings.TrimSpace(m.activeProfile)
+	if active != "" {
+		for _, profile := range m.knownProfiles {
+			if profile.ProfileID == active {
+				return profile, true
+			}
+		}
+	}
+	for _, profile := range m.knownProfiles {
+		if profile.Preferred {
+			return profile, true
+		}
+	}
+	return m.knownProfiles[0], true
+}
+
 func (m *model) addKnownSession(sessionID string) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
@@ -1018,7 +1107,7 @@ func modelOptionsForProvider(providerID, current string) []pickerOption {
 	models := []string{"default"}
 	switch providerID {
 	case "google-gemini-cli":
-		models = []string{"gemini-2.5-pro", "gemini-3-pro-preview", "default"}
+		models = []string{"default", "gemini-3-pro-preview", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-2.5-flash"}
 	case "mock":
 		models = []string{"default"}
 	}
@@ -1113,6 +1202,12 @@ func formatProfileLine(profile client.GeminiAuthProfile) string {
 	}
 	if profile.DisabledReason != "" {
 		state += " reason=" + profile.DisabledReason
+	}
+	if !profile.ProjectReady {
+		state += " project=missing"
+	}
+	if reason := strings.TrimSpace(profile.UnavailableReason); reason != "" {
+		state += " unavailable_reason=" + reason
 	}
 	return fmt.Sprintf(
 		"%s · email=%s · project=%s · endpoint=%s · %s",

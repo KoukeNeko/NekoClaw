@@ -3,11 +3,14 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/doeshing/nekoclaw/internal/core"
 )
+
+var ErrProjectDiscoveryFailed = errors.New("project discovery failed")
 
 type GenerateRequest struct {
 	Model    string
@@ -25,6 +28,13 @@ type Provider interface {
 	ID() string
 	ContextWindow(model string) int
 	Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error)
+}
+
+// ModelDiscoveryProvider optionally resolves a provider-specific default model
+// at runtime for a specific account/profile.
+type ModelDiscoveryProvider interface {
+	Provider
+	DiscoverPreferredModel(ctx context.Context, account core.Account) (modelID string, source string, err error)
 }
 
 type OAuthStartRequest struct {

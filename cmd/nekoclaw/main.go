@@ -241,6 +241,20 @@ func hydrateGeminiProfiles(svc *app.Service, store *auth.Store) error {
 		if err != nil {
 			continue
 		}
+		projectID := strings.TrimSpace(profile.ProjectID)
+		projectSource := "stored"
+		if projectID == "" {
+			envProject := resolveGoogleCloudProject()
+			if envProject == "" {
+				log.Printf(
+					"event=profile_hydrated_skipped provider=google-gemini-cli profile_id=%s reason=missing_project",
+					profile.ProfileID,
+				)
+				continue
+			}
+			projectID = envProject
+			projectSource = "env_fallback"
+		}
 		pool.SetCredential(profile.ProfileID, core.Account{
 			ID:       profile.ProfileID,
 			Provider: "google-gemini-cli",
@@ -248,15 +262,17 @@ func hydrateGeminiProfiles(svc *app.Service, store *auth.Store) error {
 			Token:    credential.AccessToken,
 			Email:    profile.Email,
 			Metadata: core.Metadata{
-				"profile_id": profile.ProfileID,
-				"project_id": strings.TrimSpace(profile.ProjectID),
-				"endpoint":   strings.TrimSpace(profile.Endpoint),
+				"profile_id":     profile.ProfileID,
+				"project_id":     projectID,
+				"endpoint":       strings.TrimSpace(profile.Endpoint),
+				"project_source": projectSource,
 			},
 		})
 		log.Printf(
-			"event=profile_hydrated provider=google-gemini-cli profile_id=%s endpoint=%s",
+			"event=profile_hydrated provider=google-gemini-cli profile_id=%s endpoint=%s project_source=%s",
 			profile.ProfileID,
 			strings.TrimSpace(profile.Endpoint),
+			projectSource,
 		)
 	}
 	return nil
@@ -327,6 +343,16 @@ func splitCSV(value string) []string {
 		}
 	}
 	return out
+}
+
+func resolveGoogleCloudProject() string {
+	if project := strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT")); project != "" {
+		return project
+	}
+	if project := strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT_ID")); project != "" {
+		return project
+	}
+	return ""
 }
 
 func envOr(key string, fallback string) string {

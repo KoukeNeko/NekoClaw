@@ -57,7 +57,7 @@ func TestRateLimitSetsCooldownNotDisabled(t *testing.T) {
 	}
 }
 
-func TestAuthFailureSetsDisabledBackoff(t *testing.T) {
+func TestAuthFailureSetsCooldownBackoff(t *testing.T) {
 	pool := NewAccountPool("google-gemini-cli", []Account{
 		{ID: "a1", Provider: "google-gemini-cli", Type: AccountOAuth, Token: "t1"},
 	}, nil, DefaultCooldownConfig())
@@ -67,10 +67,58 @@ func TestAuthFailureSetsDisabledBackoff(t *testing.T) {
 	if stats == nil {
 		t.Fatalf("expected usage stats")
 	}
-	if stats.DisabledUntil.IsZero() {
-		t.Fatalf("expected disabled backoff for auth failure")
+	if stats.CooldownUntil.IsZero() {
+		t.Fatalf("expected cooldown backoff for auth failure")
 	}
-	if stats.DisabledReason != FailureAuth {
-		t.Fatalf("expected disabled reason auth, got %q", stats.DisabledReason)
+	if !stats.DisabledUntil.IsZero() {
+		t.Fatalf("did not expect disabled window for auth failure")
+	}
+	if stats.DisabledReason != "" {
+		t.Fatalf("expected no disabled reason for auth cooldown, got %q", stats.DisabledReason)
+	}
+}
+
+func TestSetCredentialDoesNotForceExplicitOrderPath(t *testing.T) {
+	pool := NewAccountPool("google-gemini-cli", []Account{
+		{ID: "a1", Provider: "google-gemini-cli", Type: AccountOAuth, Token: "t1"},
+	}, nil, DefaultCooldownConfig())
+
+	pool.SetCredential("a2", Account{
+		ID:       "a2",
+		Provider: "google-gemini-cli",
+		Type:     AccountOAuth,
+		Token:    "t2",
+	})
+	pool.MarkFailure("a2", FailureRateLimit)
+
+	account, ok := pool.Acquire("")
+	if !ok {
+		t.Fatalf("expected fallback to a1 even when a2 is in cooldown")
+	}
+	if account.ID != "a1" {
+		t.Fatalf("expected a1, got %s", account.ID)
+	}
+}
+
+func TestOpenRouterBypassesCooldownTracking(t *testing.T) {
+	pool := NewAccountPool("openrouter", []Account{
+		{ID: "or1", Provider: "openrouter", Type: AccountAPIKey, Token: "sk-or"},
+	}, nil, DefaultCooldownConfig())
+
+	pool.MarkFailure("or1", FailureRateLimit)
+
+	account, ok := pool.Acquire("")
+	if !ok {
+		t.Fatalf("expected account to stay available for openrouter")
+	}
+	if account.ID != "or1" {
+		t.Fatalf("expected or1, got %s", account.ID)
+	}
+	snapshots := pool.Snapshot()
+	if len(snapshots) != 1 {
+		t.Fatalf("expected one snapshot, got %d", len(snapshots))
+	}
+	if snapshots[0].Usage != nil {
+		t.Fatalf("expected no cooldown usage stats for openrouter")
 	}
 }

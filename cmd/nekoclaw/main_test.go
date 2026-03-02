@@ -2,7 +2,12 @@ package main
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
+
+	"github.com/doeshing/nekoclaw/internal/app"
+	"github.com/doeshing/nekoclaw/internal/auth"
+	"github.com/doeshing/nekoclaw/internal/core"
 )
 
 func TestResolveDefaultLogFilePath_UsesHomeDefaultWhenAuthDirEmpty(t *testing.T) {
@@ -30,4 +35,128 @@ func TestResolveDefaultLogFilePath_NonAuthDirRoot(t *testing.T) {
 	if got != want {
 		t.Fatalf("resolveDefaultLogFilePath(non-auth) = %q, want %q", got, want)
 	}
+}
+
+func TestHydrateGeminiProfilesSkipsMissingProjectWithoutEnv(t *testing.T) {
+	svc := app.NewService()
+	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
+	store := mustNewAuthStore(t)
+
+	if err := store.SaveCredential("google-gemini-cli", "p1", auth.Credential{
+		AccessToken:  "token-p1",
+		RefreshToken: "refresh-p1",
+	}); err != nil {
+		t.Fatalf("save credential: %v", err)
+	}
+	if err := store.UpsertProfile(auth.ProfileMetadata{
+		ProfileID: "p1",
+		Provider:  "google-gemini-cli",
+		Type:      string(core.AccountOAuth),
+		Email:     "p1@example.com",
+	}); err != nil {
+		t.Fatalf("upsert profile: %v", err)
+	}
+
+	if err := hydrateGeminiProfiles(svc, store); err != nil {
+		t.Fatalf("hydrate profiles: %v", err)
+	}
+
+	pool := svc.Pool("google-gemini-cli")
+	if pool == nil {
+		t.Fatalf("missing pool")
+	}
+	if _, ok := pool.GetAccount("p1"); ok {
+		t.Fatalf("expected profile p1 not loaded without project")
+	}
+}
+
+func TestHydrateGeminiProfilesUsesEnvFallbackProject(t *testing.T) {
+	t.Setenv("GOOGLE_CLOUD_PROJECT", "env-project-1")
+
+	svc := app.NewService()
+	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
+	store := mustNewAuthStore(t)
+
+	if err := store.SaveCredential("google-gemini-cli", "p2", auth.Credential{
+		AccessToken:  "token-p2",
+		RefreshToken: "refresh-p2",
+	}); err != nil {
+		t.Fatalf("save credential: %v", err)
+	}
+	if err := store.UpsertProfile(auth.ProfileMetadata{
+		ProfileID: "p2",
+		Provider:  "google-gemini-cli",
+		Type:      string(core.AccountOAuth),
+		Email:     "p2@example.com",
+	}); err != nil {
+		t.Fatalf("upsert profile: %v", err)
+	}
+
+	if err := hydrateGeminiProfiles(svc, store); err != nil {
+		t.Fatalf("hydrate profiles: %v", err)
+	}
+
+	pool := svc.Pool("google-gemini-cli")
+	if pool == nil {
+		t.Fatalf("missing pool")
+	}
+	account, ok := pool.GetAccount("p2")
+	if !ok {
+		t.Fatalf("expected profile p2 loaded with env fallback")
+	}
+	if account.Metadata["project_id"] != "env-project-1" {
+		t.Fatalf("unexpected project_id: %q", account.Metadata["project_id"])
+	}
+	if account.Metadata["project_source"] != "env_fallback" {
+		t.Fatalf("unexpected project_source: %q", account.Metadata["project_source"])
+	}
+}
+
+func mustNewAuthStore(t *testing.T) *auth.Store {
+	t.Helper()
+	store, err := auth.NewStore(auth.StoreOptions{
+		BaseDir: t.TempDir(),
+		Keyring: newMainTestKeyring(),
+	})
+	if err != nil {
+		t.Fatalf("new auth store: %v", err)
+	}
+	return store
+}
+
+type mainTestKeyring struct {
+	mu   sync.Mutex
+	data map[string]string
+}
+
+func newMainTestKeyring() *mainTestKeyring {
+	return &mainTestKeyring{data: map[string]string{}}
+}
+
+func (k *mainTestKeyring) Available() bool {
+	return true
+}
+
+func (k *mainTestKeyring) Set(key, value string) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.data[key] = value
+	return nil
+}
+
+func (k *mainTestKeyring) Get(key string) (string, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	value, ok := k.data[key]
+	if !ok {
+		return "", auth.ErrCredentialNotFound
+	}
+	return value, nil
+}
+
+func (k *mainTestKeyring) Delete(key string) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	delete(k.data, key)
+	return nil
 }

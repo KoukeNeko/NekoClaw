@@ -42,19 +42,21 @@ type GeminiAuthCompleteResponse struct {
 }
 
 type GeminiAuthProfile struct {
-	ProfileID      string    `json:"profile_id"`
-	Provider       string    `json:"provider"`
-	Type           string    `json:"type"`
-	Email          string    `json:"email,omitempty"`
-	ProjectID      string    `json:"project_id,omitempty"`
-	Endpoint       string    `json:"endpoint,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	Available      bool      `json:"available"`
-	CooldownUntil  time.Time `json:"cooldown_until,omitempty"`
-	DisabledUntil  time.Time `json:"disabled_until,omitempty"`
-	DisabledReason string    `json:"disabled_reason,omitempty"`
-	Preferred      bool      `json:"preferred"`
+	ProfileID         string    `json:"profile_id"`
+	Provider          string    `json:"provider"`
+	Type              string    `json:"type"`
+	Email             string    `json:"email,omitempty"`
+	ProjectID         string    `json:"project_id,omitempty"`
+	ProjectReady      bool      `json:"project_ready"`
+	UnavailableReason string    `json:"unavailable_reason,omitempty"`
+	Endpoint          string    `json:"endpoint,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+	Available         bool      `json:"available"`
+	CooldownUntil     time.Time `json:"cooldown_until,omitempty"`
+	DisabledUntil     time.Time `json:"disabled_until,omitempty"`
+	DisabledReason    string    `json:"disabled_reason,omitempty"`
+	Preferred         bool      `json:"preferred"`
 }
 
 type APIClient struct {
@@ -213,11 +215,35 @@ func (c *APIClient) doAndDecodeJSON(httpReq *http.Request, out any) error {
 
 func decodeAPIError(status int, body []byte) error {
 	type errPayload struct {
-		Error string `json:"error"`
+		Error any `json:"error"`
+	}
+	type errObject struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
 	}
 	var payload errPayload
-	if err := json.Unmarshal(body, &payload); err == nil && strings.TrimSpace(payload.Error) != "" {
-		return fmt.Errorf("api error (%d): %s", status, strings.TrimSpace(payload.Error))
+	if err := json.Unmarshal(body, &payload); err == nil {
+		switch value := payload.Error.(type) {
+		case string:
+			if strings.TrimSpace(value) != "" {
+				return fmt.Errorf("api error (%d): %s", status, strings.TrimSpace(value))
+			}
+		case map[string]any:
+			raw, _ := json.Marshal(value)
+			var obj errObject
+			if err := json.Unmarshal(raw, &obj); err == nil {
+				msg := strings.TrimSpace(obj.Message)
+				code := strings.TrimSpace(obj.Code)
+				switch {
+				case msg != "" && code != "":
+					return fmt.Errorf("api error (%d): %s: %s", status, code, msg)
+				case msg != "":
+					return fmt.Errorf("api error (%d): %s", status, msg)
+				case code != "":
+					return fmt.Errorf("api error (%d): %s", status, code)
+				}
+			}
+		}
 	}
 	return fmt.Errorf("api error (%d): %s", status, strings.TrimSpace(string(body)))
 }
