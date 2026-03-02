@@ -22,6 +22,7 @@ type GenerateResponse struct {
 	Text     string
 	Endpoint string
 	Raw      json.RawMessage
+	Usage    core.UsageInfo
 }
 
 type Provider interface {

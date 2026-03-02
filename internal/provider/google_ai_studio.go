@@ -58,6 +58,11 @@ type aiStudioGenerateResponse struct {
 			} `json:"parts"`
 		} `json:"content"`
 	} `json:"candidates"`
+	UsageMetadata struct {
+		PromptTokenCount     int `json:"promptTokenCount"`
+		CandidatesTokenCount int `json:"candidatesTokenCount"`
+		TotalTokenCount      int `json:"totalTokenCount"`
+	} `json:"usageMetadata"`
 }
 
 func NewGoogleAIStudioProvider(opts GoogleAIStudioOptions) *GoogleAIStudioProvider {
@@ -153,7 +158,7 @@ func (p *GoogleAIStudioProvider) Generate(ctx context.Context, req GenerateReque
 		}
 	}
 
-	text, ok := extractTextFromAIStudioGenerate(body)
+	text, usage, ok := extractTextAndUsageFromAIStudio(body)
 	if !ok {
 		return GenerateResponse{}, &FailureError{
 			Reason:   core.FailureFormat,
@@ -166,6 +171,7 @@ func (p *GoogleAIStudioProvider) Generate(ctx context.Context, req GenerateReque
 		Text:     text,
 		Endpoint: p.baseURL,
 		Raw:      body,
+		Usage:    usage,
 	}, nil
 }
 
@@ -344,10 +350,10 @@ func toAIStudioContents(messages []core.Message) []map[string]any {
 	return out
 }
 
-func extractTextFromAIStudioGenerate(body []byte) (string, bool) {
+func extractTextAndUsageFromAIStudio(body []byte) (string, core.UsageInfo, bool) {
 	var payload aiStudioGenerateResponse
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return "", false
+		return "", core.UsageInfo{}, false
 	}
 	parts := make([]string, 0, 4)
 	for _, candidate := range payload.Candidates {
@@ -360,9 +366,14 @@ func extractTextFromAIStudioGenerate(body []byte) (string, bool) {
 		}
 	}
 	if len(parts) == 0 {
-		return "", false
+		return "", core.UsageInfo{}, false
 	}
-	return strings.Join(parts, "\n"), true
+	usage := core.UsageInfo{
+		InputTokens:  payload.UsageMetadata.PromptTokenCount,
+		OutputTokens: payload.UsageMetadata.CandidatesTokenCount,
+		TotalTokens:  payload.UsageMetadata.TotalTokenCount,
+	}
+	return strings.Join(parts, "\n"), usage, true
 }
 
 func supportsGenerateContent(methods []string) bool {

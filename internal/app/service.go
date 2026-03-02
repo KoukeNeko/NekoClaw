@@ -939,6 +939,7 @@ func (s *Service) attemptSingleProvider(
 				Compressed:  compressed,
 				Compression: compressionMeta,
 				AccountID:   account.ID,
+				Usage:       resp.Usage,
 			}, nil
 		}
 

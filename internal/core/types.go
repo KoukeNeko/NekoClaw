@@ -64,6 +64,14 @@ type ChatResponse struct {
 	Compressed  bool            `json:"compressed"`
 	Compression CompressionMeta `json:"compression"`
 	AccountID   string          `json:"account_id,omitempty"`
+	Usage       UsageInfo       `json:"usage"`
+}
+
+// UsageInfo holds token usage from a single API call.
+type UsageInfo struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
 }
 
 type CompressionMeta struct {

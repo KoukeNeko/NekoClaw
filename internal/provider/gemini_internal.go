@@ -201,7 +201,8 @@ func (p *GeminiInternalProvider) Generate(ctx context.Context, req GenerateReque
 			}
 			continue
 		}
-		return GenerateResponse{Text: text, Endpoint: endpoint, Raw: respBody}, nil
+		usage := extractUsageFromGeminiResponse(respBody)
+		return GenerateResponse{Text: text, Endpoint: endpoint, Raw: respBody, Usage: usage}, nil
 	}
 
 	if lastErr == nil {
@@ -718,6 +719,88 @@ func shouldFallbackEndpoint(status int, body []byte) bool {
 	return strings.Contains(lower, "service_disabled") ||
 		strings.Contains(lower, "staging-cloudaicompanion") ||
 		strings.Contains(lower, "autopush-cloudcode-pa.sandbox.googleapis.com")
+}
+
+// extractUsageFromGeminiResponse parses usageMetadata from Gemini API responses.
+// For SSE streams, it takes the last event's usage (which contains cumulative totals).
+func extractUsageFromGeminiResponse(body []byte) core.UsageInfo {
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
+		return core.UsageInfo{}
+	}
+	if strings.Contains(trimmed, "data:") {
+		return extractUsageFromGeminiSSE(trimmed)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(body, &root); err != nil {
+		return core.UsageInfo{}
+	}
+	if response, ok := root["response"].(map[string]any); ok {
+		return parseUsageMetadata(response)
+	}
+	return parseUsageMetadata(root)
+}
+
+func extractUsageFromGeminiSSE(raw string) core.UsageInfo {
+	lines := strings.Split(raw, "\n")
+	var usage core.UsageInfo
+	var eventData []string
+	flush := func() {
+		if len(eventData) == 0 {
+			return
+		}
+		chunk := strings.TrimSpace(strings.Join(eventData, "\n"))
+		eventData = eventData[:0]
+		if chunk == "" || chunk == "[DONE]" {
+			return
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(chunk), &payload); err != nil {
+			return
+		}
+		root := payload
+		if response, ok := payload["response"].(map[string]any); ok {
+			root = response
+		}
+		if u := parseUsageMetadata(root); u.TotalTokens > 0 {
+			usage = u
+		}
+	}
+	for _, line := range lines {
+		t := strings.TrimSpace(line)
+		if t == "" {
+			flush()
+			continue
+		}
+		if !strings.HasPrefix(t, "data:") {
+			continue
+		}
+		eventData = append(eventData, strings.TrimSpace(strings.TrimPrefix(t, "data:")))
+	}
+	flush()
+	return usage
+}
+
+func parseUsageMetadata(root map[string]any) core.UsageInfo {
+	meta, ok := root["usageMetadata"].(map[string]any)
+	if !ok {
+		return core.UsageInfo{}
+	}
+	return core.UsageInfo{
+		InputTokens:  jsonInt(meta, "promptTokenCount"),
+		OutputTokens: jsonInt(meta, "candidatesTokenCount"),
+		TotalTokens:  jsonInt(meta, "totalTokenCount"),
+	}
+}
+
+func jsonInt(m map[string]any, key string) int {
+	switch v := m[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	}
+	return 0
 }
 
 func extractTextFromGeminiResponse(body []byte) (string, bool) {
