@@ -21,6 +21,11 @@ import (
 var ErrProviderNotFound = errors.New("provider not found")
 var ErrNoAvailableAccount = errors.New("no available account")
 var ErrGeminiMissingProject = errors.New("gemini project is required")
+var ErrInvalidAPIKey = errors.New("invalid api key")
+var ErrKeyValidationFailed = errors.New("key validation failed")
+var ErrProfileNotFound = errors.New("profile not found")
+var ErrProfileInUse = errors.New("profile in use")
+var ErrProviderNotReady = errors.New("provider not ready")
 
 type Service struct {
 	mu                sync.RWMutex
@@ -127,6 +132,45 @@ type GeminiProfileStatus struct {
 	Preferred         bool      `json:"preferred"`
 	ProjectReady      bool      `json:"project_ready"`
 	UnavailableReason string    `json:"unavailable_reason,omitempty"`
+}
+
+type AIStudioAddKeyRequest struct {
+	APIKey       string `json:"api_key"`
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+}
+
+type AIStudioAddKeyResult struct {
+	ProfileID   string `json:"profile_id"`
+	Provider    string `json:"provider"`
+	DisplayName string `json:"display_name"`
+	KeyHint     string `json:"key_hint"`
+	Preferred   bool   `json:"preferred"`
+	Available   bool   `json:"available"`
+}
+
+type AIStudioProfileStatus struct {
+	ProfileID      string    `json:"profile_id"`
+	Provider       string    `json:"provider"`
+	Type           string    `json:"type"`
+	DisplayName    string    `json:"display_name,omitempty"`
+	KeyHint        string    `json:"key_hint,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	Available      bool      `json:"available"`
+	CooldownUntil  time.Time `json:"cooldown_until,omitempty"`
+	DisabledUntil  time.Time `json:"disabled_until,omitempty"`
+	DisabledReason string    `json:"disabled_reason,omitempty"`
+	Preferred      bool      `json:"preferred"`
+}
+
+type AIStudioModelsResult struct {
+	Provider    string    `json:"provider"`
+	ProfileID   string    `json:"profile_id"`
+	Models      []string  `json:"models"`
+	Source      string    `json:"source"`
+	CachedUntil time.Time `json:"cached_until,omitempty"`
 }
 
 func (s *Service) StartGeminiOAuth(ctx context.Context, req GeminiOAuthStartRequest) (auth.StartResult, error) {
@@ -298,6 +342,278 @@ func (s *Service) UseGeminiProfile(profileID string) error {
 	return nil
 }
 
+func (s *Service) AddAIStudioKey(ctx context.Context, req AIStudioAddKeyRequest) (AIStudioAddKeyResult, error) {
+	apiKey := strings.TrimSpace(req.APIKey)
+	if apiKey == "" {
+		return AIStudioAddKeyResult{}, fmt.Errorf("%w: api_key is required", ErrInvalidAPIKey)
+	}
+	store := s.authStoreSafe()
+	if store == nil {
+		return AIStudioAddKeyResult{}, fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	prov, pool, err := s.resolveProviderPool("google-ai-studio")
+	if err != nil {
+		return AIStudioAddKeyResult{}, fmt.Errorf("%w: %v", ErrProviderNotReady, err)
+	}
+	catalogProvider, ok := prov.(provider.ModelCatalogProvider)
+	if !ok {
+		return AIStudioAddKeyResult{}, fmt.Errorf("%w: provider does not support model catalog", ErrProviderNotReady)
+	}
+
+	profileID := strings.TrimSpace(req.ProfileID)
+	displayName := strings.TrimSpace(req.DisplayName)
+	if profileID == "" {
+		profileID = deriveAIStudioProfileID(displayName, apiKey)
+	}
+	keyHint := maskAPIKeyForHint(apiKey)
+	if displayName == "" {
+		displayName = "AI Studio " + keyHint
+	}
+
+	validationAccount := core.Account{
+		ID:       "",
+		Provider: "google-ai-studio",
+		Type:     core.AccountAPIKey,
+		Token:    apiKey,
+	}
+	models, err := catalogProvider.ListModels(ctx, validationAccount)
+	if err != nil {
+		return AIStudioAddKeyResult{}, fmt.Errorf("%w: %v", ErrKeyValidationFailed, err)
+	}
+	if len(models) == 0 {
+		return AIStudioAddKeyResult{}, fmt.Errorf("%w: no generateContent-capable models returned", ErrKeyValidationFailed)
+	}
+
+	if err := store.SaveCredential("google-ai-studio", profileID, auth.Credential{
+		AccessToken: apiKey,
+	}); err != nil {
+		return AIStudioAddKeyResult{}, err
+	}
+
+	meta := auth.ProfileMetadata{
+		ProfileID:   profileID,
+		Provider:    "google-ai-studio",
+		Type:        string(core.AccountAPIKey),
+		DisplayName: displayName,
+		KeyHint:     keyHint,
+		Endpoint:    pEndpoint(prov),
+	}
+	if err := store.UpsertProfile(meta); err != nil {
+		_ = store.DeleteCredential("google-ai-studio", profileID)
+		return AIStudioAddKeyResult{}, err
+	}
+
+	pool.SetCredential(profileID, core.Account{
+		ID:       profileID,
+		Provider: "google-ai-studio",
+		Type:     core.AccountAPIKey,
+		Token:    apiKey,
+		Metadata: core.Metadata{
+			"display_name": displayName,
+			"key_hint":     keyHint,
+		},
+	})
+
+	preferred := req.SetPreferred
+	if !preferred {
+		snapshots := pool.Snapshot()
+		preferred = len(snapshots) == 1
+	}
+	if preferred {
+		s.mu.Lock()
+		s.preferredProfiles["google-ai-studio"] = profileID
+		s.mu.Unlock()
+		_ = pool.SetPreferred(profileID)
+	}
+	s.syncProfileState("google-ai-studio", profileID)
+	log.Printf(
+		"event=ai_studio_key_add provider=google-ai-studio profile_id=%s key_hint=%s preferred=%t",
+		profileID,
+		keyHint,
+		preferred,
+	)
+	return AIStudioAddKeyResult{
+		ProfileID:   profileID,
+		Provider:    "google-ai-studio",
+		DisplayName: displayName,
+		KeyHint:     keyHint,
+		Preferred:   preferred,
+		Available:   true,
+	}, nil
+}
+
+func (s *Service) ListAIStudioProfiles() ([]AIStudioProfileStatus, error) {
+	store := s.authStoreSafe()
+	if store == nil {
+		return nil, fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	profiles, err := store.ListProfiles("google-ai-studio")
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.RLock()
+	preferred := s.preferredProfiles["google-ai-studio"]
+	pool := s.pools["google-ai-studio"]
+	s.mu.RUnlock()
+
+	snapByID := map[string]core.AccountSnapshot{}
+	if pool != nil {
+		for _, snap := range pool.Snapshot() {
+			snapByID[snap.ID] = snap
+		}
+	}
+	now := time.Now()
+	result := make([]AIStudioProfileStatus, 0, len(profiles))
+	for _, profile := range profiles {
+		status := AIStudioProfileStatus{
+			ProfileID:   profile.ProfileID,
+			Provider:    profile.Provider,
+			Type:        profile.Type,
+			DisplayName: strings.TrimSpace(profile.DisplayName),
+			KeyHint:     strings.TrimSpace(profile.KeyHint),
+			CreatedAt:   profile.CreatedAt,
+			UpdatedAt:   profile.UpdatedAt,
+			Preferred:   profile.ProfileID == preferred,
+		}
+		if snap, ok := snapByID[profile.ProfileID]; ok {
+			if status.DisplayName == "" {
+				status.DisplayName = strings.TrimSpace(snap.Metadata["display_name"])
+			}
+			if status.KeyHint == "" {
+				status.KeyHint = strings.TrimSpace(snap.Metadata["key_hint"])
+			}
+			if snap.Usage != nil {
+				status.CooldownUntil = snap.Usage.CooldownUntil
+				status.DisabledUntil = snap.Usage.DisabledUntil
+				status.DisabledReason = string(snap.Usage.DisabledReason)
+				status.Available = (snap.Usage.CooldownUntil.IsZero() || now.After(snap.Usage.CooldownUntil)) &&
+					(snap.Usage.DisabledUntil.IsZero() || now.After(snap.Usage.DisabledUntil))
+			} else {
+				status.Available = true
+			}
+		} else {
+			status.CooldownUntil = profile.CooldownUntil
+			status.DisabledUntil = profile.DisabledUntil
+			status.DisabledReason = profile.DisabledReason
+			status.Available = (profile.CooldownUntil.IsZero() || now.After(profile.CooldownUntil)) &&
+				(profile.DisabledUntil.IsZero() || now.After(profile.DisabledUntil))
+		}
+		result = append(result, status)
+	}
+	return result, nil
+}
+
+func (s *Service) UseAIStudioProfile(profileID string) error {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		return fmt.Errorf("profile_id is required")
+	}
+	store := s.authStoreSafe()
+	if store == nil {
+		return fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	if _, err := store.GetProfile("google-ai-studio", profileID); err != nil {
+		if errors.Is(err, auth.ErrProfileNotFound) {
+			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		}
+		return err
+	}
+
+	s.mu.Lock()
+	pool := s.pools["google-ai-studio"]
+	s.preferredProfiles["google-ai-studio"] = profileID
+	s.mu.Unlock()
+	if pool != nil {
+		if ok := pool.SetPreferred(profileID); !ok {
+			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		}
+	}
+	log.Printf("event=ai_studio_key_use provider=google-ai-studio profile_id=%s", profileID)
+	return nil
+}
+
+func (s *Service) DeleteAIStudioProfile(profileID string) error {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		return fmt.Errorf("profile_id is required")
+	}
+	store := s.authStoreSafe()
+	if store == nil {
+		return fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	if _, err := store.GetProfile("google-ai-studio", profileID); err != nil {
+		if errors.Is(err, auth.ErrProfileNotFound) {
+			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		}
+		return err
+	}
+
+	_ = store.DeleteCredential("google-ai-studio", profileID)
+	if err := store.DeleteProfile("google-ai-studio", profileID); err != nil && !errors.Is(err, auth.ErrProfileNotFound) {
+		return err
+	}
+	s.mu.Lock()
+	if s.preferredProfiles["google-ai-studio"] == profileID {
+		delete(s.preferredProfiles, "google-ai-studio")
+	}
+	pool := s.pools["google-ai-studio"]
+	s.mu.Unlock()
+	if pool != nil {
+		pool.RemoveAccount(profileID)
+	}
+	log.Printf("event=ai_studio_key_delete provider=google-ai-studio profile_id=%s", profileID)
+	return nil
+}
+
+func (s *Service) ListAIStudioModels(ctx context.Context, profileID string) (AIStudioModelsResult, error) {
+	prov, pool, err := s.resolveProviderPool("google-ai-studio")
+	if err != nil {
+		return AIStudioModelsResult{}, fmt.Errorf("%w: %v", ErrProviderNotReady, err)
+	}
+	catalogProvider, ok := prov.(provider.ModelCatalogProvider)
+	if !ok {
+		return AIStudioModelsResult{}, fmt.Errorf("%w: provider does not support model catalog", ErrProviderNotReady)
+	}
+
+	profileID = strings.TrimSpace(profileID)
+	var account core.Account
+	var found bool
+	if profileID != "" {
+		account, found = pool.GetAccount(profileID)
+		if !found {
+			return AIStudioModelsResult{}, fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		}
+	} else {
+		preferred := s.preferredProfile("google-ai-studio")
+		account, found = pool.Acquire(preferred)
+		if !found {
+			reason := pool.ResolveUnavailableReason()
+			return AIStudioModelsResult{}, fmt.Errorf("%w: provider=google-ai-studio reason=%s", ErrNoAvailableAccount, reason)
+		}
+		profileID = account.ID
+	}
+
+	source := "live"
+	var cachedUntil time.Time
+	var models []string
+	if withSource, ok := prov.(aiStudioModelCatalogProvider); ok {
+		models, source, cachedUntil, err = withSource.ListModelsWithSource(ctx, account)
+	} else {
+		models, err = catalogProvider.ListModels(ctx, account)
+	}
+	if err != nil {
+		return AIStudioModelsResult{}, err
+	}
+	return AIStudioModelsResult{
+		Provider:    "google-ai-studio",
+		ProfileID:   profileID,
+		Models:      models,
+		Source:      chooseFirstNonEmpty(source, "live"),
+		CachedUntil: cachedUntil,
+	}, nil
+}
+
 func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.ChatResponse, error) {
 	providerID := strings.TrimSpace(req.Provider)
 	if providerID == "" {
@@ -307,7 +623,7 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 	if modelID == "" {
 		modelID = "default"
 	}
-	isGeminiDefaultModel := providerID == "google-gemini-cli" && strings.EqualFold(modelID, "default")
+	isDefaultModel := strings.EqualFold(modelID, "default")
 	sessionID := strings.TrimSpace(req.SessionID)
 	if sessionID == "" {
 		sessionID = "main"
@@ -357,8 +673,8 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		}
 
 		attemptModelID := modelID
-		if isGeminiDefaultModel {
-			resolvedModel, source := s.resolveDefaultGeminiModel(ctx, prov, account)
+		if isDefaultModel {
+			resolvedModel, source := s.resolveDefaultModel(ctx, prov, providerID, account)
 			attemptModelID = resolvedModel
 			log.Printf(
 				"event=default_model_resolved provider=%s profile_id=%s source=%s model=%s",
@@ -383,23 +699,11 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		}
 
 		if providerID == "google-gemini-cli" {
-			projectID := strings.TrimSpace(account.Metadata["project_id"])
-			if projectID == "" {
-				projectID = resolveGoogleCloudProject()
-			}
-			if projectID == "" {
-				lastErr = fmt.Errorf(
-					"%w: profile=%s. Re-run Gemini OAuth or set GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_PROJECT_ID.",
-					ErrGeminiMissingProject,
-					account.ID,
-				)
+			account, err = s.ensureGeminiProject(ctx, prov, pool, account)
+			if err != nil {
+				lastErr = err
 				break
 			}
-			if account.Metadata == nil {
-				account.Metadata = core.Metadata{}
-			}
-			account.Metadata["project_id"] = projectID
-			pool.SetCredential(account.ID, account)
 		}
 
 		resp, err := prov.Generate(ctx, provider.GenerateRequest{
@@ -410,6 +714,27 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		if err == nil {
 			assistant := core.Message{Role: core.RoleAssistant, Content: resp.Text, CreatedAt: time.Now()}
 			s.sessions.Append(sessionID, userMessage, assistant)
+			if providerID == "google-gemini-cli" {
+				if endpoint := strings.TrimSpace(resp.Endpoint); endpoint != "" {
+					if account.Metadata == nil {
+						account.Metadata = core.Metadata{}
+					}
+					if strings.TrimSpace(account.Metadata["endpoint"]) != endpoint {
+						account.Metadata["endpoint"] = endpoint
+						pool.SetCredential(account.ID, account)
+						if store := s.authStoreSafe(); store != nil {
+							_ = store.UpsertProfile(auth.ProfileMetadata{
+								ProfileID: account.ID,
+								Provider:  providerID,
+								Type:      string(core.AccountOAuth),
+								Email:     account.Email,
+								ProjectID: strings.TrimSpace(account.Metadata["project_id"]),
+								Endpoint:  endpoint,
+							})
+						}
+					}
+				}
+			}
 			pool.MarkUsed(account.ID)
 			s.syncProfileState(providerID, account.ID)
 			return core.ChatResponse{
@@ -670,8 +995,82 @@ func (s *Service) maybeRefreshAccountCredential(
 	return account, nil
 }
 
+func (s *Service) ensureGeminiProject(
+	ctx context.Context,
+	prov provider.Provider,
+	pool *core.AccountPool,
+	account core.Account,
+) (core.Account, error) {
+	if account.Metadata == nil {
+		account.Metadata = core.Metadata{}
+	}
+	projectID := strings.TrimSpace(account.Metadata["project_id"])
+	if projectID == "" {
+		if envProject := resolveGoogleCloudProject(); envProject != "" {
+			projectID = envProject
+			account.Metadata["project_id"] = envProject
+		}
+	}
+
+	if projectID == "" {
+		discoveryProvider, ok := prov.(geminiProjectDiscoveryProvider)
+		if !ok {
+			return account, fmt.Errorf(
+				"%w: profile=%s. Re-run Gemini OAuth or set GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_PROJECT_ID.",
+				ErrGeminiMissingProject,
+				account.ID,
+			)
+		}
+		discovered, err := discoveryProvider.DiscoverProject(ctx, provider.DiscoverProjectRequest{
+			Token: account.Token,
+		})
+		if err != nil {
+			log.Printf(
+				"event=project_discovery_failed provider=google-gemini-cli profile_id=%s error=%q",
+				account.ID,
+				err,
+			)
+			return account, fmt.Errorf(
+				"%w: profile=%s. %v. Re-run Gemini OAuth or set GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_PROJECT_ID.",
+				ErrGeminiMissingProject,
+				account.ID,
+				err,
+			)
+		}
+		projectID = strings.TrimSpace(discovered.ProjectID)
+		if projectID != "" {
+			account.Metadata["project_id"] = projectID
+		}
+		if endpoint := strings.TrimSpace(discovered.ActiveEndpoint); endpoint != "" {
+			account.Metadata["endpoint"] = endpoint
+		}
+	}
+
+	projectID = strings.TrimSpace(account.Metadata["project_id"])
+	if projectID == "" {
+		return account, fmt.Errorf(
+			"%w: profile=%s. Re-run Gemini OAuth or set GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_PROJECT_ID.",
+			ErrGeminiMissingProject,
+			account.ID,
+		)
+	}
+
+	pool.SetCredential(account.ID, account)
+	if store := s.authStoreSafe(); store != nil {
+		_ = store.UpsertProfile(auth.ProfileMetadata{
+			ProfileID: account.ID,
+			Provider:  "google-gemini-cli",
+			Type:      string(core.AccountOAuth),
+			Email:     account.Email,
+			ProjectID: projectID,
+			Endpoint:  strings.TrimSpace(account.Metadata["endpoint"]),
+		})
+	}
+	return account, nil
+}
+
 func (s *Service) syncProfileState(providerID string, profileID string) {
-	if providerID != "google-gemini-cli" || strings.TrimSpace(profileID) == "" {
+	if strings.TrimSpace(providerID) == "" || strings.TrimSpace(profileID) == "" {
 		return
 	}
 	store := s.authStoreSafe()
@@ -700,10 +1099,17 @@ func (s *Service) syncProfileState(providerID string, profileID string) {
 
 func (s *Service) adjustCompressionPolicy(providerID, _ string, policy contextwindow.Policy) contextwindow.Policy {
 	if providerID == "google-gemini-cli" {
-		if policy.MaxContextTokens >= 128000 {
-			policy.ReserveTokens = 4096
-		} else if policy.MaxContextTokens >= 32000 {
-			policy.ReserveTokens = 3072
+		// OpenClaw-style headroom: keep a large reserve so long contexts have
+		// enough room for tool/result growth and provider-side serialization.
+		reserveFloor := 20_000
+		if policy.MaxContextTokens > 0 {
+			maxReserve := policy.MaxContextTokens / 2
+			if maxReserve > 0 && reserveFloor > maxReserve {
+				reserveFloor = maxReserve
+			}
+		}
+		if policy.ReserveTokens < reserveFloor {
+			policy.ReserveTokens = reserveFloor
 		}
 	}
 	return policy
@@ -717,20 +1123,42 @@ func deriveFailureReason(err error) core.FailureReason {
 	return core.ClassifyFailure(err.Error())
 }
 
-func (s *Service) resolveDefaultGeminiModel(
+type geminiProjectDiscoveryProvider interface {
+	DiscoverProject(ctx context.Context, req provider.DiscoverProjectRequest) (provider.DiscoverProjectResult, error)
+}
+
+type aiStudioModelCatalogProvider interface {
+	provider.ModelCatalogProvider
+	ListModelsWithSource(ctx context.Context, account core.Account) (models []string, source string, cachedUntil time.Time, err error)
+}
+
+func (s *Service) resolveDefaultModel(
 	ctx context.Context,
 	prov provider.Provider,
+	providerID string,
 	account core.Account,
 ) (string, string) {
+	fallbackModel := fallbackDefaultModel(providerID)
 	discoveryProvider, ok := prov.(provider.ModelDiscoveryProvider)
 	if !ok {
-		return "gemini-3-pro-preview", "fallback"
+		return fallbackModel, "fallback"
 	}
 	modelID, source, err := discoveryProvider.DiscoverPreferredModel(ctx, account)
 	if err != nil || strings.TrimSpace(modelID) == "" {
-		return "gemini-3-pro-preview", "fallback"
+		return fallbackModel, "fallback"
 	}
-	return strings.TrimSpace(modelID), chooseFirstNonEmpty(source, "fetchAvailableModels")
+	return strings.TrimSpace(modelID), chooseFirstNonEmpty(source, "discovery")
+}
+
+func fallbackDefaultModel(providerID string) string {
+	switch strings.TrimSpace(providerID) {
+	case "google-gemini-cli":
+		return "gemini-3-pro-preview"
+	case "google-ai-studio":
+		return "gemini-2.5-pro"
+	default:
+		return "default"
+	}
 }
 
 func chooseFirstNonEmpty(values ...string) string {
@@ -808,6 +1236,72 @@ func deriveProfileID(email string) string {
 		return "google-gemini-cli:" + safe
 	}
 	return fmt.Sprintf("google-gemini-cli:%d", time.Now().Unix())
+}
+
+func deriveAIStudioProfileID(displayName, apiKey string) string {
+	base := strings.TrimSpace(strings.ToLower(displayName))
+	if base == "" {
+		base = "key"
+	}
+	base = sanitizeProfileSlug(base)
+	suffix := strings.TrimSpace(apiKey)
+	if len(suffix) > 6 {
+		suffix = suffix[len(suffix)-6:]
+	}
+	suffix = sanitizeProfileSlug(strings.ToLower(suffix))
+	if suffix == "" {
+		suffix = fmt.Sprintf("%d", time.Now().Unix())
+	}
+	return "google-ai-studio:" + base + "_" + suffix
+}
+
+func sanitizeProfileSlug(raw string) string {
+	replacer := strings.NewReplacer(
+		" ", "_",
+		".", "_",
+		"-", "_",
+		":", "_",
+		"/", "_",
+		"\\", "_",
+		"@", "_",
+	)
+	slug := replacer.Replace(strings.TrimSpace(raw))
+	var out strings.Builder
+	for _, r := range slug {
+		switch {
+		case r >= 'a' && r <= 'z':
+			out.WriteRune(r)
+		case r >= '0' && r <= '9':
+			out.WriteRune(r)
+		case r == '_':
+			out.WriteRune(r)
+		}
+	}
+	clean := strings.Trim(out.String(), "_")
+	if clean == "" {
+		return "profile"
+	}
+	return clean
+}
+
+func maskAPIKeyForHint(apiKey string) string {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return "****"
+	}
+	if len(apiKey) <= 6 {
+		return "****" + apiKey
+	}
+	return "****" + apiKey[len(apiKey)-6:]
+}
+
+func pEndpoint(prov provider.Provider) string {
+	switch p := prov.(type) {
+	case interface{ BaseURL() string }:
+		return strings.TrimSpace(p.BaseURL())
+	default:
+		return ""
+	}
 }
 
 func logFailureEvent(providerID, profileID string, reason core.FailureReason, pool *core.AccountPool) {

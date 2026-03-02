@@ -157,12 +157,62 @@ func TestMenuPanelsFitVeryNarrowWidth(t *testing.T) {
 func TestApplyWindowSizeAdjustsInputWidths(t *testing.T) {
 	m := model{}
 	m.applyWindowSize(100, 40)
-	if m.chatInput.Width != 94 || m.promptInput.Width != 94 {
-		t.Fatalf("expected input width 94, got chat=%d prompt=%d", m.chatInput.Width, m.promptInput.Width)
+	if m.chatInput.Width != 98 || m.promptInput.Width != 98 {
+		t.Fatalf("expected input width 98, got chat=%d prompt=%d", m.chatInput.Width, m.promptInput.Width)
 	}
 
 	m.applyWindowSize(8, 10)
-	if m.chatInput.Width != 12 || m.promptInput.Width != 12 {
-		t.Fatalf("expected minimum input width 12, got chat=%d prompt=%d", m.chatInput.Width, m.promptInput.Width)
+	if m.chatInput.Width != 10 || m.promptInput.Width != 10 {
+		t.Fatalf("expected minimum input width 10, got chat=%d prompt=%d", m.chatInput.Width, m.promptInput.Width)
+	}
+}
+
+func TestChatTranscriptTracksWindowSize(t *testing.T) {
+	m := model{
+		width:  160,
+		height: 46,
+		lines: []chatLine{
+			{role: "system", text: "ready"},
+		},
+	}
+
+	textWidth, maxLines := m.chatTranscriptLayout()
+	if textWidth != 158 {
+		t.Fatalf("expected text width 158, got %d", textWidth)
+	}
+	if maxLines != 44 {
+		t.Fatalf("expected max transcript lines 44, got %d", maxLines)
+	}
+
+	m.applyWindowSize(120, 28)
+	textWidth, maxLines = m.chatTranscriptLayout()
+	if textWidth != 118 {
+		t.Fatalf("expected resized text width 118, got %d", textWidth)
+	}
+	if maxLines != 26 {
+		t.Fatalf("expected resized max transcript lines 26, got %d", maxLines)
+	}
+}
+
+func TestRenderLogLinesWrapsLongContent(t *testing.T) {
+	m := model{
+		width: 42,
+		lines: []chatLine{
+			{role: "error", text: strings.Repeat("x", 220)},
+		},
+	}
+	statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	assistantStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	youStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+
+	lines := m.renderLogLines(statusStyle, errorStyle, assistantStyle, youStyle, 40)
+	if len(lines) < 2 {
+		t.Fatalf("expected wrapped output for long line, got %d line(s)", len(lines))
+	}
+	for _, line := range lines {
+		if width := lipgloss.Width(line); width > 40 {
+			t.Fatalf("wrapped line overflow: got %d want <= 40", width)
+		}
 	}
 }

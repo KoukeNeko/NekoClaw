@@ -37,6 +37,12 @@ type ModelDiscoveryProvider interface {
 	DiscoverPreferredModel(ctx context.Context, account core.Account) (modelID string, source string, err error)
 }
 
+// ModelCatalogProvider optionally exposes a model list for a provider/account.
+type ModelCatalogProvider interface {
+	Provider
+	ListModels(ctx context.Context, account core.Account) ([]string, error)
+}
+
 type OAuthStartRequest struct {
 	State       string
 	Challenge   string

@@ -185,7 +185,7 @@ func (p *GeminiInternalProvider) Generate(ctx context.Context, req GenerateReque
 				Endpoint: endpoint,
 				Status:   resp.StatusCode,
 			}
-			if isTransientStatus(resp.StatusCode) {
+			if shouldFallbackEndpoint(resp.StatusCode, respBody) {
 				continue
 			}
 			return GenerateResponse{}, lastErr
@@ -310,55 +310,79 @@ func (p *GeminiInternalProvider) DiscoverProject(
 	}
 
 	projectIDFromEnv := resolveGoogleCloudProject()
-	metadata := map[string]any{
-		"ideType":    "ANTIGRAVITY",
-		"platform":   resolveCodeAssistPlatform(),
-		"pluginType": "GEMINI",
-	}
-	loadBody := map[string]any{
-		"metadata": map[string]any{
-			"ideType":    "ANTIGRAVITY",
-			"platform":   resolveCodeAssistPlatform(),
-			"pluginType": "GEMINI",
-		},
-	}
-	if projectIDFromEnv != "" {
-		loadBody["cloudaicompanionProject"] = projectIDFromEnv
-		metadata["duetProject"] = projectIDFromEnv
-		loadMeta, _ := loadBody["metadata"].(map[string]any)
-		loadMeta["duetProject"] = projectIDFromEnv
-	}
-
-	var activeEndpoint string
-	var loadData map[string]any
 	endpointOrder := append([]string(nil), p.endpoints...)
 	if len(endpointOrder) == 0 {
 		endpointOrder = []string{defaultGeminiProdEndpoint, defaultGeminiDailyEndpoint, defaultGeminiAutoEndpoint}
 	}
+
+	var activeEndpoint string
+	var loadData map[string]any
+	var metadata map[string]any
 	var loadErr error
-	for _, endpoint := range endpointOrder {
-		payload, status, err := p.postJSON(ctx, endpoint+"/v1internal:loadCodeAssist", req.Token, loadBody, metadata)
-		if err != nil {
-			loadErr = err
-			continue
+	platformCandidates := resolveCodeAssistPlatformCandidates()
+	for _, platform := range platformCandidates {
+		metadata = map[string]any{
+			"ideType":    "ANTIGRAVITY",
+			"platform":   platform,
+			"pluginType": "GEMINI",
 		}
-		if status < 200 || status >= 300 {
-			if isSecurityPolicyViolated(payload) {
-				activeEndpoint = endpoint
-				loadData = map[string]any{"currentTier": map[string]any{"id": tierStandard}}
-				loadErr = nil
-				break
-			}
-			loadErr = fmt.Errorf("loadCodeAssist failed: status=%d", status)
-			continue
+		loadBody := map[string]any{
+			"metadata": map[string]any{
+				"ideType":    "ANTIGRAVITY",
+				"platform":   platform,
+				"pluginType": "GEMINI",
+			},
 		}
-		activeEndpoint = endpoint
-		loadData = payload
+		if projectIDFromEnv != "" {
+			loadBody["cloudaicompanionProject"] = projectIDFromEnv
+			loadMeta, _ := loadBody["metadata"].(map[string]any)
+			loadMeta["duetProject"] = projectIDFromEnv
+		}
+
+		activeEndpoint = ""
+		loadData = nil
 		loadErr = nil
-		break
+		invalidPlatform := false
+		for _, endpoint := range endpointOrder {
+			payload, status, err := p.postJSON(ctx, endpoint+"/v1internal:loadCodeAssist", req.Token, loadBody, metadata)
+			if err != nil {
+				loadErr = err
+				continue
+			}
+			if status < 200 || status >= 300 {
+				if isSecurityPolicyViolated(payload) {
+					activeEndpoint = endpoint
+					loadData = map[string]any{"currentTier": map[string]any{"id": tierStandard}}
+					loadErr = nil
+					break
+				}
+				loadErr = fmt.Errorf("loadCodeAssist failed: status=%d%s", status, renderErrorMessageSuffix(payload))
+				if isInvalidMetadataPlatform(payload) {
+					invalidPlatform = true
+					break
+				}
+				continue
+			}
+			activeEndpoint = endpoint
+			loadData = payload
+			loadErr = nil
+			break
+		}
+		if activeEndpoint != "" {
+			break
+		}
+		if !invalidPlatform {
+			break
+		}
 	}
 
 	if activeEndpoint == "" {
+		if projectIDFromEnv != "" {
+			return DiscoverProjectResult{
+				ProjectID:      projectIDFromEnv,
+				ActiveEndpoint: "",
+			}, nil
+		}
 		if loadErr != nil {
 			return DiscoverProjectResult{}, fmt.Errorf("loadCodeAssist failed on all configured endpoints: %w", loadErr)
 		}
@@ -417,7 +441,7 @@ func (p *GeminiInternalProvider) DiscoverProject(
 		return DiscoverProjectResult{}, err
 	}
 	if status < 200 || status >= 300 {
-		return DiscoverProjectResult{}, fmt.Errorf("onboardUser failed: status=%d", status)
+		return DiscoverProjectResult{}, fmt.Errorf("onboardUser failed: status=%d%s", status, renderErrorMessageSuffix(payload))
 	}
 
 	projectID := extractProjectID(payload)
@@ -488,7 +512,7 @@ func (p *GeminiInternalProvider) postJSON(
 	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("User-Agent", "google-api-nodejs-client/9.15.1")
-	httpReq.Header.Set("X-Goog-Api-Client", "gl-go/"+runtime.Version())
+	httpReq.Header.Set("X-Goog-Api-Client", resolveGoogleAPIClientHeader())
 	if len(metadata) > 0 {
 		if metaRaw, err := json.Marshal(metadata); err == nil {
 			httpReq.Header.Set("Client-Metadata", string(metaRaw))
@@ -518,7 +542,7 @@ func (p *GeminiInternalProvider) getJSON(
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("User-Agent", "google-api-nodejs-client/9.15.1")
-	httpReq.Header.Set("X-Goog-Api-Client", "gl-go/"+runtime.Version())
+	httpReq.Header.Set("X-Goog-Api-Client", resolveGoogleAPIClientHeader())
 	if len(metadata) > 0 {
 		if metaRaw, err := json.Marshal(metadata); err == nil {
 			httpReq.Header.Set("Client-Metadata", string(metaRaw))
@@ -651,7 +675,15 @@ func classifyStatus(status int, body string) core.FailureReason {
 		return core.FailureAuth
 	}
 	if status == http.StatusForbidden {
-		if strings.Contains(strings.ToLower(body), "billing") {
+		lower := strings.ToLower(body)
+		if strings.Contains(lower, "service_disabled") ||
+			strings.Contains(lower, "staging-cloudaicompanion") ||
+			strings.Contains(lower, "autopush-cloudcode-pa.sandbox.googleapis.com") {
+			// Treat sandbox API/service-disabled errors as endpoint/profile-scoped.
+			// They should rotate/fallback instead of permanently disabling the profile.
+			return core.FailureAuth
+		}
+		if strings.Contains(lower, "billing") {
 			return core.FailureBilling
 		}
 		return core.FailureAuthPermanent
@@ -673,6 +705,19 @@ func classifyStatus(status int, body string) core.FailureReason {
 
 func isTransientStatus(status int) bool {
 	return status == http.StatusTooManyRequests || status == http.StatusRequestTimeout || status >= 500
+}
+
+func shouldFallbackEndpoint(status int, body []byte) bool {
+	if isTransientStatus(status) {
+		return true
+	}
+	if status != http.StatusForbidden {
+		return false
+	}
+	lower := strings.ToLower(string(body))
+	return strings.Contains(lower, "service_disabled") ||
+		strings.Contains(lower, "staging-cloudaicompanion") ||
+		strings.Contains(lower, "autopush-cloudcode-pa.sandbox.googleapis.com")
 }
 
 func extractTextFromGeminiResponse(body []byte) (string, bool) {
@@ -857,30 +902,83 @@ func resolveGoogleCloudProject() string {
 	return ""
 }
 
-func resolveCodeAssistPlatform() string {
-	return resolveCodeAssistPlatformFor(runtime.GOOS, runtime.GOARCH)
+func resolveGoogleAPIClientHeader() string {
+	// OpenClaw's Gemini OAuth extension sends "gl-node/<version>" here.
+	// Keep the same shape to match backend heuristics.
+	if explicit := strings.TrimSpace(os.Getenv("NEKOCLAW_GEMINI_X_GOOG_API_CLIENT")); explicit != "" {
+		return explicit
+	}
+	if nodeVersion := strings.TrimPrefix(strings.TrimSpace(os.Getenv("NODE_VERSION")), "v"); nodeVersion != "" {
+		return "gl-node/" + nodeVersion
+	}
+	return "gl-node/20.0.0"
 }
 
-func resolveCodeAssistPlatformFor(goos, goarch string) string {
-	switch goos {
+func resolveCodeAssistPlatform() string {
+	candidates := resolveCodeAssistPlatformCandidates()
+	if len(candidates) == 0 {
+		return "PLATFORM_UNSPECIFIED"
+	}
+	return candidates[0]
+}
+
+func resolveCodeAssistPlatformCandidates() []string {
+	return resolveCodeAssistPlatformCandidatesFor(runtime.GOOS, runtime.GOARCH)
+}
+
+func resolveCodeAssistPlatformCandidatesFor(goos, goarch string) []string {
+	normalizedGOOS := strings.ToLower(strings.TrimSpace(goos))
+	normalizedGOARCH := strings.ToLower(strings.TrimSpace(goarch))
+	primary := resolveCodeAssistPlatformFor(normalizedGOOS, normalizedGOARCH)
+	candidates := []string{primary}
+	switch normalizedGOOS {
 	case "darwin":
-		switch goarch {
+		switch normalizedGOARCH {
 		case "amd64":
-			return "DARWIN_AMD64"
+			candidates = append(candidates, "DARWIN_AMD64")
 		case "arm64":
-			return "DARWIN_ARM64"
+			candidates = append(candidates, "DARWIN_ARM64")
 		}
 	case "linux":
-		switch goarch {
+		switch normalizedGOARCH {
 		case "amd64":
-			return "LINUX_AMD64"
+			candidates = append(candidates, "LINUX_AMD64")
 		case "arm64":
-			return "LINUX_ARM64"
+			candidates = append(candidates, "LINUX_ARM64")
 		}
 	case "windows":
-		if goarch == "amd64" {
-			return "WINDOWS_AMD64"
+		if normalizedGOARCH == "amd64" {
+			candidates = append(candidates, "WINDOWS_AMD64")
 		}
+	}
+	candidates = append(candidates, "PLATFORM_UNSPECIFIED")
+	out := make([]string, 0, len(candidates))
+	seen := map[string]struct{}{}
+	for _, candidate := range candidates {
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		return []string{"PLATFORM_UNSPECIFIED"}
+	}
+	return out
+}
+
+func resolveCodeAssistPlatformFor(goos, _ string) string {
+	switch goos {
+	case "darwin":
+		return "MACOS"
+	case "linux":
+		return "LINUX"
+	case "windows":
+		return "WINDOWS"
 	}
 	return "PLATFORM_UNSPECIFIED"
 }
@@ -914,4 +1012,34 @@ func isSecurityPolicyViolated(payload map[string]any) bool {
 		}
 	}
 	return false
+}
+
+func isInvalidMetadataPlatform(payload map[string]any) bool {
+	message := strings.ToLower(strings.TrimSpace(extractErrorMessage(payload)))
+	if message == "" {
+		return false
+	}
+	return strings.Contains(message, "metadata.platform") ||
+		strings.Contains(message, "clientmetadata.platform")
+}
+
+func renderErrorMessageSuffix(payload map[string]any) string {
+	if message := extractErrorMessage(payload); message != "" {
+		return ": " + message
+	}
+	return ""
+}
+
+func extractErrorMessage(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	errRoot, _ := payload["error"].(map[string]any)
+	if errRoot == nil {
+		return ""
+	}
+	if message, _ := errRoot["message"].(string); strings.TrimSpace(message) != "" {
+		return strings.TrimSpace(message)
+	}
+	return ""
 }

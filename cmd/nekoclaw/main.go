@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -175,12 +176,17 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		GeneratePath: opts.GeminiGeneratePath,
 	})
 	svc.RegisterProvider(geminiProvider)
+	aiStudioProvider := provider.NewGoogleAIStudioProvider(provider.GoogleAIStudioOptions{
+		BaseURL: envOr("GOOGLE_AI_STUDIO_BASE_URL", ""),
+	})
+	svc.RegisterProvider(aiStudioProvider)
 
 	accounts, err := loadAccounts(opts.AccountsPath)
 	if err != nil {
 		return nil, err
 	}
 	accounts = append(accounts, loadGeminiAccountsFromEnv()...)
+	accounts = append(accounts, loadAIStudioAccountsFromEnv()...)
 
 	byProvider := map[string][]core.Account{}
 	for _, account := range accounts {
@@ -201,6 +207,9 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		// Keep provider registered even if no tokens are configured.
 		svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
 	}
+	if svc.Pool("google-ai-studio") == nil {
+		svc.RegisterPool(core.NewAccountPool("google-ai-studio", nil, nil, core.DefaultCooldownConfig()))
+	}
 
 	authStore, err := auth.NewStore(auth.StoreOptions{BaseDir: strings.TrimSpace(opts.AuthDir)})
 	if err != nil {
@@ -215,6 +224,9 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 
 	if err := hydrateGeminiProfiles(svc, authStore); err != nil {
 		return nil, fmt.Errorf("hydrate gemini profiles: %w", err)
+	}
+	if err := hydrateAIStudioProfiles(svc, authStore); err != nil {
+		return nil, fmt.Errorf("hydrate ai studio profiles: %w", err)
 	}
 
 	return svc, nil
@@ -278,6 +290,48 @@ func hydrateGeminiProfiles(svc *app.Service, store *auth.Store) error {
 	return nil
 }
 
+func hydrateAIStudioProfiles(svc *app.Service, store *auth.Store) error {
+	if svc == nil || store == nil {
+		return nil
+	}
+	pool := svc.Pool("google-ai-studio")
+	if pool == nil {
+		return nil
+	}
+
+	profiles, err := store.ListProfiles("google-ai-studio")
+	if err != nil {
+		return err
+	}
+	for _, profile := range profiles {
+		if strings.TrimSpace(profile.ProfileID) == "" {
+			continue
+		}
+		credential, err := store.LoadCredential(profile.Provider, profile.ProfileID)
+		if err != nil {
+			continue
+		}
+		account := core.Account{
+			ID:       profile.ProfileID,
+			Provider: "google-ai-studio",
+			Type:     core.AccountAPIKey,
+			Token:    credential.AccessToken,
+			Metadata: core.Metadata{
+				"display_name": strings.TrimSpace(profile.DisplayName),
+				"key_hint":     strings.TrimSpace(profile.KeyHint),
+				"endpoint":     strings.TrimSpace(profile.Endpoint),
+			},
+		}
+		pool.SetCredential(profile.ProfileID, account)
+		log.Printf(
+			"event=profile_hydrated provider=google-ai-studio profile_id=%s key_hint=%s",
+			profile.ProfileID,
+			strings.TrimSpace(profile.KeyHint),
+		)
+	}
+	return nil
+}
+
 func loadAccounts(path string) ([]core.Account, error) {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
@@ -331,6 +385,97 @@ func loadGeminiAccountsFromEnv() []core.Account {
 		})
 	}
 	return accounts
+}
+
+func loadAIStudioAccountsFromEnv() []core.Account {
+	keys := collectAIStudioKeysFromEnv()
+	if len(keys) == 0 {
+		return nil
+	}
+	accounts := make([]core.Account, 0, len(keys))
+	for idx, key := range keys {
+		hint := maskAPIKeyHint(key)
+		suffix := strings.TrimPrefix(hint, "****")
+		if suffix == "" {
+			suffix = fmt.Sprintf("%d", idx+1)
+		}
+		profileID := fmt.Sprintf("google-ai-studio:env_%s_%d", suffix, idx+1)
+		accounts = append(accounts, core.Account{
+			ID:       profileID,
+			Provider: "google-ai-studio",
+			Type:     core.AccountAPIKey,
+			Token:    key,
+			Metadata: core.Metadata{
+				"display_name": fmt.Sprintf("env key %d", idx+1),
+				"key_hint":     hint,
+			},
+		})
+	}
+	return accounts
+}
+
+func collectAIStudioKeysFromEnv() []string {
+	values := make([]string, 0, 8)
+	appendValue := func(v string) {
+		if t := strings.TrimSpace(v); t != "" {
+			values = append(values, t)
+		}
+	}
+
+	for _, key := range []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"} {
+		appendValue(os.Getenv(key))
+	}
+	for _, key := range []string{"GEMINI_API_KEYS", "GOOGLE_API_KEYS"} {
+		for _, value := range splitCSV(os.Getenv(key)) {
+			appendValue(value)
+		}
+	}
+
+	type prefixed struct {
+		name  string
+		value string
+	}
+	prefixedValues := make([]prefixed, 0, 8)
+	for _, envEntry := range os.Environ() {
+		name, value, found := strings.Cut(envEntry, "=")
+		if !found {
+			continue
+		}
+		if strings.HasPrefix(name, "GEMINI_API_KEY_") || strings.HasPrefix(name, "GOOGLE_API_KEY_") {
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			prefixedValues = append(prefixedValues, prefixed{name: name, value: value})
+		}
+	}
+	sort.SliceStable(prefixedValues, func(i, j int) bool {
+		return prefixedValues[i].name < prefixedValues[j].name
+	})
+	for _, item := range prefixedValues {
+		appendValue(item.value)
+	}
+
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func maskAPIKeyHint(apiKey string) string {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return "****"
+	}
+	if len(apiKey) <= 6 {
+		return "****" + apiKey
+	}
+	return "****" + apiKey[len(apiKey)-6:]
 }
 
 func splitCSV(value string) []string {

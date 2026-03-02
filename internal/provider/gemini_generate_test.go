@@ -181,3 +181,61 @@ func TestGenerateFallsBackWhenEndpointReturnsNoTextPayload(t *testing.T) {
 		t.Fatalf("expected second endpoint, got %q", resp.Endpoint)
 	}
 }
+
+func TestGenerateFallsBackFromServiceDisabledSandboxEndpoint(t *testing.T) {
+	autopushCalls := 0
+	autopush := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		autopushCalls++
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{
+			"error": {
+				"code": 403,
+				"status": "PERMISSION_DENIED",
+				"details": [{"reason":"SERVICE_DISABLED"}]
+			}
+		}`))
+	}))
+	defer autopush.Close()
+
+	prodCalls := 0
+	prod := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		prodCalls++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Recovered on prod\"}]}}]}}\n\n"))
+	}))
+	defer prod.Close()
+
+	p := NewGeminiInternalProvider(GeminiInternalOptions{
+		Endpoints: []string{prod.URL, autopush.URL},
+	})
+	resp, err := p.Generate(context.Background(), GenerateRequest{
+		Model: "gemini-3-pro-preview",
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: "hi"},
+		},
+		Account: core.Account{
+			ID:       "a1",
+			Provider: "google-gemini-cli",
+			Type:     core.AccountOAuth,
+			Token:    "token-1",
+			Metadata: core.Metadata{
+				"endpoint": autopush.URL,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("generate failed: %v", err)
+	}
+	if resp.Text != "Recovered on prod" {
+		t.Fatalf("unexpected response text: %q", resp.Text)
+	}
+	if resp.Endpoint != prod.URL {
+		t.Fatalf("expected prod endpoint, got %q", resp.Endpoint)
+	}
+	if autopushCalls == 0 {
+		t.Fatalf("expected preferred autopush endpoint to be attempted first")
+	}
+	if prodCalls == 0 {
+		t.Fatalf("expected fallback to prod endpoint")
+	}
+}

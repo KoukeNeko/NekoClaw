@@ -241,6 +241,40 @@ func TestChatMissingProjectReturnsStructuredError(t *testing.T) {
 	}
 }
 
+func TestChatMissingProjectAutoDiscoversLikeOpenClaw(t *testing.T) {
+	provider := &fakeGeminiProviderWithProjectDiscoveryCounter{}
+	svc := app.NewService()
+	svc.RegisterProvider(provider)
+	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", []core.Account{
+		{
+			ID:       "p1",
+			Provider: "google-gemini-cli",
+			Type:     core.AccountOAuth,
+			Token:    "token-1",
+			Metadata: core.Metadata{},
+		},
+	}, nil, core.DefaultCooldownConfig()))
+	server := NewServer(svc)
+	handler := server.Handler()
+
+	chatReq := `{"session_id":"s1","surface":"tui","provider":"google-gemini-cli","model":"gemini-3-pro-preview","message":"hello"}`
+	first := performJSONRequest(t, handler, http.MethodPost, "/v1/chat", chatReq)
+	if first.Code != http.StatusOK {
+		t.Fatalf("unexpected first chat status: %d body=%s", first.Code, first.Body.String())
+	}
+	second := performJSONRequest(t, handler, http.MethodPost, "/v1/chat", chatReq)
+	if second.Code != http.StatusOK {
+		t.Fatalf("unexpected second chat status: %d body=%s", second.Code, second.Body.String())
+	}
+
+	if provider.discoverCalls != 1 {
+		t.Fatalf("expected project discovery once, got %d", provider.discoverCalls)
+	}
+	if provider.generateCalls != 2 {
+		t.Fatalf("expected 2 generate calls, got %d", provider.generateCalls)
+	}
+}
+
 func TestGeminiAuthProfilesIncludesProjectReadiness(t *testing.T) {
 	svc := app.NewService()
 	svc.RegisterProvider(fakeGeminiProvider{})
@@ -417,6 +451,36 @@ func (p *fakeGeminiProviderWithCounter) ContextWindow(string) int {
 func (p *fakeGeminiProviderWithCounter) Generate(_ context.Context, _ provider.GenerateRequest) (provider.GenerateResponse, error) {
 	p.generateCalls++
 	return provider.GenerateResponse{Text: "unexpected"}, errors.New("should not be called")
+}
+
+type fakeGeminiProviderWithProjectDiscoveryCounter struct {
+	generateCalls int
+	discoverCalls int
+}
+
+func (p *fakeGeminiProviderWithProjectDiscoveryCounter) ID() string {
+	return "google-gemini-cli"
+}
+
+func (p *fakeGeminiProviderWithProjectDiscoveryCounter) ContextWindow(string) int {
+	return 32000
+}
+
+func (p *fakeGeminiProviderWithProjectDiscoveryCounter) Generate(_ context.Context, req provider.GenerateRequest) (provider.GenerateResponse, error) {
+	p.generateCalls++
+	projectID := strings.TrimSpace(req.Account.Metadata["project_id"])
+	if projectID == "" {
+		return provider.GenerateResponse{}, errors.New("missing project in generate request")
+	}
+	return provider.GenerateResponse{Text: "ok:" + projectID, Endpoint: "https://cloudcode-pa.googleapis.com"}, nil
+}
+
+func (p *fakeGeminiProviderWithProjectDiscoveryCounter) DiscoverProject(_ context.Context, _ provider.DiscoverProjectRequest) (provider.DiscoverProjectResult, error) {
+	p.discoverCalls++
+	return provider.DiscoverProjectResult{
+		ProjectID:      "auto-proj-1",
+		ActiveEndpoint: "https://cloudcode-pa.googleapis.com",
+	}, nil
 }
 
 type memoryKeyring struct {

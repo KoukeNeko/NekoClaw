@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -57,6 +58,45 @@ type GeminiAuthProfile struct {
 	DisabledUntil     time.Time `json:"disabled_until,omitempty"`
 	DisabledReason    string    `json:"disabled_reason,omitempty"`
 	Preferred         bool      `json:"preferred"`
+}
+
+type AIStudioAddKeyRequest struct {
+	APIKey       string `json:"api_key"`
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+}
+
+type AIStudioAddKeyResponse struct {
+	ProfileID   string `json:"profile_id"`
+	Provider    string `json:"provider"`
+	DisplayName string `json:"display_name"`
+	KeyHint     string `json:"key_hint"`
+	Preferred   bool   `json:"preferred"`
+	Available   bool   `json:"available"`
+}
+
+type AIStudioProfile struct {
+	ProfileID      string    `json:"profile_id"`
+	Provider       string    `json:"provider"`
+	Type           string    `json:"type"`
+	DisplayName    string    `json:"display_name,omitempty"`
+	KeyHint        string    `json:"key_hint,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	Available      bool      `json:"available"`
+	CooldownUntil  time.Time `json:"cooldown_until,omitempty"`
+	DisabledUntil  time.Time `json:"disabled_until,omitempty"`
+	DisabledReason string    `json:"disabled_reason,omitempty"`
+	Preferred      bool      `json:"preferred"`
+}
+
+type AIStudioModelsResponse struct {
+	Provider    string    `json:"provider"`
+	ProfileID   string    `json:"profile_id"`
+	Models      []string  `json:"models"`
+	Source      string    `json:"source"`
+	CachedUntil time.Time `json:"cached_until,omitempty"`
 }
 
 type APIClient struct {
@@ -191,6 +231,96 @@ func (c *APIClient) UseGeminiProfile(ctx context.Context, profileID string) erro
 	return c.doAndDecodeJSON(httpReq, &out)
 }
 
+func (c *APIClient) AddAIStudioKey(ctx context.Context, req AIStudioAddKeyRequest) (AIStudioAddKeyResponse, error) {
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return AIStudioAddKeyResponse{}, fmt.Errorf("marshal ai studio add key request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/auth/ai-studio/add-key",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return AIStudioAddKeyResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out AIStudioAddKeyResponse
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return AIStudioAddKeyResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *APIClient) ListAIStudioProfiles(ctx context.Context) ([]AIStudioProfile, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/auth/ai-studio/profiles", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Profiles []AIStudioProfile `json:"profiles"`
+	}
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return nil, err
+	}
+	return out.Profiles, nil
+}
+
+func (c *APIClient) UseAIStudioProfile(ctx context.Context, profileID string) error {
+	payload, err := json.Marshal(map[string]string{"profile_id": strings.TrimSpace(profileID)})
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/auth/ai-studio/use",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out map[string]any
+	return c.doAndDecodeJSON(httpReq, &out)
+}
+
+func (c *APIClient) DeleteAIStudioProfile(ctx context.Context, profileID string) error {
+	payload, err := json.Marshal(map[string]string{"profile_id": strings.TrimSpace(profileID)})
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/auth/ai-studio/delete",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out map[string]any
+	return c.doAndDecodeJSON(httpReq, &out)
+}
+
+func (c *APIClient) ListAIStudioModels(ctx context.Context, profileID string) (AIStudioModelsResponse, error) {
+	url := c.baseURL + "/v1/ai-studio/models"
+	if profileID = strings.TrimSpace(profileID); profileID != "" {
+		url += "?profile_id=" + urlQueryEscape(profileID)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return AIStudioModelsResponse{}, err
+	}
+	var out AIStudioModelsResponse
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return AIStudioModelsResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *APIClient) doAndDecodeJSON(httpReq *http.Request, out any) error {
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
@@ -246,4 +376,8 @@ func decodeAPIError(status int, body []byte) error {
 		}
 	}
 	return fmt.Errorf("api error (%d): %s", status, strings.TrimSpace(string(body)))
+}
+
+func urlQueryEscape(raw string) string {
+	return url.QueryEscape(strings.TrimSpace(raw))
 }

@@ -2,6 +2,8 @@ package main
 
 import (
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -18,6 +20,82 @@ func TestResolveDefaultLogFilePath_UsesHomeDefaultWhenAuthDirEmpty(t *testing.T)
 	want := filepath.Join(home, ".nekoclaw", "logs", "nekoclaw.log")
 	if got != want {
 		t.Fatalf("resolveDefaultLogFilePath(empty) = %q, want %q", got, want)
+	}
+}
+
+func TestLoadAIStudioAccountsFromEnv_MergesAndDedupes(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "key-a")
+	t.Setenv("GOOGLE_API_KEY", "key-a")
+	t.Setenv("GEMINI_API_KEYS", "key-b,key-c")
+	t.Setenv("GOOGLE_API_KEYS", "key-c,key-d")
+	t.Setenv("GEMINI_API_KEY_TEAM", "key-e")
+	t.Setenv("GOOGLE_API_KEY_X", "key-f")
+
+	accounts := loadAIStudioAccountsFromEnv()
+	if len(accounts) != 6 {
+		t.Fatalf("unexpected accounts length: %d", len(accounts))
+	}
+	seenTokens := map[string]struct{}{}
+	for _, account := range accounts {
+		if account.Provider != "google-ai-studio" {
+			t.Fatalf("unexpected provider: %s", account.Provider)
+		}
+		if account.Type != core.AccountAPIKey {
+			t.Fatalf("unexpected account type: %s", account.Type)
+		}
+		if strings.TrimSpace(account.Token) == "" {
+			t.Fatalf("expected token")
+		}
+		seenTokens[account.Token] = struct{}{}
+	}
+	keys := make([]string, 0, len(seenTokens))
+	for key := range seenTokens {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	want := []string{"key-a", "key-b", "key-c", "key-d", "key-e", "key-f"}
+	if strings.Join(keys, ",") != strings.Join(want, ",") {
+		t.Fatalf("unexpected key set: got=%v want=%v", keys, want)
+	}
+}
+
+func TestHydrateAIStudioProfilesLoadsCredentials(t *testing.T) {
+	svc := app.NewService()
+	svc.RegisterPool(core.NewAccountPool("google-ai-studio", nil, nil, core.DefaultCooldownConfig()))
+	store := mustNewAuthStore(t)
+
+	if err := store.SaveCredential("google-ai-studio", "ai-1", auth.Credential{
+		AccessToken: "api-key-1",
+	}); err != nil {
+		t.Fatalf("save credential: %v", err)
+	}
+	if err := store.UpsertProfile(auth.ProfileMetadata{
+		ProfileID:   "ai-1",
+		Provider:    "google-ai-studio",
+		Type:        string(core.AccountAPIKey),
+		DisplayName: "main",
+		KeyHint:     "****-1",
+	}); err != nil {
+		t.Fatalf("upsert profile: %v", err)
+	}
+
+	if err := hydrateAIStudioProfiles(svc, store); err != nil {
+		t.Fatalf("hydrate ai studio profiles: %v", err)
+	}
+
+	pool := svc.Pool("google-ai-studio")
+	if pool == nil {
+		t.Fatalf("missing pool")
+	}
+	account, ok := pool.GetAccount("ai-1")
+	if !ok {
+		t.Fatalf("expected ai-1 loaded")
+	}
+	if account.Token != "api-key-1" {
+		t.Fatalf("unexpected token: %q", account.Token)
+	}
+	if account.Metadata["display_name"] != "main" {
+		t.Fatalf("unexpected display name: %q", account.Metadata["display_name"])
 	}
 }
 

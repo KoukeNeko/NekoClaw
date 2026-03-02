@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -28,13 +29,16 @@ const (
 type pickerPurpose string
 
 const (
-	pickProvider     pickerPurpose = "provider"
-	pickModel        pickerPurpose = "model"
-	pickSession      pickerPurpose = "session"
-	pickUseProfile   pickerPurpose = "use_profile"
-	pickAuthRedirect pickerPurpose = "auth_redirect"
-	pickManualState  pickerPurpose = "manual_state"
-	pickAuthStatus   pickerPurpose = "auth_status"
+	pickProvider          pickerPurpose = "provider"
+	pickModel             pickerPurpose = "model"
+	pickSession           pickerPurpose = "session"
+	pickUseProfile        pickerPurpose = "use_profile"
+	pickAuthRedirect      pickerPurpose = "auth_redirect"
+	pickManualState       pickerPurpose = "manual_state"
+	pickAuthStatus        pickerPurpose = "auth_status"
+	pickAIStudioUseKey    pickerPurpose = "ai_studio_use_key"
+	pickAIStudioDeleteKey pickerPurpose = "ai_studio_delete_key"
+	pickAIStudioModel     pickerPurpose = "ai_studio_model"
 )
 
 type promptPurpose string
@@ -42,6 +46,8 @@ type promptPurpose string
 const (
 	promptManualStateCustom promptPurpose = "manual_state_custom"
 	promptManualCallbackURL promptPurpose = "manual_callback_url"
+	promptAIStudioAPIKey    promptPurpose = "ai_studio_api_key"
+	promptAIStudioName      promptPurpose = "ai_studio_name"
 )
 
 type menuAction int
@@ -58,6 +64,10 @@ const (
 	actionAuthUseProfile
 	actionAuthManualComplete
 	actionSetAuthRedirect
+	actionAIStudioAddKey
+	actionAIStudioProfiles
+	actionAIStudioUseKey
+	actionAIStudioDeleteKey
 	actionQuit
 )
 
@@ -85,7 +95,6 @@ var menuSections = []menuSection{
 		Items: []menuItem{
 			{Title: "Provider", Detail: "Select provider from list", Action: actionSetProvider},
 			{Title: "Model", Detail: "Select model from list", Action: actionSetModel},
-			{Title: "Use Profile", Detail: "List pool profiles (runtime auto-select)", Action: actionAuthUseProfile},
 		},
 	},
 	{
@@ -94,9 +103,19 @@ var menuSections = []menuSection{
 			{Title: "OAuth Auto", Detail: "Start OAuth with auto mode", Action: actionAuthLoginAuto},
 			{Title: "OAuth Local", Detail: "Force localhost callback mode", Action: actionAuthLoginLocal},
 			{Title: "OAuth Remote", Detail: "Force remote/manual mode", Action: actionAuthLoginRemote},
+			{Title: "Use Profile", Detail: "List pool profiles (runtime auto-select)", Action: actionAuthUseProfile},
 			{Title: "Profiles", Detail: "Show Gemini profile status", Action: actionAuthStatus},
 			{Title: "Manual Complete", Detail: "Complete OAuth with pasted callback/code", Action: actionAuthManualComplete},
 			{Title: "Auth Redirect", Detail: "Select redirect_uri override", Action: actionSetAuthRedirect},
+		},
+	},
+	{
+		Title: "AI Studio Key",
+		Items: []menuItem{
+			{Title: "Add Key", Detail: "Add and validate API key", Action: actionAIStudioAddKey},
+			{Title: "Profiles", Detail: "Show AI Studio key status", Action: actionAIStudioProfiles},
+			{Title: "Use Key", Detail: "Set preferred key", Action: actionAIStudioUseKey},
+			{Title: "Delete Key", Detail: "Delete API key profile", Action: actionAIStudioDeleteKey},
 		},
 	},
 	{
@@ -158,11 +177,34 @@ type authUseMsg struct {
 	err       error
 }
 
+type aiStudioAddKeyMsg struct {
+	response client.AIStudioAddKeyResponse
+	err      error
+}
+
+type aiStudioProfilesMsg struct {
+	profiles []client.AIStudioProfile
+	purpose  pickerPurpose
+	err      error
+}
+
+type aiStudioProfileActionMsg struct {
+	profileID string
+	deleted   bool
+	err       error
+}
+
+type aiStudioModelsMsg struct {
+	response client.AIStudioModelsResponse
+	err      error
+}
+
 type model struct {
 	client *client.APIClient
 
 	chatInput   textinput.Model
 	promptInput textinput.Model
+	spinner     spinner.Model
 
 	view      uiView
 	menuIndex int
@@ -192,28 +234,39 @@ type model struct {
 	lastAuthState string
 	activeProfile string
 	defaultModel  string
+	aiStudioKey   string
 
 	knownProfiles []client.GeminiAuthProfile
+	knownAIKeys   []client.AIStudioProfile
 	knownSessions []string
 	knownStates   []string
 	lines         []chatLine
+
+	inputHistory      []string
+	inputHistoryIndex int
+	inputDraft        string
 }
 
 func Run(apiBaseURL string, providerID string, modelID string, sessionID string) error {
 	chatInput := textinput.New()
 	chatInput.Placeholder = "Type message and press Enter"
 	chatInput.CharLimit = 0
-	chatInput.Prompt = "▸ "
+	chatInput.Prompt = "› "
 
 	promptInput := textinput.New()
 	promptInput.CharLimit = 0
-	promptInput.Prompt = "▸ "
+	promptInput.Prompt = "› "
+
+	s := spinner.New()
+	s.Spinner = spinner.MiniDot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 
 	initSession := fallback(sessionID, "main")
 	m := model{
 		client:        client.New(apiBaseURL),
 		chatInput:     chatInput,
 		promptInput:   promptInput,
+		spinner:       s,
 		view:          viewMenu,
 		status:        "idle",
 		sessionID:     initSession,
@@ -226,17 +279,18 @@ func Run(apiBaseURL string, providerID string, modelID string, sessionID string)
 		pickerOptions: nil,
 		lines: []chatLine{{
 			role: "system",
-			text: "Arrow keys navigate lists. Enter confirms. Esc returns.",
+			text: "Welcome to NekoClaw. Open Chat from menu to start.",
 		}},
+		inputHistoryIndex: -1,
 	}
 
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m)
 	_, err := p.Run()
 	return err
 }
 
 func (m model) Init() tea.Cmd {
-	return textinput.Blink
+	return tea.Batch(textinput.Blink, m.spinner.Tick)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -244,6 +298,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.applyWindowSize(msg.Width, msg.Height)
 		return m, nil
+
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -255,7 +314,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lines = append(m.lines, chatLine{role: "error", text: msg.err.Error()})
 			return m, nil
 		}
-		if m.provider == "google-gemini-cli" {
+		if m.provider == "google-gemini-cli" || m.provider == "google-ai-studio" {
 			if strings.EqualFold(m.modelID, "default") {
 				m.defaultModel = strings.TrimSpace(msg.response.Model)
 			}
@@ -264,8 +323,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = fmt.Sprintf("ok · account=%s", msg.response.AccountID)
 		m.lines = append(m.lines, chatLine{role: "assistant", text: msg.response.Reply})
 		m.addKnownSession(m.sessionID)
-		m.view = viewMenu
-		return m, nil
+		m.view = viewChat
+		m.chatInput.Focus()
+
+		var output strings.Builder
+		prefix := "● " // Claude style might omit prefix, but we add some text distinction
+		styledReply := m.wrapAndStyle(prefix+msg.response.Reply, lipgloss.NewStyle().Foreground(lipgloss.Color("10")))
+		output.WriteString(styledReply + "\n")
+		return m, tea.Printf("%s", output.String())
 
 	case providersMsg:
 		m.pending = false
@@ -377,6 +442,102 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lines = append(m.lines, chatLine{role: "system", text: "Gemini profile selected: " + msg.profileID})
 		m.view = viewMenu
 		return m, nil
+
+	case aiStudioAddKeyMsg:
+		m.pending = false
+		m.aiStudioKey = ""
+		if msg.err != nil {
+			m.status = "error"
+			m.lines = append(m.lines, chatLine{role: "error", text: msg.err.Error()})
+			m.view = viewMenu
+			return m, nil
+		}
+		m.provider = "google-ai-studio"
+		m.activeProfile = strings.TrimSpace(msg.response.ProfileID)
+		m.status = "key_added"
+		m.lines = append(m.lines, chatLine{
+			role: "system",
+			text: fmt.Sprintf(
+				"AI Studio key added: %s · %s · preferred=%t",
+				msg.response.ProfileID,
+				msg.response.KeyHint,
+				msg.response.Preferred,
+			),
+		})
+		m.view = viewMenu
+		return m, nil
+
+	case aiStudioProfilesMsg:
+		m.pending = false
+		if msg.err != nil {
+			m.status = "error"
+			m.lines = append(m.lines, chatLine{role: "error", text: msg.err.Error()})
+			m.view = viewMenu
+			return m, nil
+		}
+		m.knownAIKeys = sortedAIStudioProfiles(msg.profiles)
+		switch msg.purpose {
+		case pickAuthStatus:
+			m.renderAIStudioProfileLines(m.knownAIKeys)
+			m.status = fmt.Sprintf("ai_studio_profiles=%d", len(m.knownAIKeys))
+			m.view = viewMenu
+			return m, nil
+		case pickAIStudioUseKey:
+			opts := aiStudioProfilePickerOptions(m.knownAIKeys)
+			if len(opts) == 0 {
+				m.lines = append(m.lines, chatLine{role: "system", text: "No AI Studio key profiles found."})
+				m.view = viewMenu
+				return m, nil
+			}
+			m.openPicker(pickAIStudioUseKey, "Use AI Studio Key", "Choose preferred key profile", opts)
+			return m, nil
+		case pickAIStudioDeleteKey:
+			opts := aiStudioProfilePickerOptions(m.knownAIKeys)
+			if len(opts) == 0 {
+				m.lines = append(m.lines, chatLine{role: "system", text: "No AI Studio key profiles found."})
+				m.view = viewMenu
+				return m, nil
+			}
+			m.openPicker(pickAIStudioDeleteKey, "Delete AI Studio Key", "Choose key profile to delete", opts)
+			return m, nil
+		}
+		m.view = viewMenu
+		return m, nil
+
+	case aiStudioProfileActionMsg:
+		m.pending = false
+		if msg.err != nil {
+			m.status = "error"
+			m.lines = append(m.lines, chatLine{role: "error", text: msg.err.Error()})
+			m.view = viewMenu
+			return m, nil
+		}
+		if msg.deleted {
+			if strings.TrimSpace(m.activeProfile) == strings.TrimSpace(msg.profileID) {
+				m.activeProfile = ""
+			}
+			m.lines = append(m.lines, chatLine{role: "system", text: "AI Studio key deleted: " + msg.profileID})
+			m.status = "key_deleted"
+		} else {
+			m.provider = "google-ai-studio"
+			m.activeProfile = strings.TrimSpace(msg.profileID)
+			m.lines = append(m.lines, chatLine{role: "system", text: "AI Studio key selected: " + msg.profileID})
+			m.status = "key_selected"
+		}
+		m.view = viewMenu
+		return m, nil
+
+	case aiStudioModelsMsg:
+		m.pending = false
+		if msg.err != nil {
+			opts := modelOptionsForProvider("google-ai-studio", m.modelID)
+			m.lines = append(m.lines, chatLine{role: "system", text: "AI Studio model list fallback: " + msg.err.Error()})
+			m.openPicker(pickModel, "Select Model", "Choose model", opts)
+			return m, nil
+		}
+		opts := aiStudioModelOptions(msg.response.Models, m.modelID)
+		m.openPicker(pickAIStudioModel, "Select Model", "Choose AI Studio model", opts)
+		return m, nil
 	}
 
 	if m.view == viewChat {
@@ -429,16 +590,31 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case viewChat:
 		switch key {
+		case "ctrl+o":
+			m.chatInput.Blur()
+			m.view = viewMenu
+			m.status = "menu"
+			return m, nil
 		case "esc":
 			m.chatInput.Blur()
 			m.view = viewMenu
+			return m, nil
+		case "up":
+			m.historyMoveUp()
+			return m, nil
+		case "down":
+			m.historyMoveDown()
 			return m, nil
 		case "enter":
 			text := strings.TrimSpace(m.chatInput.Value())
 			if text == "" {
 				return m, nil
 			}
+			if handled := m.handleLocalChatCommand(text); handled {
+				return m, nil
+			}
 			m.chatInput.SetValue("")
+			m.appendInputHistory(text)
 			m.lines = append(m.lines, chatLine{role: "you", text: text})
 			m.pending = true
 			m.status = "sending"
@@ -449,7 +625,8 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				Model:     m.modelID,
 				Message:   text,
 			}
-			return m, sendChatCmd(m.client, req)
+			styledPrompt := lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("› " + text)
+			return m, tea.Batch(tea.Printf("%s\n", styledPrompt), sendChatCmd(m.client, req), m.spinner.Tick)
 		}
 		var cmd tea.Cmd
 		m.chatInput, cmd = m.chatInput.Update(msg)
@@ -478,7 +655,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case viewPrompt:
 		switch key {
 		case "esc":
-			m.promptInput.Blur()
+			m.resetPromptInput()
 			m.view = viewMenu
 			m.status = "cancelled"
 			return m, nil
@@ -531,6 +708,11 @@ func (m model) executeMenuAction() (tea.Model, tea.Cmd) {
 		return m, loadProvidersCmd(m.client)
 
 	case actionSetModel:
+		if m.provider == "google-ai-studio" {
+			m.pending = true
+			m.status = "loading_models"
+			return m, listAIStudioModelsCmd(m.client, m.activeProfile)
+		}
 		opts := modelOptionsForProvider(m.provider, m.modelID)
 		m.openPicker(pickModel, "Select Model", "Choose model", opts)
 		return m, nil
@@ -571,6 +753,25 @@ func (m model) executeMenuAction() (tea.Model, tea.Cmd) {
 		m.openPicker(pickAuthRedirect, "Select redirect_uri", "Choose redirect URL", opts)
 		return m, nil
 
+	case actionAIStudioAddKey:
+		m.openPrompt(promptAIStudioAPIKey, "AI Studio API Key", "Paste API key", "")
+		return m, nil
+
+	case actionAIStudioProfiles:
+		m.pending = true
+		m.status = "loading_ai_studio_profiles"
+		return m, listAIStudioProfilesCmd(m.client, pickAuthStatus)
+
+	case actionAIStudioUseKey:
+		m.pending = true
+		m.status = "loading_ai_studio_profiles"
+		return m, listAIStudioProfilesCmd(m.client, pickAIStudioUseKey)
+
+	case actionAIStudioDeleteKey:
+		m.pending = true
+		m.status = "loading_ai_studio_profiles"
+		return m, listAIStudioProfilesCmd(m.client, pickAIStudioDeleteKey)
+
 	case actionQuit:
 		return m, tea.Quit
 	}
@@ -591,11 +792,22 @@ func (m *model) openPrompt(purpose promptPurpose, title, hint, initial string) {
 	m.promptPurpose = purpose
 	m.promptTitle = title
 	m.promptHint = hint
+	m.promptInput.EchoMode = textinput.EchoNormal
+	if purpose == promptAIStudioAPIKey {
+		m.promptInput.EchoMode = textinput.EchoPassword
+		m.promptInput.EchoCharacter = '•'
+	}
 	m.promptInput.SetValue(strings.TrimSpace(initial))
 	m.promptInput.Placeholder = hint
 	m.promptInput.Focus()
 	m.view = viewPrompt
 	m.status = "input"
+}
+
+func (m *model) resetPromptInput() {
+	m.promptInput.SetValue("")
+	m.promptInput.EchoMode = textinput.EchoNormal
+	m.promptInput.Blur()
 }
 
 func (m model) applyPickerSelection() (tea.Model, tea.Cmd) {
@@ -608,12 +820,21 @@ func (m model) applyPickerSelection() (tea.Model, tea.Cmd) {
 	switch m.pickerPurpose {
 	case pickProvider:
 		m.provider = picked.Value
+		m.activeProfile = ""
+		m.defaultModel = ""
 		m.lines = append(m.lines, chatLine{role: "system", text: "provider set to " + m.provider})
 		m.status = "updated"
 		m.view = viewMenu
 		return m, nil
 
 	case pickModel:
+		m.modelID = picked.Value
+		m.lines = append(m.lines, chatLine{role: "system", text: "model set to " + m.modelID})
+		m.status = "updated"
+		m.view = viewMenu
+		return m, nil
+
+	case pickAIStudioModel:
 		m.modelID = picked.Value
 		m.lines = append(m.lines, chatLine{role: "system", text: "model set to " + m.modelID})
 		m.status = "updated"
@@ -658,6 +879,28 @@ func (m model) applyPickerSelection() (tea.Model, tea.Cmd) {
 		m.manualState = strings.TrimSpace(picked.Value)
 		m.openPrompt(promptManualCallbackURL, "Manual OAuth: Callback URL or Code", "Paste callback URL or code", "")
 		return m, nil
+
+	case pickAIStudioUseKey:
+		profileID := strings.TrimSpace(picked.Value)
+		if profileID == "" {
+			m.view = viewMenu
+			return m, nil
+		}
+		m.pending = true
+		m.status = "switching_key"
+		m.view = viewMenu
+		return m, useAIStudioProfileCmd(m.client, profileID)
+
+	case pickAIStudioDeleteKey:
+		profileID := strings.TrimSpace(picked.Value)
+		if profileID == "" {
+			m.view = viewMenu
+			return m, nil
+		}
+		m.pending = true
+		m.status = "deleting_key"
+		m.view = viewMenu
+		return m, deleteAIStudioProfileCmd(m.client, profileID)
 	}
 
 	m.view = viewMenu
@@ -684,8 +927,30 @@ func (m model) submitPrompt() (tea.Model, tea.Cmd) {
 		}
 		m.pending = true
 		m.status = "oauth_completing"
+		m.resetPromptInput()
 		m.view = viewMenu
 		return m, completeGeminiOAuthManualCmd(m.client, m.manualState, value)
+
+	case promptAIStudioAPIKey:
+		if value == "" {
+			m.lines = append(m.lines, chatLine{role: "error", text: "api key is required"})
+			return m, nil
+		}
+		m.aiStudioKey = value
+		m.openPrompt(promptAIStudioName, "AI Studio Display Name", "Optional display name", "")
+		return m, nil
+
+	case promptAIStudioName:
+		if strings.TrimSpace(m.aiStudioKey) == "" {
+			m.lines = append(m.lines, chatLine{role: "error", text: "missing API key draft"})
+			m.view = viewMenu
+			return m, nil
+		}
+		m.pending = true
+		m.status = "adding_key"
+		m.resetPromptInput()
+		m.view = viewMenu
+		return m, addAIStudioKeyCmd(m.client, m.aiStudioKey, value)
 	}
 
 	m.view = viewMenu
@@ -714,6 +979,11 @@ func (m model) View() string {
 	panelStyle := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
 
 	header := fmt.Sprintf("NekoClaw TUI · view=%s · provider=%s · model=%s · session=%s", m.view, m.provider, m.modelID, m.sessionID)
+	maxHeaderWidth := m.width
+	if maxHeaderWidth <= 0 {
+		maxHeaderWidth = 100
+	}
+	header = clampLine(header, maxHeaderWidth)
 	parts := []string{headerStyle.Render(header)}
 
 	switch m.view {
@@ -730,9 +1000,7 @@ func (m model) View() string {
 		parts = append(parts, statusStyle.Render("↑↓←→ move · Enter execute · Esc quit"))
 
 	case viewChat:
-		parts = append(parts, panelStyle.Render(strings.Join(m.renderLogLines(statusStyle, errorStyle, assistantStyle, youStyle), "\n")))
-		parts = append(parts, statusStyle.Render("Enter send · Esc back"))
-		parts = append(parts, m.chatInput.View())
+		parts = append(parts, m.renderChatView(statusStyle, errorStyle, assistantStyle, youStyle))
 
 	case viewPicker:
 		parts = append(parts, m.renderPicker(panelStyle, selectedStyle, normalItemStyle, statusStyle))
@@ -748,8 +1016,14 @@ func (m model) View() string {
 		parts = append(parts, panelStyle.Render(strings.Join(body, "\n")))
 	}
 
-	parts = append(parts, statusStyle.Render("status: "+m.status))
-	return strings.Join(parts, "\n")
+	if m.view != viewChat {
+		parts = append(parts, statusStyle.Render("status: "+m.status))
+	}
+	rendered := strings.Join(parts, "\n")
+	if m.width > 0 {
+		return fitToTerminalWidth(rendered, m.width)
+	}
+	return rendered
 }
 
 func (m model) menuLayoutWidths() (menuWidth int, summaryWidth int, stacked bool) {
@@ -853,16 +1127,30 @@ func (m model) renderSummaryPanel(statusStyle, errorStyle, assistantStyle, youSt
 		clampLine(fmt.Sprintf("model: %s", m.modelID), textWidth),
 		clampLine(fmt.Sprintf("default-model: %s", m.defaultModelDisplay()), textWidth),
 		clampLine(fmt.Sprintf("session: %s", m.sessionID), textWidth),
-		"",
-		"OAuth Draft",
-		clampLine(fmt.Sprintf("profile_id: %s", m.profileDisplay()), textWidth),
-		clampLine(fmt.Sprintf("project: %s", m.projectDisplay()), textWidth),
-		clampLine("endpoint: <auto selection>", textWidth),
-		clampLine(fmt.Sprintf("redirect: %s", fallback(m.authRedirect, "<default localhost>")), textWidth),
-		clampLine(fmt.Sprintf("last_state: %s", fallback(m.lastAuthState, "<none>")), textWidth),
-		"",
-		"Recent Events",
 	}
+	switch m.provider {
+	case "google-gemini-cli":
+		lines = append(lines,
+			"",
+			"OAuth Draft",
+			clampLine(fmt.Sprintf("profile_id: %s", m.profileDisplay()), textWidth),
+			clampLine(fmt.Sprintf("project: %s", m.projectDisplay()), textWidth),
+			clampLine("endpoint: <auto selection>", textWidth),
+			clampLine(fmt.Sprintf("redirect: %s", fallback(m.authRedirect, "<default localhost>")), textWidth),
+			clampLine(fmt.Sprintf("last_state: %s", fallback(m.lastAuthState, "<none>")), textWidth),
+		)
+	case "google-ai-studio":
+		lines = append(lines,
+			"",
+			"AI Studio",
+			clampLine(fmt.Sprintf("profile_id: %s", m.profileDisplay()), textWidth),
+			clampLine(fmt.Sprintf("key_hint: %s", m.aiStudioKeyHintDisplay()), textWidth),
+			clampLine("auth: api_key", textWidth),
+		)
+	}
+	lines = append(lines,
+		"Recent Events",
+	)
 	for _, line := range m.visibleLines(8) {
 		text := clampLine(fmt.Sprintf("[%s] %s", line.role, line.text), textWidth)
 		switch line.role {
@@ -884,9 +1172,9 @@ func (m *model) applyWindowSize(width, height int) {
 	m.width = width
 	m.height = height
 
-	inputWidth := width - 6
-	if inputWidth < 12 {
-		inputWidth = 12
+	inputWidth := width - 2
+	if inputWidth < 10 {
+		inputWidth = 10
 	}
 	m.chatInput.Width = inputWidth
 	m.promptInput.Width = inputWidth
@@ -913,29 +1201,143 @@ func (m model) renderPicker(panelStyle, selectedStyle, normalStyle, statusStyle 
 	return panelStyle.Render(strings.Join(lines, "\n"))
 }
 
-func (m model) renderLogLines(statusStyle, errorStyle, assistantStyle, youStyle lipgloss.Style) []string {
-	entries := m.visibleLines(100)
-	if m.height > 0 {
-		max := m.height - 8
-		if max < 5 {
-			max = 5
+func (m model) renderChatTranscript(statusStyle, errorStyle, assistantStyle, youStyle lipgloss.Style) string {
+	textWidth, maxLines := m.chatTranscriptLayout()
+	return m.renderChatTranscriptWithLimit(statusStyle, errorStyle, assistantStyle, youStyle, textWidth, maxLines)
+}
+
+func (m model) renderChatTranscriptWithLimit(
+	statusStyle,
+	errorStyle,
+	assistantStyle,
+	youStyle lipgloss.Style,
+	textWidth int,
+	maxLines int,
+) string {
+	lines := m.renderLogLines(statusStyle, errorStyle, assistantStyle, youStyle, textWidth)
+	if maxLines > 0 && len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	if maxLines > 0 && len(lines) < maxLines {
+		pad := make([]string, maxLines-len(lines))
+		lines = append(pad, lines...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m model) renderChatView(statusStyle, errorStyle, assistantStyle, youStyle lipgloss.Style) string {
+	textWidth, _ := m.chatTranscriptLayout()
+	composer := m.renderChatComposer(statusStyle, textWidth, assistantStyle)
+
+	// In inline mode, we don't render the historical transcript in View().
+	// It's already printed to the terminal above via tea.Printf.
+	// Just return the composer (input box or spinner).
+	return "\n" + composer
+}
+
+func (m model) renderChatComposer(statusStyle lipgloss.Style, textWidth int, highlightStyle lipgloss.Style) string {
+	if textWidth <= 0 {
+		textWidth = 80
+	}
+
+	if m.pending {
+		// Like Claude Code spinner
+		text := fmt.Sprintf("%s Bloviating... (thought for...)", m.spinner.View())
+		styled := highlightStyle.Render(text)
+		return styled
+	}
+
+	return m.chatInput.View()
+}
+
+func (m model) latestActivity() string {
+	for i := len(m.lines) - 1; i >= 0; i-- {
+		line := m.lines[i]
+		if strings.TrimSpace(line.text) == "" {
+			continue
 		}
-		if len(entries) > max {
-			entries = entries[len(entries)-max:]
+		if line.role == "system" && strings.Contains(strings.ToLower(line.text), "welcome to nekoclaw") {
+			continue
+		}
+		return line.text
+	}
+	return "No recent activity"
+}
+
+func (m model) chatTranscriptLayout() (textWidth int, maxLines int) {
+	totalWidth := m.width
+	if totalWidth <= 0 {
+		totalWidth = 100
+	}
+	// Keep one extra safety column so rounded borders and prompt markers do not
+	// clip at the terminal edge after resize.
+	textWidth = totalWidth - 2
+	if textWidth < 1 {
+		textWidth = 1
+	}
+	if m.height > 0 {
+		maxLines = m.height - 2
+		if maxLines < 1 {
+			maxLines = 1
 		}
 	}
+	return textWidth, maxLines
+}
+
+func (m model) wrapAndStyle(text string, style lipgloss.Style) string {
+	textWidth := m.width - 2
+	if textWidth < 10 {
+		textWidth = 80 // fallback if width not known yet
+	}
+	wrapped := wrapToWidth(text, textWidth)
+	var out []string
+	for _, line := range wrapped {
+		out = append(out, style.Render(line))
+	}
+	return strings.Join(out, "\n")
+}
+
+func (m model) renderLogLines(statusStyle, errorStyle, assistantStyle, youStyle lipgloss.Style, maxLineWidth int) []string {
+	entries := m.visibleLines(200)
 	out := make([]string, 0, len(entries))
 	for _, line := range entries {
-		text := fmt.Sprintf("[%s] %s", line.role, line.text)
+		prefix := "[system] "
+		indent := strings.Repeat(" ", len(prefix))
+		renderStyle := statusStyle
 		switch line.role {
 		case "assistant":
-			out = append(out, assistantStyle.Render(text))
+			prefix = "" // Claude code doesn't use bullet prefix for assistant response usually, or handles it as markdown
+			indent = ""
+			renderStyle = assistantStyle
 		case "you":
-			out = append(out, youStyle.Render(text))
+			prefix = "› "
+			indent = "  "
+			renderStyle = youStyle
 		case "error":
-			out = append(out, errorStyle.Render(text))
-		default:
-			out = append(out, statusStyle.Render(text))
+			prefix = "✕ "
+			indent = "  "
+			renderStyle = errorStyle
+		}
+		contentWidth := maxLineWidth - lipgloss.Width(prefix)
+		if contentWidth < 1 {
+			contentWidth = 1
+		}
+		wrapped := wrapToWidth(line.text, contentWidth)
+		for idx, chunk := range wrapped {
+			renderText := prefix + chunk
+			if idx > 0 {
+				renderText = indent + chunk
+			}
+			switch line.role {
+			case "assistant":
+				out = append(out, renderStyle.Render(renderText))
+			case "you":
+				out = append(out, renderStyle.Render(renderText))
+			case "error":
+				out = append(out, renderStyle.Render(renderText))
+			default:
+				out = append(out, renderStyle.Render(renderText))
+			}
 		}
 	}
 	return out
@@ -959,6 +1361,43 @@ func (m *model) renderProfileStatusLines(profiles []client.GeminiAuthProfile) {
 			prefix = "* "
 		}
 		m.lines = append(m.lines, chatLine{role: "system", text: prefix + formatProfileLine(profile)})
+	}
+}
+
+func (m *model) renderAIStudioProfileLines(profiles []client.AIStudioProfile) {
+	if len(profiles) == 0 {
+		m.lines = append(m.lines, chatLine{role: "system", text: "No AI Studio key profiles found."})
+		return
+	}
+	for _, profile := range profiles {
+		prefix := ""
+		if profile.Preferred {
+			prefix = "* "
+		}
+		state := "available"
+		if !profile.Available {
+			if !profile.DisabledUntil.IsZero() {
+				state = "disabled_until=" + profile.DisabledUntil.Format(time.RFC3339)
+			} else if !profile.CooldownUntil.IsZero() {
+				state = "cooldown_until=" + profile.CooldownUntil.Format(time.RFC3339)
+			} else {
+				state = "unavailable"
+			}
+		}
+		if profile.DisabledReason != "" {
+			state += " reason=" + profile.DisabledReason
+		}
+		m.lines = append(m.lines, chatLine{
+			role: "system",
+			text: fmt.Sprintf(
+				"%s%s · name=%s · key=%s · %s",
+				prefix,
+				profile.ProfileID,
+				fallback(profile.DisplayName, "-"),
+				fallback(profile.KeyHint, "-"),
+				state,
+			),
+		})
 	}
 }
 
@@ -991,6 +1430,16 @@ func (m *model) refreshActiveProfileFromKnown() {
 }
 
 func (m model) profileDisplay() string {
+	if m.provider == "google-ai-studio" {
+		profile, ok := m.currentAIStudioProfile()
+		if ok {
+			return profile.ProfileID
+		}
+		if active := strings.TrimSpace(m.activeProfile); active != "" {
+			return active
+		}
+		return "<auto by pool>"
+	}
 	profile, ok := m.currentProfile()
 	if ok {
 		return profile.ProfileID
@@ -1002,6 +1451,9 @@ func (m model) profileDisplay() string {
 }
 
 func (m model) projectDisplay() string {
+	if m.provider != "google-gemini-cli" {
+		return "<n/a>"
+	}
 	profile, ok := m.currentProfile()
 	if !ok {
 		return "<auto discovery>"
@@ -1013,7 +1465,7 @@ func (m model) projectDisplay() string {
 }
 
 func (m model) defaultModelDisplay() string {
-	if m.provider != "google-gemini-cli" {
+	if m.provider != "google-gemini-cli" && m.provider != "google-ai-studio" {
 		return "<n/a>"
 	}
 	if !strings.EqualFold(m.modelID, "default") {
@@ -1045,6 +1497,34 @@ func (m model) currentProfile() (client.GeminiAuthProfile, bool) {
 	return m.knownProfiles[0], true
 }
 
+func (m model) currentAIStudioProfile() (client.AIStudioProfile, bool) {
+	if len(m.knownAIKeys) == 0 {
+		return client.AIStudioProfile{}, false
+	}
+	active := strings.TrimSpace(m.activeProfile)
+	if active != "" {
+		for _, profile := range m.knownAIKeys {
+			if profile.ProfileID == active {
+				return profile, true
+			}
+		}
+	}
+	for _, profile := range m.knownAIKeys {
+		if profile.Preferred {
+			return profile, true
+		}
+	}
+	return m.knownAIKeys[0], true
+}
+
+func (m model) aiStudioKeyHintDisplay() string {
+	profile, ok := m.currentAIStudioProfile()
+	if !ok {
+		return "<unknown>"
+	}
+	return fallback(strings.TrimSpace(profile.KeyHint), "<unknown>")
+}
+
 func (m *model) addKnownSession(sessionID string) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
@@ -1061,8 +1541,89 @@ func (m *model) addKnownState(state string) {
 	m.knownStates = appendUnique(m.knownStates, state)
 }
 
+func (m *model) appendInputHistory(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	if len(m.inputHistory) == 0 || m.inputHistory[len(m.inputHistory)-1] != text {
+		m.inputHistory = append(m.inputHistory, text)
+	}
+	m.inputHistoryIndex = -1
+	m.inputDraft = ""
+}
+
+func (m *model) historyMoveUp() {
+	if len(m.inputHistory) == 0 {
+		return
+	}
+	if m.inputHistoryIndex == -1 {
+		m.inputDraft = m.chatInput.Value()
+		m.inputHistoryIndex = len(m.inputHistory) - 1
+	} else if m.inputHistoryIndex > 0 {
+		m.inputHistoryIndex--
+	}
+	if m.inputHistoryIndex >= 0 && m.inputHistoryIndex < len(m.inputHistory) {
+		m.chatInput.SetValue(m.inputHistory[m.inputHistoryIndex])
+	}
+}
+
+func (m *model) historyMoveDown() {
+	if len(m.inputHistory) == 0 || m.inputHistoryIndex == -1 {
+		return
+	}
+	if m.inputHistoryIndex < len(m.inputHistory)-1 {
+		m.inputHistoryIndex++
+		m.chatInput.SetValue(m.inputHistory[m.inputHistoryIndex])
+		return
+	}
+	m.inputHistoryIndex = -1
+	m.chatInput.SetValue(m.inputDraft)
+	m.inputDraft = ""
+}
+
+func (m *model) handleLocalChatCommand(text string) bool {
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "/menu":
+		m.chatInput.SetValue("")
+		m.chatInput.Blur()
+		m.view = viewMenu
+		m.status = "menu"
+		m.lines = append(m.lines, chatLine{role: "system", text: "Opened menu."})
+		return true
+	case "/clear":
+		m.chatInput.SetValue("")
+		m.lines = []chatLine{{
+			role: "system",
+			text: "Chat cleared.",
+		}}
+		m.status = "chat"
+		return true
+	case "/help":
+		m.chatInput.SetValue("")
+		m.lines = append(m.lines, chatLine{
+			role: "system",
+			text: "Local commands: /help, /menu, /clear",
+		})
+		m.status = "chat"
+		return true
+	}
+	return false
+}
+
 func sortedProfiles(in []client.GeminiAuthProfile) []client.GeminiAuthProfile {
 	profiles := append([]client.GeminiAuthProfile(nil), in...)
+	sort.SliceStable(profiles, func(i, j int) bool {
+		if profiles[i].Preferred != profiles[j].Preferred {
+			return profiles[i].Preferred
+		}
+		return profiles[i].ProfileID < profiles[j].ProfileID
+	})
+	return profiles
+}
+
+func sortedAIStudioProfiles(in []client.AIStudioProfile) []client.AIStudioProfile {
+	profiles := append([]client.AIStudioProfile(nil), in...)
 	sort.SliceStable(profiles, func(i, j int) bool {
 		if profiles[i].Preferred != profiles[j].Preferred {
 			return profiles[i].Preferred
@@ -1082,7 +1643,7 @@ func providerOptions(providers []string, current string) []pickerOption {
 		set[provider] = struct{}{}
 	}
 	if len(set) == 0 {
-		for _, fallbackProvider := range []string{"mock", "google-gemini-cli"} {
+		for _, fallbackProvider := range []string{"mock", "google-gemini-cli", "google-ai-studio"} {
 			set[fallbackProvider] = struct{}{}
 		}
 	}
@@ -1108,6 +1669,8 @@ func modelOptionsForProvider(providerID, current string) []pickerOption {
 	switch providerID {
 	case "google-gemini-cli":
 		models = []string{"default", "gemini-3-pro-preview", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-2.5-flash"}
+	case "google-ai-studio":
+		models = []string{"default", "gemini-2.5-pro", "gemini-2.5-flash"}
 	case "mock":
 		models = []string{"default"}
 	}
@@ -1148,6 +1711,33 @@ func profilePickerOptions(profiles []client.GeminiAuthProfile, allowEmpty bool) 
 	for _, profile := range profiles {
 		label := fmt.Sprintf("%s (%s)", profile.ProfileID, fallback(profile.Email, "no-email"))
 		out = append(out, pickerOption{Label: label, Value: profile.ProfileID})
+	}
+	return out
+}
+
+func aiStudioProfilePickerOptions(profiles []client.AIStudioProfile) []pickerOption {
+	out := make([]pickerOption, 0, len(profiles))
+	for _, profile := range profiles {
+		label := fmt.Sprintf("%s (%s)", profile.ProfileID, fallback(profile.KeyHint, "no-hint"))
+		out = append(out, pickerOption{Label: label, Value: profile.ProfileID})
+	}
+	return out
+}
+
+func aiStudioModelOptions(models []string, current string) []pickerOption {
+	ordered := []string{"default"}
+	for _, model := range models {
+		ordered = appendUnique(ordered, strings.TrimSpace(model))
+	}
+	if current = strings.TrimSpace(current); current != "" {
+		ordered = appendUnique(ordered, current)
+	}
+	out := make([]pickerOption, 0, len(ordered))
+	for _, model := range ordered {
+		if model == "" {
+			continue
+		}
+		out = append(out, pickerOption{Label: model, Value: model})
 	}
 	return out
 }
@@ -1289,6 +1879,54 @@ func useGeminiProfileCmd(apiClient *client.APIClient, profileID string) tea.Cmd 
 	}
 }
 
+func addAIStudioKeyCmd(apiClient *client.APIClient, apiKey string, displayName string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		response, err := apiClient.AddAIStudioKey(ctx, client.AIStudioAddKeyRequest{
+			APIKey:      strings.TrimSpace(apiKey),
+			DisplayName: strings.TrimSpace(displayName),
+		})
+		return aiStudioAddKeyMsg{response: response, err: err}
+	}
+}
+
+func listAIStudioProfilesCmd(apiClient *client.APIClient, purpose pickerPurpose) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		profiles, err := apiClient.ListAIStudioProfiles(ctx)
+		return aiStudioProfilesMsg{profiles: profiles, purpose: purpose, err: err}
+	}
+}
+
+func useAIStudioProfileCmd(apiClient *client.APIClient, profileID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		err := apiClient.UseAIStudioProfile(ctx, strings.TrimSpace(profileID))
+		return aiStudioProfileActionMsg{profileID: strings.TrimSpace(profileID), err: err}
+	}
+}
+
+func deleteAIStudioProfileCmd(apiClient *client.APIClient, profileID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		err := apiClient.DeleteAIStudioProfile(ctx, strings.TrimSpace(profileID))
+		return aiStudioProfileActionMsg{profileID: strings.TrimSpace(profileID), deleted: true, err: err}
+	}
+}
+
+func listAIStudioModelsCmd(apiClient *client.APIClient, profileID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		response, err := apiClient.ListAIStudioModels(ctx, strings.TrimSpace(profileID))
+		return aiStudioModelsMsg{response: response, err: err}
+	}
+}
+
 func fallback(value string, fallbackValue string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallbackValue
@@ -1310,6 +1948,26 @@ func clampLine(text string, max int) string {
 	return string(runes[:max-1]) + "…"
 }
 
+func wrapToWidth(text string, max int) []string {
+	if max <= 0 {
+		return []string{text}
+	}
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return []string{""}
+	}
+	out := make([]string, 0, (len(runes)/max)+1)
+	for len(runes) > 0 {
+		n := max
+		if n > len(runes) {
+			n = len(runes)
+		}
+		out = append(out, string(runes[:n]))
+		runes = runes[n:]
+	}
+	return out
+}
+
 func openExternalURL(rawURL string) error {
 	rawURL = strings.TrimSpace(rawURL)
 	if rawURL == "" {
@@ -1325,4 +1983,26 @@ func openExternalURL(rawURL string) error {
 		cmd = exec.Command("xdg-open", rawURL)
 	}
 	return cmd.Start()
+}
+
+func lineCount(text string) int {
+	if text == "" {
+		return 0
+	}
+	return strings.Count(text, "\n") + 1
+}
+
+func fitToTerminalWidth(rendered string, width int) string {
+	if width <= 0 || strings.TrimSpace(rendered) == "" {
+		return rendered
+	}
+	lines := strings.Split(rendered, "\n")
+	maxWidthStyle := lipgloss.NewStyle().MaxWidth(width)
+	for idx, line := range lines {
+		if lipgloss.Width(line) <= width {
+			continue
+		}
+		lines[idx] = maxWidthStyle.Render(line)
+	}
+	return strings.Join(lines, "\n")
 }

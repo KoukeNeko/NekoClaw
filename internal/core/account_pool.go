@@ -222,6 +222,32 @@ func (p *AccountPool) SetCredential(profileID string, account Account) {
 	p.accounts[profileID] = account
 }
 
+func (p *AccountPool) RemoveAccount(accountID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return false
+	}
+	if _, ok := p.accounts[accountID]; !ok {
+		return false
+	}
+	delete(p.accounts, accountID)
+	delete(p.usage, accountID)
+	if len(p.order) > 0 {
+		next := make([]string, 0, len(p.order))
+		for _, id := range p.order {
+			if id == accountID {
+				continue
+			}
+			next = append(next, id)
+		}
+		p.order = next
+	}
+	return true
+}
+
 func (p *AccountPool) SetPreferred(accountID string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()

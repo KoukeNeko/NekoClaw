@@ -31,6 +31,8 @@ type ProfileMetadata struct {
 	ProfileID      string    `json:"profile_id"`
 	Provider       string    `json:"provider"`
 	Type           string    `json:"type"`
+	DisplayName    string    `json:"display_name,omitempty"`
+	KeyHint        string    `json:"key_hint,omitempty"`
 	Email          string    `json:"email,omitempty"`
 	ProjectID      string    `json:"project_id,omitempty"`
 	Endpoint       string    `json:"endpoint,omitempty"`
@@ -53,10 +55,10 @@ type StoreOptions struct {
 }
 
 type Store struct {
-	mu            sync.Mutex
-	metadataPath  string
-	keyring       CredentialKeyring
-	fallback      *encryptedCredentialFile
+	mu           sync.Mutex
+	metadataPath string
+	keyring      CredentialKeyring
+	fallback     *encryptedCredentialFile
 }
 
 type metadataFile struct {
@@ -259,6 +261,27 @@ func (s *Store) DeleteCredential(provider, profileID string) error {
 	}
 	_ = s.fallback.Delete(secretKey)
 	return nil
+}
+
+func (s *Store) DeleteProfile(provider, profileID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	provider = strings.TrimSpace(provider)
+	profileID = strings.TrimSpace(profileID)
+	if provider == "" || profileID == "" {
+		return fmt.Errorf("provider and profile_id are required")
+	}
+	file, err := s.readMetadataLocked()
+	if err != nil {
+		return err
+	}
+	key := profileMapKey(provider, profileID)
+	if _, ok := file.Profiles[key]; !ok {
+		return ErrProfileNotFound
+	}
+	delete(file.Profiles, key)
+	return s.writeMetadataLocked(file)
 }
 
 func (s *Store) ensureMetadataFile() error {
@@ -596,7 +619,7 @@ func (linuxSecretToolKeyring) Delete(service, key string) error {
 
 type unsupportedKeyring struct{}
 
-func (unsupportedKeyring) Available() bool                                 { return false }
-func (unsupportedKeyring) Set(_, _, _ string) error                        { return ErrKeyringUnavailable }
-func (unsupportedKeyring) Get(_, _ string) (string, error)                 { return "", ErrKeyringUnavailable }
-func (unsupportedKeyring) Delete(_, _ string) error                         { return ErrKeyringUnavailable }
+func (unsupportedKeyring) Available() bool                 { return false }
+func (unsupportedKeyring) Set(_, _, _ string) error        { return ErrKeyringUnavailable }
+func (unsupportedKeyring) Get(_, _ string) (string, error) { return "", ErrKeyringUnavailable }
+func (unsupportedKeyring) Delete(_, _ string) error        { return ErrKeyringUnavailable }

@@ -38,6 +38,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/auth/gemini/manual/complete", s.handleGeminiAuthManualComplete)
 	mux.HandleFunc("/v1/auth/gemini/profiles", s.handleGeminiAuthProfiles)
 	mux.HandleFunc("/v1/auth/gemini/use", s.handleGeminiAuthUse)
+	mux.HandleFunc("/v1/auth/ai-studio/add-key", s.handleAIStudioAddKey)
+	mux.HandleFunc("/v1/auth/ai-studio/profiles", s.handleAIStudioProfiles)
+	mux.HandleFunc("/v1/auth/ai-studio/use", s.handleAIStudioUse)
+	mux.HandleFunc("/v1/auth/ai-studio/delete", s.handleAIStudioDelete)
+	mux.HandleFunc("/v1/ai-studio/models", s.handleAIStudioModels)
 	return mux
 }
 
@@ -355,6 +360,122 @@ func (s *Server) handleGeminiAuthUse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]any{"ok": true, "profile_id": strings.TrimSpace(req.ProfileID)})
+}
+
+func (s *Server) handleAIStudioAddKey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req app.AIStudioAddKeyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	result, err := s.svc.AddAIStudioKey(r.Context(), req)
+	if err != nil {
+		respondAIStudioError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleAIStudioProfiles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	profiles, err := s.svc.ListAIStudioProfiles()
+	if err != nil {
+		respondAIStudioError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"profiles": profiles})
+}
+
+func (s *Server) handleAIStudioUse(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req useProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if err := s.svc.UseAIStudioProfile(req.ProfileID); err != nil {
+		respondAIStudioError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"profile_id": strings.TrimSpace(req.ProfileID),
+		"provider":   "google-ai-studio",
+	})
+}
+
+func (s *Server) handleAIStudioDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req useProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if err := s.svc.DeleteAIStudioProfile(req.ProfileID); err != nil {
+		respondAIStudioError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"profile_id": strings.TrimSpace(req.ProfileID),
+		"provider":   "google-ai-studio",
+	})
+}
+
+func (s *Server) handleAIStudioModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	result, err := s.svc.ListAIStudioModels(r.Context(), strings.TrimSpace(r.URL.Query().Get("profile_id")))
+	if err != nil {
+		respondAIStudioError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, result)
+}
+
+func respondAIStudioError(w http.ResponseWriter, err error) {
+	if err == nil {
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	switch {
+	case errors.Is(err, app.ErrInvalidAPIKey):
+		respondErrorDetail(w, http.StatusBadRequest, "invalid_api_key", err.Error())
+	case errors.Is(err, app.ErrKeyValidationFailed):
+		respondErrorDetail(w, http.StatusBadRequest, "key_validation_failed", err.Error())
+	case errors.Is(err, app.ErrProfileNotFound):
+		respondErrorDetail(w, http.StatusNotFound, "profile_not_found", err.Error())
+	case errors.Is(err, app.ErrProfileInUse):
+		respondErrorDetail(w, http.StatusConflict, "profile_in_use", err.Error())
+	case errors.Is(err, app.ErrProviderNotReady):
+		respondErrorDetail(w, http.StatusServiceUnavailable, "provider_not_ready", err.Error())
+	case errors.Is(err, app.ErrNoAvailableAccount):
+		respondErrorDetail(w, http.StatusConflict, "provider_not_ready", err.Error())
+	default:
+		var failureErr *provider.FailureError
+		if errors.As(err, &failureErr) {
+			if failureErr.Reason == core.FailureAuthPermanent && (failureErr.Status == http.StatusUnauthorized || failureErr.Status == http.StatusBadRequest) {
+				respondErrorDetail(w, http.StatusBadRequest, "invalid_api_key", err.Error())
+				return
+			}
+		}
+		respondError(w, http.StatusBadGateway, err.Error())
+	}
 }
 
 func (s *Server) resolveGeminiProviderAndAccount(providerID, accountID string) (*provider.GeminiInternalProvider, core.Account, error) {
