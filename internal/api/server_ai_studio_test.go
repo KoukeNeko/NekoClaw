@@ -14,7 +14,7 @@ import (
 )
 
 func TestAIStudioKeyCRUDAndChatFlow(t *testing.T) {
-	svc := app.NewService()
+	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterProvider(&fakeAIStudioProvider{})
 	svc.RegisterPool(core.NewAccountPool("google-ai-studio", nil, nil, core.DefaultCooldownConfig()))
 
@@ -90,7 +90,7 @@ func TestAIStudioKeyCRUDAndChatFlow(t *testing.T) {
 }
 
 func TestAIStudioAddKeyValidationFailure(t *testing.T) {
-	svc := app.NewService()
+	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterProvider(&fakeAIStudioProvider{})
 	svc.RegisterPool(core.NewAccountPool("google-ai-studio", nil, nil, core.DefaultCooldownConfig()))
 

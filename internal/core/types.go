@@ -1,6 +1,10 @@
 package core
 
-import "time"
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"time"
+)
 
 type MessageRole string
 
@@ -68,4 +72,157 @@ type CompressionMeta struct {
 	DroppedMessages  int `json:"dropped_messages"`
 	SoftTrimmed      int `json:"soft_trimmed"`
 	HardCleared      int `json:"hard_cleared"`
+}
+
+type SessionMetadata struct {
+	SessionID       string    `json:"session_id"`
+	MessageCount    int       `json:"message_count"`
+	InputTokens     int       `json:"input_tokens"`
+	OutputTokens    int       `json:"output_tokens"`
+	ContextTokens   int       `json:"context_tokens"`
+	CompactionCount int       `json:"compaction_count"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// ---------------------------------------------------------------------------
+// Session lifecycle configuration
+// ---------------------------------------------------------------------------
+
+type SessionLifecycleConfig struct {
+	DailyResetHour int           `json:"daily_reset_hour"` // default 4 (4 AM)
+	IdleTimeout    time.Duration `json:"idle_timeout"`     // default 60min
+	RetentionDays  int           `json:"retention_days"`   // default 30
+	MaxEntries     int           `json:"max_entries"`      // default 500
+	MaxFileSize    int64         `json:"max_file_size"`    // default 10MB
+}
+
+func DefaultLifecycleConfig() SessionLifecycleConfig {
+	return SessionLifecycleConfig{
+		DailyResetHour: 4,
+		IdleTimeout:    60 * time.Minute,
+		RetentionDays:  30,
+		MaxEntries:     500,
+		MaxFileSize:    10 * 1024 * 1024,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Typed JSONL entries (OpenClaw v3 format)
+// ---------------------------------------------------------------------------
+
+type EntryType string
+
+const (
+	EntrySession     EntryType = "session"
+	EntryMessage     EntryType = "message"
+	EntryCompaction  EntryType = "compaction"
+	EntryModelChange EntryType = "model_change"
+)
+
+const sessionVersion = 3
+
+// SessionEntry is the universal JSONL line format. Fields are populated
+// based on the Type discriminator; unused fields are omitted via omitempty.
+type SessionEntry struct {
+	Type      EntryType   `json:"type"`
+	ID        string      `json:"id"`
+	ParentID  string      `json:"parentId,omitempty"`
+	Timestamp time.Time   `json:"timestamp"`
+
+	// type=session
+	Version  int    `json:"version,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Provider string `json:"provider,omitempty"`
+
+	// type=message
+	Role     MessageRole `json:"role,omitempty"`
+	Content  string      `json:"content,omitempty"`
+	ToolName string      `json:"tool_name,omitempty"`
+
+	// type=compaction
+	Summary          string `json:"summary,omitempty"`
+	DroppedCount     int    `json:"dropped_count,omitempty"`
+	DroppedTokens    int    `json:"dropped_tokens,omitempty"`
+	FirstKeptEntryID string `json:"first_kept_entry_id,omitempty"`
+
+	// type=model_change
+	FromModel string `json:"from_model,omitempty"`
+	ToModel   string `json:"to_model,omitempty"`
+}
+
+// NewEntryID generates a cryptographically random 8-character hex ID.
+func NewEntryID() string {
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func NewSessionHeader(model, prov string) SessionEntry {
+	return SessionEntry{
+		Type:      EntrySession,
+		ID:        NewEntryID(),
+		Timestamp: time.Now(),
+		Version:   sessionVersion,
+		Model:     model,
+		Provider:  prov,
+	}
+}
+
+func NewMessageEntry(role MessageRole, content string) SessionEntry {
+	return SessionEntry{
+		Type:      EntryMessage,
+		ID:        NewEntryID(),
+		Timestamp: time.Now(),
+		Role:      role,
+		Content:   content,
+	}
+}
+
+func NewCompactionEntry(summary string, droppedCount, droppedTokens int, firstKeptID string) SessionEntry {
+	return SessionEntry{
+		Type:             EntryCompaction,
+		ID:               NewEntryID(),
+		Timestamp:        time.Now(),
+		Summary:          summary,
+		DroppedCount:     droppedCount,
+		DroppedTokens:    droppedTokens,
+		FirstKeptEntryID: firstKeptID,
+	}
+}
+
+func NewModelChangeEntry(from, to string) SessionEntry {
+	return SessionEntry{
+		Type:      EntryModelChange,
+		ID:        NewEntryID(),
+		Timestamp: time.Now(),
+		FromModel: from,
+		ToModel:   to,
+	}
+}
+
+// ToMessage converts a message-type entry back to a Message for the chat pipeline.
+func (e SessionEntry) ToMessage() Message {
+	return Message{
+		Role:      e.Role,
+		Content:   e.Content,
+		ToolName:  e.ToolName,
+		CreatedAt: e.Timestamp,
+	}
+}
+
+// MessageToEntry converts a legacy Message into a typed SessionEntry.
+func MessageToEntry(msg Message) SessionEntry {
+	ts := msg.CreatedAt
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	return SessionEntry{
+		Type:      EntryMessage,
+		ID:        NewEntryID(),
+		Timestamp: ts,
+		Role:      msg.Role,
+		Content:   msg.Content,
+		ToolName:  msg.ToolName,
+	}
 }

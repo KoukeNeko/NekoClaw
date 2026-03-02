@@ -20,7 +20,7 @@ import (
 )
 
 func TestGeminiOAuthManualFlowEndToEnd(t *testing.T) {
-	svc := app.NewService()
+	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterProvider(fakeGeminiProvider{})
 	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
 
@@ -83,7 +83,7 @@ func TestGeminiOAuthManualFlowEndToEnd(t *testing.T) {
 }
 
 func TestOAuthCallbackStateMismatch(t *testing.T) {
-	svc := app.NewService()
+	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterProvider(fakeGeminiProvider{})
 	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
 
@@ -118,7 +118,7 @@ func TestOAuthCallbackStateMismatch(t *testing.T) {
 }
 
 func TestOAuthStartSupportsRemoteModeAndRedirectOverride(t *testing.T) {
-	svc := app.NewService()
+	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterProvider(fakeGeminiProvider{})
 	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
 
@@ -158,7 +158,7 @@ func TestOAuthStartSupportsRemoteModeAndRedirectOverride(t *testing.T) {
 }
 
 func TestGeminiOAuthManualCompleteProjectDiscoveryFailure(t *testing.T) {
-	svc := app.NewService()
+	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterProvider(fakeGeminiProviderProjectDiscoveryFail{})
 	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
 
@@ -206,7 +206,7 @@ func TestGeminiOAuthManualCompleteProjectDiscoveryFailure(t *testing.T) {
 
 func TestChatMissingProjectReturnsStructuredError(t *testing.T) {
 	provider := &fakeGeminiProviderWithCounter{}
-	svc := app.NewService()
+	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterProvider(provider)
 	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", []core.Account{
 		{
@@ -243,7 +243,7 @@ func TestChatMissingProjectReturnsStructuredError(t *testing.T) {
 
 func TestChatMissingProjectAutoDiscoversLikeOpenClaw(t *testing.T) {
 	provider := &fakeGeminiProviderWithProjectDiscoveryCounter{}
-	svc := app.NewService()
+	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterProvider(provider)
 	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", []core.Account{
 		{
@@ -276,7 +276,7 @@ func TestChatMissingProjectAutoDiscoversLikeOpenClaw(t *testing.T) {
 }
 
 func TestGeminiAuthProfilesIncludesProjectReadiness(t *testing.T) {
-	svc := app.NewService()
+	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterProvider(fakeGeminiProvider{})
 	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
 
@@ -329,7 +329,7 @@ func TestGeminiAuthProfilesIncludesProjectReadiness(t *testing.T) {
 }
 
 func TestChatNoAvailableGeminiProfilesWithMissingProjectReturnsStructuredError(t *testing.T) {
-	svc := app.NewService()
+	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterProvider(fakeGeminiProvider{})
 	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
 

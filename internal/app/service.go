@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/doeshing/nekoclaw/internal/auth"
+	"github.com/doeshing/nekoclaw/internal/compaction"
 	"github.com/doeshing/nekoclaw/internal/contextwindow"
 	"github.com/doeshing/nekoclaw/internal/core"
+	"github.com/doeshing/nekoclaw/internal/memory"
 	"github.com/doeshing/nekoclaw/internal/provider"
 )
 
@@ -32,18 +34,52 @@ type Service struct {
 	providers         map[string]provider.Provider
 	pools             map[string]*core.AccountPool
 	sessions          *core.SessionStore
+	lifecycle         *core.SessionLifecycle
 	oauthManager      *auth.GeminiOAuthManager
 	authStore         *auth.Store
+	memoryDir         string
+	searchIndex       *memory.SearchIndex
 	preferredProfiles map[string]string
+	fallbacks         map[string][]string // primary provider -> fallback provider IDs
 }
 
-func NewService() *Service {
+type ServiceOptions struct {
+	SessionStore *core.SessionStore
+	Lifecycle    *core.SessionLifecycle
+	MemoryDir    string
+	SearchIndex  *memory.SearchIndex
+}
+
+func NewService(opts ServiceOptions) *Service {
+	sessions := opts.SessionStore
+	if sessions == nil {
+		sessions = core.NewSessionStore()
+	}
 	return &Service{
 		providers:         map[string]provider.Provider{},
 		pools:             map[string]*core.AccountPool{},
-		sessions:          core.NewSessionStore(),
+		sessions:          sessions,
+		lifecycle:         opts.Lifecycle,
+		memoryDir:         opts.MemoryDir,
+		searchIndex:       opts.SearchIndex,
 		preferredProfiles: map[string]string{},
+		fallbacks:         map[string][]string{},
 	}
+}
+
+func (s *Service) ListSessions() []core.SessionMetadata {
+	return s.sessions.ListSessions()
+}
+
+func (s *Service) DeleteSession(sessionID string) error {
+	return s.sessions.DeleteSession(sessionID)
+}
+
+func (s *Service) SearchMemory(query string, limit int) ([]memory.SearchResult, error) {
+	if s.searchIndex == nil {
+		return nil, fmt.Errorf("search index not configured")
+	}
+	return s.searchIndex.Search(query, limit)
 }
 
 func (s *Service) RegisterProvider(p provider.Provider) {
@@ -56,6 +92,14 @@ func (s *Service) RegisterPool(pool *core.AccountPool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pools[pool.Provider()] = pool
+}
+
+// RegisterFallback declares that when all accounts for primaryProvider are exhausted,
+// the system should attempt fallbackProvider before returning an error.
+func (s *Service) RegisterFallback(primaryProvider, fallbackProvider string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fallbacks[primaryProvider] = append(s.fallbacks[primaryProvider], fallbackProvider)
 }
 
 func (s *Service) SetAuthIntegration(manager *auth.GeminiOAuthManager, store *auth.Store) {
@@ -629,9 +673,10 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		sessionID = "main"
 	}
 
-	prov, pool, err := s.resolveProviderPool(providerID)
-	if err != nil {
-		return core.ChatResponse{}, err
+	// Check session lifecycle before processing.
+	if s.lifecycle != nil && s.lifecycle.ShouldReset(sessionID) {
+		log.Printf("event=session_auto_reset session_id=%s", sessionID)
+		_ = s.lifecycle.RotateSession(sessionID)
 	}
 
 	prompt := strings.TrimSpace(req.Message)
@@ -639,12 +684,149 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		return core.ChatResponse{}, fmt.Errorf("message is required")
 	}
 
-	history := s.sessions.History(sessionID)
-	userMessage := core.Message{Role: core.RoleUser, Content: prompt, CreatedAt: time.Now()}
-	baseMessages := append(history, userMessage)
-	policy := contextwindow.DefaultPolicy(prov.ContextWindow(modelID))
-	policy = s.adjustCompressionPolicy(providerID, modelID, policy)
-	compressedMessages, compressionMeta, compressed := contextwindow.Compress(baseMessages, policy)
+	// Build provider chain: primary first, then registered fallbacks.
+	s.mu.RLock()
+	chain := []string{providerID}
+	chain = append(chain, s.fallbacks[providerID]...)
+	s.mu.RUnlock()
+
+	var lastErr error
+	for i, candidateProvider := range chain {
+		isFallback := i > 0
+
+		// For fallback providers with "default" model, re-resolve per provider.
+		candidateModel := modelID
+		if isFallback && isDefaultModel {
+			candidateModel = "default"
+		}
+
+		resp, err := s.attemptSingleProvider(ctx, attemptSingleProviderParams{
+			providerID:     candidateProvider,
+			modelID:        candidateModel,
+			isDefaultModel: isDefaultModel || (isFallback && strings.EqualFold(candidateModel, "default")),
+			sessionID:      sessionID,
+			prompt:         prompt,
+		})
+		if err == nil {
+			if isFallback {
+				log.Printf(
+					"event=fallback_success primary_provider=%s fallback_provider=%s model=%s",
+					providerID, candidateProvider, resp.Model,
+				)
+			}
+			return resp, nil
+		}
+		lastErr = err
+
+		// Only fallback on "no available account" exhaustion.
+		// Non-retriable errors (format, model_not_found, missing_project) should not fallback.
+		if !errors.Is(err, ErrNoAvailableAccount) {
+			break
+		}
+		if isFallback {
+			log.Printf(
+				"event=fallback_exhausted primary_provider=%s fallback_provider=%s error=%q",
+				providerID, candidateProvider, err,
+			)
+		}
+	}
+
+	if lastErr == nil {
+		lastErr = ErrNoAvailableAccount
+	}
+	return core.ChatResponse{}, lastErr
+}
+
+type attemptSingleProviderParams struct {
+	providerID     string
+	modelID        string
+	isDefaultModel bool
+	sessionID      string
+	prompt         string
+}
+
+// attemptSingleProvider tries all accounts in one provider's pool.
+// Returns (response, nil) on success, or (zero, error) when all accounts are exhausted.
+func (s *Service) attemptSingleProvider(
+	ctx context.Context,
+	params attemptSingleProviderParams,
+) (core.ChatResponse, error) {
+	providerID := params.providerID
+	modelID := params.modelID
+	isDefaultModel := params.isDefaultModel
+	sessionID := params.sessionID
+
+	prov, pool, err := s.resolveProviderPool(providerID)
+	if err != nil {
+		return core.ChatResponse{}, err
+	}
+
+	userMessage := core.Message{Role: core.RoleUser, Content: params.prompt, CreatedAt: time.Now()}
+
+	// Try LLM-based compaction first; fall back to token-based sliding window.
+	var compressedMessages []core.Message
+	var compressionMeta core.CompressionMeta
+	var compressed bool
+
+	entries := s.sessions.History(sessionID)
+	contextWindow := prov.ContextWindow(modelID)
+	compactor := compaction.NewCompactor(prov, modelID, core.Account{})
+
+	// Pre-compaction memory flush: extract durable notes before messages are dropped.
+	if s.memoryDir != "" {
+		flusher := compaction.NewMemoryFlusher(prov, modelID, core.Account{}, s.memoryDir)
+		currentTokens := compaction.EstimateEntriesTokens(entries)
+		if flusher.ShouldFlush(currentTokens, contextWindow, compaction.DefaultReserveTokens) {
+			if _, flushErr := flusher.Flush(ctx, entries); flushErr != nil {
+				log.Printf("event=memory_flush_error session_id=%s error=%q", sessionID, flushErr)
+			}
+		}
+	}
+
+	if compactor.ShouldCompact(entries, contextWindow, compaction.DefaultReserveTokens) {
+		result, compactErr := compactor.Compact(ctx, compaction.CompactionRequest{
+			Entries:       entries,
+			ContextWindow: contextWindow,
+			ReserveTokens: compaction.DefaultReserveTokens,
+		})
+		if compactErr == nil && result.DroppedCount > 0 {
+			s.sessions.Append(sessionID, result.CompactionEntry)
+			compressedMessages = entriesToMessages(result.KeptEntries)
+			compressedMessages = append(compressedMessages, userMessage)
+			compressionMeta = core.CompressionMeta{
+				OriginalTokens:   compaction.EstimateEntriesTokens(entries),
+				CompressedTokens: compaction.EstimateEntriesTokens(result.KeptEntries) + result.SummaryTokens,
+				DroppedMessages:  result.DroppedCount,
+			}
+			compressed = true
+			log.Printf("event=llm_compaction session_id=%s dropped=%d", sessionID, result.DroppedCount)
+		} else if compactErr != nil {
+			log.Printf("event=llm_compaction_fallback session_id=%s error=%q", sessionID, compactErr)
+		}
+	}
+
+	// Fallback: token-based sliding window compression.
+	if compressedMessages == nil {
+		history := s.sessions.HistoryAsMessages(sessionID)
+		baseMessages := append(history, userMessage)
+		policy := contextwindow.DefaultPolicy(contextWindow)
+		policy = s.adjustCompressionPolicy(providerID, modelID, policy)
+		compressedMessages, compressionMeta, compressed = contextwindow.Compress(baseMessages, policy)
+	}
+
+	// Inject memory context (MEMORY.md + daily logs) as a leading system message.
+	if s.memoryDir != "" {
+		memCtx, memErr := memory.LoadMemoryContext(s.memoryDir)
+		if memErr != nil {
+			log.Printf("event=memory_load_error error=%q", memErr)
+		} else if !memCtx.IsEmpty() {
+			systemMsg := core.Message{
+				Role:    core.RoleSystem,
+				Content: memory.BuildSystemPrompt(memCtx),
+			}
+			compressedMessages = append([]core.Message{systemMsg}, compressedMessages...)
+		}
+	}
 
 	attemptLimit := len(pool.Snapshot())
 	if attemptLimit < 1 {
@@ -713,7 +895,19 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		})
 		if err == nil {
 			assistant := core.Message{Role: core.RoleAssistant, Content: resp.Text, CreatedAt: time.Now()}
-			s.sessions.Append(sessionID, userMessage, assistant)
+			s.sessions.AppendMessage(sessionID, userMessage, assistant)
+			// Async index for memory search.
+			if s.searchIndex != nil {
+				newEntries := []core.SessionEntry{
+					core.MessageToEntry(userMessage),
+					core.MessageToEntry(assistant),
+				}
+				go func() {
+					if idxErr := s.searchIndex.Index(sessionID, newEntries); idxErr != nil {
+						log.Printf("event=search_index_error session_id=%s error=%q", sessionID, idxErr)
+					}
+				}()
+			}
 			if providerID == "google-gemini-cli" {
 				if endpoint := strings.TrimSpace(resp.Endpoint); endpoint != "" {
 					if account.Metadata == nil {
@@ -764,6 +958,27 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		lastErr = ErrNoAvailableAccount
 	}
 	return core.ChatResponse{}, lastErr
+}
+
+// entriesToMessages converts kept SessionEntry slice to Messages for the
+// provider, injecting compaction summaries as system messages.
+func entriesToMessages(entries []core.SessionEntry) []core.Message {
+	msgs := make([]core.Message, 0, len(entries))
+	for _, e := range entries {
+		switch e.Type {
+		case core.EntryMessage:
+			msgs = append(msgs, e.ToMessage())
+		case core.EntryCompaction:
+			if e.Summary != "" {
+				msgs = append(msgs, core.Message{
+					Role:      core.RoleSystem,
+					Content:   e.Summary,
+					CreatedAt: e.Timestamp,
+				})
+			}
+		}
+	}
+	return msgs
 }
 
 func (s *Service) completeGeminiOAuth(

@@ -43,6 +43,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/auth/ai-studio/use", s.handleAIStudioUse)
 	mux.HandleFunc("/v1/auth/ai-studio/delete", s.handleAIStudioDelete)
 	mux.HandleFunc("/v1/ai-studio/models", s.handleAIStudioModels)
+	mux.HandleFunc("/v1/sessions", s.handleSessions)
+	mux.HandleFunc("/v1/sessions/delete", s.handleSessionDelete)
+	mux.HandleFunc("/v1/memory/search", s.handleMemorySearch)
 	return mux
 }
 
@@ -446,6 +449,69 @@ func (s *Server) handleAIStudioModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	sessions := s.svc.ListSessions()
+	respondJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+}
+
+type deleteSessionRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req deleteSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	sessionID := strings.TrimSpace(req.SessionID)
+	if sessionID == "" {
+		respondError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+	if err := s.svc.DeleteSession(sessionID); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"ok": true, "session_id": sessionID})
+}
+
+type memorySearchRequest struct {
+	Query string `json:"query"`
+	Limit int    `json:"limit"`
+}
+
+func (s *Server) handleMemorySearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req memorySearchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		respondError(w, http.StatusBadRequest, "query is required")
+		return
+	}
+	results, err := s.svc.SearchMemory(query, req.Limit)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
 func respondAIStudioError(w http.ResponseWriter, err error) {

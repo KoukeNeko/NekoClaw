@@ -147,6 +147,10 @@ func (p *AccountPool) MarkFailure(accountID string, reason FailureReason) {
 		disableFor := calculateBillingDisableDuration(count, p.cooldown)
 		stats.DisabledUntil = keepActiveWindowOrRecompute(stats.DisabledUntil, now, now.Add(disableFor))
 		stats.DisabledReason = reason
+	case FailureTimeout:
+		// Timeout is a network/infrastructure issue, not an account-level problem.
+		// Track error count for diagnostics but do NOT set cooldown.
+		// This matches OpenClaw behavior: the account stays available for immediate retry.
 	default:
 		cooldownFor := calculateAuthCooldown(nextErrorCount)
 		stats.CooldownUntil = keepActiveWindowOrRecompute(stats.CooldownUntil, now, now.Add(cooldownFor))

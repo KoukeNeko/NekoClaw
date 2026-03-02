@@ -21,6 +21,7 @@ import (
 	"github.com/doeshing/nekoclaw/internal/app"
 	"github.com/doeshing/nekoclaw/internal/auth"
 	"github.com/doeshing/nekoclaw/internal/core"
+	"github.com/doeshing/nekoclaw/internal/memory"
 	"github.com/doeshing/nekoclaw/internal/provider"
 	"github.com/doeshing/nekoclaw/internal/tui"
 )
@@ -43,6 +44,8 @@ func main() {
 		geminiEndpoints    = flag.String("gemini-endpoints", envOr("GEMINI_INTERNAL_ENDPOINTS", defaultGeminiEndpoints()), "comma-separated gemini internal endpoints")
 		geminiGeneratePath = flag.String("gemini-generate-path", envOr("GEMINI_INTERNAL_GENERATE_PATH", "/v1internal:streamGenerateContent?alt=sse"), "gemini internal generate path")
 		authDir            = flag.String("auth-dir", envOr("NEKOCLAW_AUTH_DIR", ""), "auth state directory (defaults to ~/.nekoclaw/auth)")
+		sessionsDir        = flag.String("sessions-dir", envOr("NEKOCLAW_SESSIONS_DIR", ""), "session persistence directory (defaults to ~/.nekoclaw/sessions)")
+		memoryDir          = flag.String("memory-dir", envOr("NEKOCLAW_MEMORY_DIR", ""), "memory directory for MEMORY.md and daily logs (defaults to ~/.nekoclaw/memory)")
 		callbackHost       = flag.String("oauth-callback-host", envOr("OPENCLAW_GEMINI_OAUTH_CALLBACK_HOST", "localhost"), "gemini oauth callback host")
 		callbackPort       = flag.Int("oauth-callback-port", envOrInt("OPENCLAW_GEMINI_OAUTH_CALLBACK_PORT", 8085), "gemini oauth callback port")
 	)
@@ -57,6 +60,8 @@ func main() {
 		GeminiEndpoints:    *geminiEndpoints,
 		GeminiGeneratePath: *geminiGeneratePath,
 		AuthDir:            *authDir,
+		SessionsDir:        *sessionsDir,
+		MemoryDir:          *memoryDir,
 		OAuthCallbackHost:  *callbackHost,
 		OAuthCallbackPort:  *callbackPort,
 		APIAddr:            *addr,
@@ -157,13 +162,59 @@ type buildServiceOptions struct {
 	GeminiEndpoints    string
 	GeminiGeneratePath string
 	AuthDir            string
+	SessionsDir        string
+	MemoryDir          string
 	OAuthCallbackHost  string
 	OAuthCallbackPort  int
 	APIAddr            string
 }
 
 func buildService(opts buildServiceOptions) (*app.Service, error) {
-	svc := app.NewService()
+	sessionsDir := strings.TrimSpace(opts.SessionsDir)
+	if sessionsDir == "" {
+		if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+			sessionsDir = filepath.Join(home, ".nekoclaw", "sessions")
+		}
+	}
+	var sessionStore *core.SessionStore
+	if sessionsDir != "" {
+		var err error
+		sessionStore, err = core.NewPersistentSessionStore(sessionsDir)
+		if err != nil {
+			return nil, fmt.Errorf("init session store: %w", err)
+		}
+	}
+
+	memoryDir := strings.TrimSpace(opts.MemoryDir)
+	if memoryDir == "" {
+		if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+			memoryDir = filepath.Join(home, ".nekoclaw", "memory")
+		}
+	}
+
+	var searchIndex *memory.SearchIndex
+	if memoryDir != "" {
+		dbPath := filepath.Join(memoryDir, "search.db")
+		var idxErr error
+		searchIndex, idxErr = memory.NewSearchIndex(dbPath)
+		if idxErr != nil {
+			log.Printf("event=search_index_init_error error=%q", idxErr)
+		}
+	}
+
+	var lifecycle *core.SessionLifecycle
+	if sessionStore != nil {
+		lifecycle = core.NewSessionLifecycle(sessionStore, core.DefaultLifecycleConfig())
+		// Run periodic housekeeping (retention cleanup, session rotation) in the background.
+		go runHousekeepingLoop(lifecycle)
+	}
+
+	svc := app.NewService(app.ServiceOptions{
+		SessionStore: sessionStore,
+		Lifecycle:    lifecycle,
+		MemoryDir:    memoryDir,
+		SearchIndex:  searchIndex,
+	})
 
 	mockProvider := provider.NewMockProvider()
 	svc.RegisterProvider(mockProvider)
@@ -210,6 +261,10 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	if svc.Pool("google-ai-studio") == nil {
 		svc.RegisterPool(core.NewAccountPool("google-ai-studio", nil, nil, core.DefaultCooldownConfig()))
 	}
+
+	// When all google-gemini-cli accounts are exhausted, try google-ai-studio.
+	// Reverse fallback is not registered because gemini-cli requires OAuth + project discovery.
+	svc.RegisterFallback("google-gemini-cli", "google-ai-studio")
 
 	authStore, err := auth.NewStore(auth.StoreOptions{BaseDir: strings.TrimSpace(opts.AuthDir)})
 	if err != nil {
@@ -551,6 +606,16 @@ func resolveOAuthCallbackPort(explicit int, apiAddr string) int {
 
 func defaultGeminiEndpoints() string {
 	return "https://cloudcode-pa.googleapis.com,https://daily-cloudcode-pa.sandbox.googleapis.com,https://autopush-cloudcode-pa.sandbox.googleapis.com"
+}
+
+func runHousekeepingLoop(lifecycle *core.SessionLifecycle) {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+	for range ticker.C {
+		if err := lifecycle.RunHousekeeping(); err != nil {
+			log.Printf("event=housekeeping_error error=%q", err)
+		}
+	}
 }
 
 func fatal(err error) {

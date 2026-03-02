@@ -100,6 +100,32 @@ func TestSetCredentialDoesNotForceExplicitOrderPath(t *testing.T) {
 	}
 }
 
+func TestTimeoutDoesNotSetCooldown(t *testing.T) {
+	pool := NewAccountPool("google-gemini-cli", []Account{
+		{ID: "a1", Provider: "google-gemini-cli", Type: AccountOAuth, Token: "t1"},
+	}, nil, DefaultCooldownConfig())
+
+	pool.MarkFailure("a1", FailureTimeout)
+	stats := pool.Snapshot()[0].Usage
+	if stats == nil {
+		t.Fatalf("expected usage stats to track error count")
+	}
+	if !stats.CooldownUntil.IsZero() {
+		t.Fatalf("timeout should NOT set cooldown, got %s", stats.CooldownUntil)
+	}
+	if stats.ErrorCount != 1 {
+		t.Fatalf("expected error count 1, got %d", stats.ErrorCount)
+	}
+
+	account, ok := pool.Acquire("")
+	if !ok {
+		t.Fatalf("account should remain available after timeout")
+	}
+	if account.ID != "a1" {
+		t.Fatalf("expected a1, got %s", account.ID)
+	}
+}
+
 func TestOpenRouterBypassesCooldownTracking(t *testing.T) {
 	pool := NewAccountPool("openrouter", []Account{
 		{ID: "or1", Provider: "openrouter", Type: AccountAPIKey, Token: "sk-or"},

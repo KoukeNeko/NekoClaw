@@ -2,7 +2,9 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os/exec"
 	"runtime"
 	"sort"
@@ -48,6 +50,7 @@ const (
 	promptManualCallbackURL promptPurpose = "manual_callback_url"
 	promptAIStudioAPIKey    promptPurpose = "ai_studio_api_key"
 	promptAIStudioName      promptPurpose = "ai_studio_name"
+	promptNewSession        promptPurpose = "new_session"
 )
 
 type menuAction int
@@ -199,6 +202,16 @@ type aiStudioModelsMsg struct {
 	err      error
 }
 
+type sessionsListMsg struct {
+	sessions []client.SessionInfo
+	err      error
+}
+
+type sessionDeleteMsg struct {
+	sessionID string
+	err       error
+}
+
 type model struct {
 	client *client.APIClient
 
@@ -311,7 +324,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pending = false
 		if msg.err != nil {
 			m.status = "error"
-			m.lines = append(m.lines, chatLine{role: "error", text: msg.err.Error()})
+			m.lines = append(m.lines, chatLine{role: "error", text: formatChatError(msg.err)})
 			return m, nil
 		}
 		if m.provider == "google-gemini-cli" || m.provider == "google-ai-studio" {
@@ -538,6 +551,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		opts := aiStudioModelOptions(msg.response.Models, m.modelID)
 		m.openPicker(pickAIStudioModel, "Select Model", "Choose AI Studio model", opts)
 		return m, nil
+
+	case sessionsListMsg:
+		m.pending = false
+		if msg.err != nil {
+			opts := sessionOptions(m.knownSessions, m.sessionID)
+			m.openPicker(pickSession, "Select Session", "Choose active session", opts)
+			return m, nil
+		}
+		for _, s := range msg.sessions {
+			m.addKnownSession(s.SessionID)
+		}
+		opts := sessionOptionsFromInfo(msg.sessions, m.knownSessions, m.sessionID)
+		m.openPicker(pickSession, "Select Session", "Choose session (d=delete)", opts)
+		return m, nil
+
+	case sessionDeleteMsg:
+		m.pending = false
+		if msg.err != nil {
+			m.lines = append(m.lines, chatLine{role: "error", text: "delete failed: " + msg.err.Error()})
+			m.view = viewMenu
+			return m, nil
+		}
+		m.lines = append(m.lines, chatLine{role: "system", text: "deleted session: " + msg.sessionID})
+		m.knownSessions = removeFromSlice(m.knownSessions, msg.sessionID)
+		if m.sessionID == msg.sessionID {
+			m.sessionID = "main"
+		}
+		m.pending = true
+		m.status = "loading_sessions"
+		return m, listSessionsCmd(m.client)
 	}
 
 	if m.view == viewChat {
@@ -649,6 +692,15 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			return m.applyPickerSelection()
+		case "d":
+			if m.pickerPurpose == pickSession && len(m.pickerOptions) > 0 {
+				picked := m.pickerOptions[m.pickerIndex]
+				if picked.Value != "__new__" && picked.Value != "" {
+					m.pending = true
+					m.status = "deleting_session"
+					return m, deleteSessionCmd(m.client, picked.Value)
+				}
+			}
 		}
 		return m, nil
 
@@ -718,9 +770,9 @@ func (m model) executeMenuAction() (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case actionSetSession:
-		opts := sessionOptions(m.knownSessions, m.sessionID)
-		m.openPicker(pickSession, "Select Session", "Choose active session", opts)
-		return m, nil
+		m.pending = true
+		m.status = "loading_sessions"
+		return m, listSessionsCmd(m.client)
 
 	case actionAuthLoginAuto:
 		return m.startOAuthWithMode("auto")
@@ -842,9 +894,13 @@ func (m model) applyPickerSelection() (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case pickSession:
+		if picked.Value == "__new__" {
+			m.openPrompt(promptNewSession, "New Session", "Enter session name", "")
+			return m, nil
+		}
 		m.sessionID = picked.Value
 		m.addKnownSession(m.sessionID)
-		m.lines = append(m.lines, chatLine{role: "system", text: "session set to " + m.sessionID})
+		m.lines = []chatLine{{role: "system", text: "session set to " + m.sessionID}}
 		m.status = "updated"
 		m.view = viewMenu
 		return m, nil
@@ -910,6 +966,21 @@ func (m model) applyPickerSelection() (tea.Model, tea.Cmd) {
 func (m model) submitPrompt() (tea.Model, tea.Cmd) {
 	value := strings.TrimSpace(m.promptInput.Value())
 	switch m.promptPurpose {
+	case promptNewSession:
+		if value == "" {
+			m.status = "cancelled"
+			m.resetPromptInput()
+			m.view = viewMenu
+			return m, nil
+		}
+		m.sessionID = value
+		m.addKnownSession(value)
+		m.lines = []chatLine{{role: "system", text: "new session: " + value}}
+		m.status = "updated"
+		m.resetPromptInput()
+		m.view = viewMenu
+		return m, nil
+
 	case promptManualStateCustom:
 		if value == "" {
 			m.lines = append(m.lines, chatLine{role: "error", text: "state is required"})
@@ -1703,6 +1774,69 @@ func sessionOptions(known []string, current string) []pickerOption {
 	return out
 }
 
+func sessionOptionsFromInfo(persisted []client.SessionInfo, known []string, currentID string) []pickerOption {
+	infoByID := map[string]client.SessionInfo{}
+	for _, s := range persisted {
+		infoByID[s.SessionID] = s
+	}
+
+	ids := []string{"main"}
+	for _, s := range persisted {
+		ids = appendUnique(ids, strings.TrimSpace(s.SessionID))
+	}
+	for _, id := range known {
+		ids = appendUnique(ids, strings.TrimSpace(id))
+	}
+	if currentID = strings.TrimSpace(currentID); currentID != "" {
+		ids = appendUnique(ids, currentID)
+	}
+	sort.Strings(ids)
+
+	out := []pickerOption{{Label: "+ New Session", Value: "__new__"}}
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		label := id
+		if info, ok := infoByID[id]; ok {
+			age := formatTimeAgo(info.UpdatedAt)
+			label = fmt.Sprintf("%-20s %3d msgs  %s", id, info.MessageCount, age)
+		}
+		if id == currentID {
+			label += "  *"
+		}
+		out = append(out, pickerOption{Label: label, Value: id})
+	}
+	return out
+}
+
+func formatTimeAgo(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	dur := time.Since(t)
+	switch {
+	case dur < time.Minute:
+		return "just now"
+	case dur < time.Hour:
+		return fmt.Sprintf("%dm ago", int(dur.Minutes()))
+	case dur < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(dur.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(dur.Hours()/24))
+	}
+}
+
+func removeFromSlice(items []string, target string) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if strings.TrimSpace(item) != target {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 func profilePickerOptions(profiles []client.GeminiAuthProfile, allowEmpty bool) []pickerOption {
 	out := make([]pickerOption, 0, len(profiles)+1)
 	if allowEmpty {
@@ -1820,6 +1954,24 @@ func appendUnique(items []string, value string) []string {
 		}
 	}
 	return append(items, value)
+}
+
+func listSessionsCmd(apiClient *client.APIClient) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		sessions, err := apiClient.ListSessions(ctx)
+		return sessionsListMsg{sessions: sessions, err: err}
+	}
+}
+
+func deleteSessionCmd(apiClient *client.APIClient, sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err := apiClient.DeleteSession(ctx, sessionID)
+		return sessionDeleteMsg{sessionID: sessionID, err: err}
+	}
 }
 
 func sendChatCmd(apiClient *client.APIClient, req core.ChatRequest) tea.Cmd {
@@ -2005,4 +2157,79 @@ func fitToTerminalWidth(rendered string, width int) string {
 		lines[idx] = maxWidthStyle.Render(line)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// formatChatError translates API errors into user-friendly Traditional Chinese messages.
+func formatChatError(err error) string {
+	var apiErr *client.APIError
+	if !errors.As(err, &apiErr) {
+		if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "deadline exceeded") {
+			return "請求逾時，請稍後再試。"
+		}
+		if strings.Contains(err.Error(), "connection refused") {
+			return "無法連線至 API 伺服器，請確認伺服器是否正在執行。"
+		}
+		return err.Error()
+	}
+
+	switch {
+	case apiErr.StatusCode == http.StatusConflict: // 409
+		msg := "所有帳號暫時不可用。"
+		if reason := parseFieldFromMessage(apiErr.Message, "reason"); reason != "" {
+			msg += "可能原因：" + translateFailureReason(reason) + "。"
+		}
+		if retryAt := parseFieldFromMessage(apiErr.Message, "retry_at"); retryAt != "" {
+			if t, parseErr := time.Parse(time.RFC3339, retryAt); parseErr == nil {
+				remaining := time.Until(t).Round(time.Second)
+				if remaining > 0 {
+					msg += fmt.Sprintf(" 預計 %s 後可恢復。", remaining)
+				}
+			}
+		}
+		msg += " 請稍後再試或新增帳號。"
+		return msg
+	case apiErr.Code == "missing_project":
+		return "Gemini 缺少 Project ID，請重新 OAuth 或設定環境變數 GOOGLE_CLOUD_PROJECT。"
+	case apiErr.StatusCode == http.StatusBadGateway: // 502
+		return "API 連線失敗，請確認網路或 provider 狀態。"
+	case apiErr.StatusCode == http.StatusServiceUnavailable: // 503
+		return "服務暫時不可用，請稍後再試。"
+	default:
+		return apiErr.Error()
+	}
+}
+
+// parseFieldFromMessage extracts "key=value" from a message like
+// "no available account: provider=google-gemini-cli reason=unknown retry_at=2026-03-02T22:25:53+08:00"
+func parseFieldFromMessage(message, key string) string {
+	prefix := key + "="
+	idx := strings.Index(message, prefix)
+	if idx < 0 {
+		return ""
+	}
+	rest := message[idx+len(prefix):]
+	if spaceIdx := strings.IndexByte(rest, ' '); spaceIdx >= 0 {
+		return rest[:spaceIdx]
+	}
+	return rest
+}
+
+// translateFailureReason maps failure reason codes to user-facing labels.
+func translateFailureReason(reason string) string {
+	switch reason {
+	case "rate_limit":
+		return "API 請求頻率限制"
+	case "billing":
+		return "帳單/配額問題"
+	case "auth", "auth_permanent":
+		return "驗證失敗"
+	case "timeout":
+		return "請求逾時"
+	case "model_not_found":
+		return "找不到指定模型"
+	case "format":
+		return "請求格式錯誤"
+	default:
+		return "未知原因"
+	}
 }

@@ -60,7 +60,7 @@ func TestLoadAIStudioAccountsFromEnv_MergesAndDedupes(t *testing.T) {
 }
 
 func TestHydrateAIStudioProfilesLoadsCredentials(t *testing.T) {
-	svc := app.NewService()
+	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterPool(core.NewAccountPool("google-ai-studio", nil, nil, core.DefaultCooldownConfig()))
 	store := mustNewAuthStore(t)
 
@@ -116,7 +116,7 @@ func TestResolveDefaultLogFilePath_NonAuthDirRoot(t *testing.T) {
 }
 
 func TestHydrateGeminiProfilesSkipsMissingProjectWithoutEnv(t *testing.T) {
-	svc := app.NewService()
+	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
 	store := mustNewAuthStore(t)
 
@@ -151,7 +151,7 @@ func TestHydrateGeminiProfilesSkipsMissingProjectWithoutEnv(t *testing.T) {
 func TestHydrateGeminiProfilesUsesEnvFallbackProject(t *testing.T) {
 	t.Setenv("GOOGLE_CLOUD_PROJECT", "env-project-1")
 
-	svc := app.NewService()
+	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
 	store := mustNewAuthStore(t)
 

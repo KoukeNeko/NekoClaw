@@ -91,12 +91,34 @@ type AIStudioProfile struct {
 	Preferred      bool      `json:"preferred"`
 }
 
+type SessionInfo struct {
+	SessionID    string    `json:"session_id"`
+	MessageCount int       `json:"message_count"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
 type AIStudioModelsResponse struct {
 	Provider    string    `json:"provider"`
 	ProfileID   string    `json:"profile_id"`
 	Models      []string  `json:"models"`
 	Source      string    `json:"source"`
 	CachedUntil time.Time `json:"cached_until,omitempty"`
+}
+
+// APIError preserves the structured error information returned by the NekoClaw API server.
+// Callers can use errors.As to inspect status code, error code, and message separately.
+type APIError struct {
+	StatusCode int
+	Code       string // e.g., "missing_project", "provider_not_ready"; empty for plain string errors
+	Message    string
+}
+
+func (e *APIError) Error() string {
+	if e.Code != "" {
+		return fmt.Sprintf("api error (%d): %s: %s", e.StatusCode, e.Code, e.Message)
+	}
+	return fmt.Sprintf("api error (%d): %s", e.StatusCode, e.Message)
 }
 
 type APIClient struct {
@@ -112,7 +134,12 @@ func New(baseURL string) *APIClient {
 	return &APIClient{
 		baseURL: trimmed,
 		http: &http.Client{
-			Timeout: 30 * time.Second,
+			// No Timeout here — each call site controls timeout via context.
+			// ResponseHeaderTimeout acts as a safety net for connection-level hangs
+			// but never fires before the caller's context timeout.
+			Transport: &http.Transport{
+				ResponseHeaderTimeout: 120 * time.Second,
+			},
 		},
 	}
 }
@@ -321,6 +348,75 @@ func (c *APIClient) ListAIStudioModels(ctx context.Context, profileID string) (A
 	return out, nil
 }
 
+func (c *APIClient) ListSessions(ctx context.Context) ([]SessionInfo, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/sessions", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Sessions []SessionInfo `json:"sessions"`
+	}
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return nil, err
+	}
+	return out.Sessions, nil
+}
+
+func (c *APIClient) DeleteSession(ctx context.Context, sessionID string) error {
+	payload, err := json.Marshal(map[string]string{"session_id": strings.TrimSpace(sessionID)})
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/sessions/delete",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out map[string]any
+	return c.doAndDecodeJSON(httpReq, &out)
+}
+
+type MemorySearchResult struct {
+	SessionID string    `json:"session_id"`
+	EntryID   string    `json:"entry_id"`
+	Content   string    `json:"content"`
+	Role      string    `json:"role"`
+	Score     float64   `json:"score"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+func (c *APIClient) SearchMemory(ctx context.Context, query string, limit int) ([]MemorySearchResult, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	payload, err := json.Marshal(map[string]any{"query": strings.TrimSpace(query), "limit": limit})
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/memory/search",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out struct {
+		Results []MemorySearchResult `json:"results"`
+	}
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return nil, err
+	}
+	return out.Results, nil
+}
+
 func (c *APIClient) doAndDecodeJSON(httpReq *http.Request, out any) error {
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
@@ -355,8 +451,8 @@ func decodeAPIError(status int, body []byte) error {
 	if err := json.Unmarshal(body, &payload); err == nil {
 		switch value := payload.Error.(type) {
 		case string:
-			if strings.TrimSpace(value) != "" {
-				return fmt.Errorf("api error (%d): %s", status, strings.TrimSpace(value))
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				return &APIError{StatusCode: status, Message: trimmed}
 			}
 		case map[string]any:
 			raw, _ := json.Marshal(value)
@@ -364,18 +460,16 @@ func decodeAPIError(status int, body []byte) error {
 			if err := json.Unmarshal(raw, &obj); err == nil {
 				msg := strings.TrimSpace(obj.Message)
 				code := strings.TrimSpace(obj.Code)
-				switch {
-				case msg != "" && code != "":
-					return fmt.Errorf("api error (%d): %s: %s", status, code, msg)
-				case msg != "":
-					return fmt.Errorf("api error (%d): %s", status, msg)
-				case code != "":
-					return fmt.Errorf("api error (%d): %s", status, code)
+				if msg != "" || code != "" {
+					if msg == "" {
+						msg = code
+					}
+					return &APIError{StatusCode: status, Code: code, Message: msg}
 				}
 			}
 		}
 	}
-	return fmt.Errorf("api error (%d): %s", status, strings.TrimSpace(string(body)))
+	return &APIError{StatusCode: status, Message: strings.TrimSpace(string(body))}
 }
 
 func urlQueryEscape(raw string) string {
