@@ -83,4 +83,3 @@ func SanitizeDisplayText(input string) string {
 	clean = strings.Join(strings.Fields(clean), " ")
 	return strings.TrimSpace(clean)
 }
-

@@ -146,20 +146,21 @@ func (cv *ChatViewport) renderMessage(msg *ChatMessage) string {
 		return msg.renderedCache
 	}
 
+	content := stripTerminalControlSequences(msg.Content)
 	var rendered string
 	switch msg.Role {
 	case "assistant":
-		rendered = cv.renderMarkdown(msg.Content)
+		rendered = cv.renderMarkdown(content)
 	case "user":
-		rendered = theme.PromptStyle.Render("> ") + theme.UserStyle.Render(msg.Content)
+		rendered = theme.PromptStyle.Render("> ") + theme.UserStyle.Render(content)
 	case "system":
-		rendered = theme.SystemStyle.Render("  " + msg.Content)
+		rendered = theme.SystemStyle.Render("  " + content)
 	case "error":
-		rendered = theme.ErrorStyle.Render("  \u2715 " + msg.Content)
+		rendered = theme.ErrorStyle.Render("  \u2715 " + content)
 	case "thinking":
 		rendered = "  " + msg.Content // preserve spinner ANSI colors
 	default:
-		rendered = msg.Content
+		rendered = content
 	}
 
 	msg.renderedCache = rendered

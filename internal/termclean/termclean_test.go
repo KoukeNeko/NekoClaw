@@ -39,4 +39,3 @@ func TestStripTerminalControlSequences_PreservesUnicode(t *testing.T) {
 		t.Fatalf("unexpected unicode output: %q", got)
 	}
 }
-

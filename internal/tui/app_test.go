@@ -342,6 +342,14 @@ func TestHelperStripAnsi(t *testing.T) {
 	}
 }
 
+func TestHelperStripAnsi_RemovesOSC(t *testing.T) {
+	input := "x\x1b]11;rgb:11/22/33\x07y"
+	result := stripAnsi(input)
+	if result != "xy" {
+		t.Fatalf("expected 'xy', got %q", result)
+	}
+}
+
 func TestHelperDimLines(t *testing.T) {
 	input := "line one\nline two"
 	result := dimLines(input)

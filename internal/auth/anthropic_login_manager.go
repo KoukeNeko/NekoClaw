@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/doeshing/nekoclaw/internal/termclean"
 )
 
 type AnthropicLoginMode string
@@ -603,12 +605,10 @@ func anthropicLoginErrorCode(err error) string {
 }
 
 func sanitizeAnthropicEvent(message string, maxLen int) string {
-	msg := strings.TrimSpace(message)
+	msg := termclean.SanitizeDisplayText(message)
 	if msg == "" {
 		return ""
 	}
-	msg = strings.ReplaceAll(msg, "\r", " ")
-	msg = strings.ReplaceAll(msg, "\n", " ")
 	msg = redactAnthropicSetupToken(msg)
 	if maxLen > 0 && len(msg) > maxLen {
 		msg = msg[:maxLen]

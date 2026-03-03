@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"strings"
 
 	"github.com/creack/pty"
 )
@@ -41,17 +40,16 @@ func (anthropicCLIRunner) RunSetupToken(ctx context.Context, emit func(message s
 
 	var token string
 	tail := ""
+	emitCarry := ""
 	buffer := make([]byte, 4096)
 	for {
 		n, readErr := ptmx.Read(buffer)
 		if n > 0 {
 			chunk := string(buffer[:n])
 			if emit != nil {
-				for _, line := range strings.Split(chunk, "\n") {
-					line = strings.TrimSpace(line)
-					if line == "" {
-						continue
-					}
+				lines, nextCarry := extractDisplayLinesFromCLIChunk(emitCarry, chunk)
+				emitCarry = nextCarry
+				for _, line := range lines {
 					emit(line)
 				}
 			}
@@ -78,6 +76,11 @@ func (anthropicCLIRunner) RunSetupToken(ctx context.Context, emit func(message s
 				return "", ctx.Err()
 			}
 			return "", readErr
+		}
+	}
+	if emit != nil {
+		if line := flushDisplayCLIEventCarry(emitCarry); line != "" {
+			emit(line)
 		}
 	}
 

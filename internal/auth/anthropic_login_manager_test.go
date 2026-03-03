@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -12,6 +13,7 @@ type fakeAnthropicRunner struct {
 	token        string
 	runErr       error
 	blockUntil   <-chan struct{}
+	emitMessages []string
 }
 
 func (f fakeAnthropicRunner) Available(context.Context) error {
@@ -21,6 +23,9 @@ func (f fakeAnthropicRunner) Available(context.Context) error {
 func (f fakeAnthropicRunner) RunSetupToken(ctx context.Context, emit func(message string)) (string, error) {
 	if emit != nil {
 		emit("starting setup-token")
+		for _, message := range f.emitMessages {
+			emit(message)
+		}
 	}
 	if f.blockUntil != nil {
 		select {
@@ -139,4 +144,52 @@ func TestAnthropicLoginManagerCancelRunning(t *testing.T) {
 		t.Fatalf("cancel status mismatch: %s", cancelled.Status)
 	}
 	close(block)
+}
+
+func TestAnthropicLoginManagerSanitizesAndRedactsEvents(t *testing.T) {
+	token := "sk-ant-oat01-" + "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefgh"
+	manager := NewAnthropicLoginManager(AnthropicLoginManagerOptions{
+		Runner: fakeAnthropicRunner{
+			token: token,
+			emitMessages: []string{
+				"\x1b]11;rgb:11/22/33\x07",
+				"\x1b[31mline with token " + token + "\x1b[0m",
+			},
+		},
+		IsRemote: func() bool { return false },
+	})
+
+	started, err := manager.Start(context.Background(), AnthropicLoginStartRequest{
+		OnToken: func(_ context.Context, _ string, _ string, _ string, _ bool) (AnthropicPersistResult, error) {
+			return AnthropicPersistResult{ProfileID: "anthropic:test", KeyHint: "****efgh"}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	var final AnthropicLoginSnapshot
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		final, err = manager.Get(started.JobID)
+		if err == nil && final.Status == string(AnthropicLoginStatusCompleted) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if final.Status != string(AnthropicLoginStatusCompleted) {
+		t.Fatalf("expected completed status, got %s", final.Status)
+	}
+
+	for _, event := range final.Events {
+		if strings.Contains(event.Message, "\x1b") {
+			t.Fatalf("event contains escape sequence: %q", event.Message)
+		}
+		if strings.Contains(event.Message, "rgb:") {
+			t.Fatalf("event contains OSC payload: %q", event.Message)
+		}
+		if strings.Contains(event.Message, "sk-ant-oat01-") {
+			t.Fatalf("event leaked raw token: %q", event.Message)
+		}
+	}
 }
