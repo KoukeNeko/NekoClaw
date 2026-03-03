@@ -12,6 +12,8 @@ type Theme struct {
 	Error     lipgloss.Color
 	Success   lipgloss.Color
 	Muted     lipgloss.Color
+	Normal    lipgloss.Color
+	Border    lipgloss.Color
 
 	// Prompt
 	PromptStyle lipgloss.Style // cyan bold ">" character
@@ -22,10 +24,12 @@ type Theme struct {
 	SystemStyle    lipgloss.Style // dim gray for system messages
 	ErrorStyle     lipgloss.Style // red for errors
 
-	// Status bar
-	StatusBarStyle    lipgloss.Style // overall status bar
-	StatusModelStyle  lipgloss.Style // bold white model/provider text
-	StatusMetaStyle   lipgloss.Style // gray metadata (session, context, cost)
+	// Status bar / Inspector
+	StatusBarStyle   lipgloss.Style // overall status bar
+	StatusModelStyle lipgloss.Style // bold white model/provider text
+	StatusMetaStyle  lipgloss.Style // gray metadata (session, context, cost)
+	SubtleStyle      lipgloss.Style
+	HighlightStyle   lipgloss.Style
 
 	// Menu / Picker
 	SelectedStyle lipgloss.Style
@@ -61,6 +65,8 @@ func DefaultTheme() Theme {
 	errorColor := lipgloss.Color("9") // red
 	success := lipgloss.Color("10")   // green
 	muted := lipgloss.Color("8")      // gray
+	normal := lipgloss.Color("7")
+	border := lipgloss.Color("236")
 
 	return Theme{
 		Primary:   primary,
@@ -69,6 +75,8 @@ func DefaultTheme() Theme {
 		Error:     errorColor,
 		Success:   success,
 		Muted:     muted,
+		Normal:    normal,
+		Border:    border,
 
 		PromptStyle: lipgloss.NewStyle().Bold(true).Foreground(primary),
 
@@ -80,6 +88,8 @@ func DefaultTheme() Theme {
 		StatusBarStyle:   lipgloss.NewStyle().Foreground(muted).Background(lipgloss.Color("235")).Padding(0, 1),
 		StatusModelStyle: lipgloss.NewStyle().Bold(true).Foreground(accent).Background(lipgloss.Color("235")),
 		StatusMetaStyle:  lipgloss.NewStyle().Foreground(muted).Background(lipgloss.Color("235")),
+		SubtleStyle:      lipgloss.NewStyle().Foreground(muted),
+		HighlightStyle:   lipgloss.NewStyle().Foreground(primary).Bold(true),
 
 		SelectedStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(primary).Padding(0, 1),
 		NormalStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("7")).Padding(0, 1),

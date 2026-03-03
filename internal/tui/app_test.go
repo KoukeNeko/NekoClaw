@@ -97,11 +97,11 @@ func TestAppModelModelChanged(t *testing.T) {
 
 func TestAppModelViewRender(t *testing.T) {
 	m := newTestAppModel()
-	m.width = 80
-	m.height = 24
-	m.statusBar.SetSize(80)
-	m.chatView.SetSize(80, 22)
-	m.settings.SetSize(80, 22)
+	m.width = 100
+	m.height = 30
+	m.inspector.SetSize(25, 30)
+	m.chatView.SetSize(75, 30)
+	m.settings.SetSize(75, 30)
 
 	view := m.View()
 	if view == "" {
@@ -109,25 +109,39 @@ func TestAppModelViewRender(t *testing.T) {
 	}
 }
 
-func TestStatusBarComponent(t *testing.T) {
-	sb := NewStatusBar("mock", "default", "main")
-	sb.SetSize(80)
-	sb.SetContextPercent(12)
-	sb.SetCost(0.05)
-	sb.SetMessageCount(3)
+func TestAppModelDualPaneLayout(t *testing.T) {
+	m := newTestAppModel()
+	// Test width calculation logic
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	app := updated.(appModel)
 
-	view := sb.View()
+	if app.inspector.width != 25 {
+		t.Fatalf("expected inspector width 25 (25%% of 100), got %d", app.inspector.width)
+	}
+	if app.chatView.width != 75 {
+		t.Fatalf("expected chatView width 75 (75%% of 100), got %d", app.chatView.width)
+	}
+}
+
+func TestInspectorComponent(t *testing.T) {
+	i := NewInspector("mock", "default", "main")
+	i.SetSize(25, 30)
+	i.SetContextPercent(12)
+	i.SetCost(0.05)
+	i.SetMessageCount(3)
+
+	view := i.View()
 	if !strings.Contains(view, "mock") {
-		t.Fatal("expected provider in status bar")
+		t.Fatal("expected provider in inspector")
 	}
 	if !strings.Contains(view, "default") {
-		t.Fatal("expected model in status bar")
+		t.Fatal("expected model in inspector")
 	}
 	if !strings.Contains(view, "main") {
-		t.Fatal("expected session in status bar")
+		t.Fatal("expected session in inspector")
 	}
 	if !strings.Contains(view, "12%") {
-		t.Fatal("expected context percent in status bar")
+		t.Fatal("expected context percent in inspector")
 	}
 }
 
@@ -392,19 +406,6 @@ func TestSettingsViewSectionNav(t *testing.T) {
 	}
 }
 
-func TestSettingsOverlayRender(t *testing.T) {
-	sv := NewSettingsView(nil, "mock", "default", "main", 80, 24)
-	sv.visible = true
-	chatBg := strings.Repeat("chat content line\n", 20)
-	result := sv.RenderOverlay(chatBg, 80, 22)
-	if result == "" {
-		t.Fatal("expected non-empty overlay render")
-	}
-	if !strings.Contains(result, "Provider") {
-		t.Fatal("expected Provider tab in overlay")
-	}
-}
-
 func TestChatViewportRemoveLastMessage(t *testing.T) {
 	cv := NewChatViewport(80, 20)
 	cv.AppendMessage(ChatMessage{Role: "user", Content: "Hello", Timestamp: time.Now()})
@@ -471,7 +472,7 @@ func newTestAppModel() appModel {
 		sessionID: "main",
 		provider:  "mock",
 		modelID:   "default",
-		statusBar: NewStatusBar("mock", "default", "main"),
+		inspector: NewInspector("mock", "default", "main"),
 		chatView:  NewChatView(nil, "mock", "default", "main", 80, 24),
 		settings:  NewSettingsView(nil, "mock", "default", "main", 80, 24),
 	}
