@@ -132,6 +132,102 @@ func deleteAIStudioProfileCmd(apiClient *client.APIClient, profileID string) tea
 }
 
 // ---------------------------------------------------------------------------
+// Auth — Anthropic
+// ---------------------------------------------------------------------------
+
+func addAnthropicTokenCmd(apiClient *client.APIClient, setupToken, displayName string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		resp, err := apiClient.AddAnthropicToken(ctx, client.AnthropicAddTokenRequest{
+			SetupToken:  strings.TrimSpace(setupToken),
+			DisplayName: strings.TrimSpace(displayName),
+		})
+		return AnthropicAddMsg{Response: resp, Err: err}
+	}
+}
+
+func addAnthropicAPIKeyCmd(apiClient *client.APIClient, apiKey, displayName string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		resp, err := apiClient.AddAnthropicAPIKey(ctx, client.AnthropicAddAPIKeyRequest{
+			APIKey:      strings.TrimSpace(apiKey),
+			DisplayName: strings.TrimSpace(displayName),
+		})
+		return AnthropicAddMsg{Response: resp, Err: err}
+	}
+}
+
+func listAnthropicProfilesCmd(apiClient *client.APIClient) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		profiles, err := apiClient.ListAnthropicProfiles(ctx)
+		return AnthropicProfilesMsg{Profiles: profiles, Err: err}
+	}
+}
+
+func useAnthropicProfileCmd(apiClient *client.APIClient, profileID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		err := apiClient.UseAnthropicProfile(ctx, strings.TrimSpace(profileID))
+		return AnthropicProfileActionMsg{ProfileID: strings.TrimSpace(profileID), Err: err}
+	}
+}
+
+func deleteAnthropicProfileCmd(apiClient *client.APIClient, profileID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		err := apiClient.DeleteAnthropicProfile(ctx, strings.TrimSpace(profileID))
+		return AnthropicProfileActionMsg{ProfileID: strings.TrimSpace(profileID), Deleted: true, Err: err}
+	}
+}
+
+func startAnthropicBrowserLoginCmd(apiClient *client.APIClient, mode string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		resp, err := apiClient.StartAnthropicBrowserLogin(ctx, client.AnthropicBrowserStartRequest{
+			Mode: strings.TrimSpace(mode),
+		})
+		return AnthropicBrowserStartMsg{Response: resp, Err: err}
+	}
+}
+
+func pollAnthropicBrowserLoginJobCmd(apiClient *client.APIClient, jobID string, delay time.Duration) tea.Cmd {
+	return tea.Tick(delay, func(_ time.Time) tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		resp, err := apiClient.GetAnthropicBrowserLoginJob(ctx, strings.TrimSpace(jobID))
+		return AnthropicBrowserJobMsg{Response: resp, Err: err}
+	})
+}
+
+func completeAnthropicBrowserManualCmd(apiClient *client.APIClient, jobID, setupToken string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		resp, err := apiClient.CompleteAnthropicBrowserManual(ctx, client.AnthropicBrowserManualCompleteRequest{
+			JobID:      strings.TrimSpace(jobID),
+			SetupToken: strings.TrimSpace(setupToken),
+		})
+		return AnthropicAddMsg{Response: resp, Err: err}
+	}
+}
+
+func cancelAnthropicBrowserLoginCmd(apiClient *client.APIClient, jobID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		err := apiClient.CancelAnthropicBrowserLogin(ctx, strings.TrimSpace(jobID))
+		return AnthropicBrowserCancelMsg{JobID: strings.TrimSpace(jobID), Err: err}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------
 

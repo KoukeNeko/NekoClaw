@@ -80,7 +80,7 @@ func (ms MemorySection) View(width int) string {
 	if ms.query != "" && !ms.loaded {
 		lines = append(lines, theme.HintStyle.Render("搜尋中..."))
 	} else if ms.err != nil {
-		lines = append(lines, theme.ErrorStyle.Render("搜尋失敗: "+ms.err.Error()))
+		lines = append(lines, theme.ErrorStyle.Render(sanitizeDisplayText("搜尋失敗: "+ms.err.Error())))
 	} else if ms.loaded && len(ms.results) == 0 {
 		lines = append(lines, theme.HintStyle.Render("無結果。"))
 	} else if ms.loaded {

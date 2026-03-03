@@ -106,6 +106,90 @@ type AIStudioModelsResponse struct {
 	CachedUntil time.Time `json:"cached_until,omitempty"`
 }
 
+type AnthropicAddTokenRequest struct {
+	SetupToken   string `json:"setup_token"`
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+}
+
+type AnthropicAddAPIKeyRequest struct {
+	APIKey       string `json:"api_key"`
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+}
+
+type AnthropicAddCredentialResponse struct {
+	ProfileID   string `json:"profile_id"`
+	Provider    string `json:"provider"`
+	Type        string `json:"type"`
+	DisplayName string `json:"display_name"`
+	KeyHint     string `json:"key_hint"`
+	Preferred   bool   `json:"preferred"`
+	Available   bool   `json:"available"`
+}
+
+type AnthropicProfile struct {
+	ProfileID      string    `json:"profile_id"`
+	Provider       string    `json:"provider"`
+	Type           string    `json:"type"`
+	DisplayName    string    `json:"display_name,omitempty"`
+	KeyHint        string    `json:"key_hint,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	Available      bool      `json:"available"`
+	CooldownUntil  time.Time `json:"cooldown_until,omitempty"`
+	DisabledUntil  time.Time `json:"disabled_until,omitempty"`
+	DisabledReason string    `json:"disabled_reason,omitempty"`
+	Preferred      bool      `json:"preferred"`
+}
+
+type AnthropicBrowserStartRequest struct {
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+	Mode         string `json:"mode,omitempty"`
+}
+
+type AnthropicBrowserStartResponse struct {
+	JobID      string    `json:"job_id"`
+	Provider   string    `json:"provider"`
+	Mode       string    `json:"mode"`
+	Status     string    `json:"status"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	Message    string    `json:"message,omitempty"`
+	ManualHint string    `json:"manual_hint,omitempty"`
+}
+
+type AnthropicBrowserJobEvent struct {
+	At      time.Time `json:"at"`
+	Message string    `json:"message"`
+}
+
+type AnthropicBrowserJobResponse struct {
+	JobID        string                     `json:"job_id"`
+	Provider     string                     `json:"provider"`
+	Mode         string                     `json:"mode"`
+	Status       string                     `json:"status"`
+	Events       []AnthropicBrowserJobEvent `json:"events,omitempty"`
+	ProfileID    string                     `json:"profile_id,omitempty"`
+	KeyHint      string                     `json:"key_hint,omitempty"`
+	ExpiresAt    time.Time                  `json:"expires_at"`
+	Message      string                     `json:"message,omitempty"`
+	ManualHint   string                     `json:"manual_hint,omitempty"`
+	ErrorCode    string                     `json:"error_code,omitempty"`
+	ErrorMessage string                     `json:"error_message,omitempty"`
+}
+
+type AnthropicBrowserManualCompleteRequest struct {
+	JobID        string `json:"job_id"`
+	SetupToken   string `json:"setup_token"`
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+}
+
 // APIError preserves the structured error information returned by the NekoClaw API server.
 // Callers can use errors.As to inspect status code, error code, and message separately.
 type APIError struct {
@@ -322,6 +406,195 @@ func (c *APIClient) DeleteAIStudioProfile(ctx context.Context, profileID string)
 		ctx,
 		http.MethodPost,
 		c.baseURL+"/v1/auth/ai-studio/delete",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out map[string]any
+	return c.doAndDecodeJSON(httpReq, &out)
+}
+
+func (c *APIClient) AddAnthropicToken(ctx context.Context, req AnthropicAddTokenRequest) (AnthropicAddCredentialResponse, error) {
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return AnthropicAddCredentialResponse{}, fmt.Errorf("marshal anthropic add token request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/auth/anthropic/add-token",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return AnthropicAddCredentialResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out AnthropicAddCredentialResponse
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return AnthropicAddCredentialResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *APIClient) AddAnthropicAPIKey(ctx context.Context, req AnthropicAddAPIKeyRequest) (AnthropicAddCredentialResponse, error) {
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return AnthropicAddCredentialResponse{}, fmt.Errorf("marshal anthropic add api key request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/auth/anthropic/add-api-key",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return AnthropicAddCredentialResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out AnthropicAddCredentialResponse
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return AnthropicAddCredentialResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *APIClient) ListAnthropicProfiles(ctx context.Context) ([]AnthropicProfile, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/auth/anthropic/profiles", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Profiles []AnthropicProfile `json:"profiles"`
+	}
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return nil, err
+	}
+	return out.Profiles, nil
+}
+
+func (c *APIClient) UseAnthropicProfile(ctx context.Context, profileID string) error {
+	payload, err := json.Marshal(map[string]string{"profile_id": strings.TrimSpace(profileID)})
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/auth/anthropic/use",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out map[string]any
+	return c.doAndDecodeJSON(httpReq, &out)
+}
+
+func (c *APIClient) DeleteAnthropicProfile(ctx context.Context, profileID string) error {
+	payload, err := json.Marshal(map[string]string{"profile_id": strings.TrimSpace(profileID)})
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/auth/anthropic/delete",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out map[string]any
+	return c.doAndDecodeJSON(httpReq, &out)
+}
+
+func (c *APIClient) StartAnthropicBrowserLogin(
+	ctx context.Context,
+	req AnthropicBrowserStartRequest,
+) (AnthropicBrowserStartResponse, error) {
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return AnthropicBrowserStartResponse{}, fmt.Errorf("marshal anthropic browser start request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/auth/anthropic/browser/start",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return AnthropicBrowserStartResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out AnthropicBrowserStartResponse
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return AnthropicBrowserStartResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *APIClient) GetAnthropicBrowserLoginJob(
+	ctx context.Context,
+	jobID string,
+) (AnthropicBrowserJobResponse, error) {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return AnthropicBrowserJobResponse{}, fmt.Errorf("job_id is required")
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		c.baseURL+"/v1/auth/anthropic/browser/jobs/"+url.PathEscape(jobID),
+		nil,
+	)
+	if err != nil {
+		return AnthropicBrowserJobResponse{}, err
+	}
+	var out AnthropicBrowserJobResponse
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return AnthropicBrowserJobResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *APIClient) CompleteAnthropicBrowserManual(
+	ctx context.Context,
+	req AnthropicBrowserManualCompleteRequest,
+) (AnthropicAddCredentialResponse, error) {
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return AnthropicAddCredentialResponse{}, fmt.Errorf("marshal anthropic browser manual request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/auth/anthropic/browser/manual/complete",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return AnthropicAddCredentialResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out AnthropicAddCredentialResponse
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return AnthropicAddCredentialResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *APIClient) CancelAnthropicBrowserLogin(ctx context.Context, jobID string) error {
+	payload, err := json.Marshal(map[string]string{"job_id": strings.TrimSpace(jobID)})
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/auth/anthropic/browser/cancel",
 		bytes.NewReader(payload),
 	)
 	if err != nil {

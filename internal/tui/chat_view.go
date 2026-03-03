@@ -20,6 +20,9 @@ type ChatView struct {
 	spinner  spinner.Model
 	pending  bool
 
+	// Thinking pseudo-message tracking
+	thinkingActive bool
+
 	// Shared state (set by parent)
 	client    *client.APIClient
 	sessionID string
@@ -34,7 +37,8 @@ type ChatView struct {
 }
 
 func NewChatView(apiClient *client.APIClient, provider, modelID, sessionID string, width, height int) ChatView {
-	contentH := height - 2 // input(1) + status line(1)
+	input := NewChatInput(width, height)
+	contentH := height - input.InputHeight()
 	if contentH < 3 {
 		contentH = 3
 	}
@@ -43,9 +47,9 @@ func NewChatView(apiClient *client.APIClient, provider, modelID, sessionID strin
 	s.Spinner = spinner.MiniDot
 	s.Style = lipgloss.NewStyle().Foreground(theme.Primary)
 
-	return ChatView{
+	cv := ChatView{
 		viewport:  NewChatViewport(width, contentH),
-		input:     NewChatInput(width),
+		input:     input,
 		spinner:   s,
 		client:    apiClient,
 		sessionID: sessionID,
@@ -54,24 +58,38 @@ func NewChatView(apiClient *client.APIClient, provider, modelID, sessionID strin
 		width:     width,
 		height:    height,
 	}
+
+	// Welcome message with keybinding hints
+	cv.viewport.SetMessages([]ChatMessage{{
+		Role: "system",
+		Content: "NekoClaw — AI Chat CLI\n\n" +
+			"快捷鍵：\n" +
+			"  Enter       送出訊息\n" +
+			"  Shift+Enter 換行\n" +
+			"  Esc         開啟設定\n" +
+			"  /help       查看所有指令",
+		Timestamp: time.Now(),
+	}})
+
+	return cv
 }
 
 func (cv *ChatView) SetSize(width, height int) {
 	cv.width = width
 	cv.height = height
 
+	cv.input.SetSize(width, height)
 	inputH := cv.input.InputHeight()
-	viewportH := height - inputH - 1 // -1 for status/spinner line
+	viewportH := height - inputH
 	if viewportH < 3 {
 		viewportH = 3
 	}
 	cv.viewport.SetSize(width, viewportH)
-	cv.input.SetWidth(width)
 }
 
 func (cv *ChatView) SetSession(sessionID string) { cv.sessionID = sessionID }
-func (cv *ChatView) SetProvider(provider string)  { cv.provider = provider }
-func (cv *ChatView) SetModel(modelID string)      { cv.modelID = modelID }
+func (cv *ChatView) SetProvider(provider string) { cv.provider = provider }
+func (cv *ChatView) SetModel(modelID string)     { cv.modelID = modelID }
 
 func (cv *ChatView) Focus() tea.Cmd {
 	return cv.input.Focus()
@@ -162,6 +180,9 @@ func (cv *ChatView) Update(msg tea.Msg) tea.Cmd {
 		if cv.pending {
 			var cmd tea.Cmd
 			cv.spinner, cmd = cv.spinner.Update(msg)
+			if cv.thinkingActive {
+				cv.viewport.UpdateLastMessage(cv.spinner.View() + " thinking...")
+			}
 			cmds = append(cmds, cmd)
 		}
 
@@ -181,17 +202,11 @@ func (cv *ChatView) Update(msg tea.Msg) tea.Cmd {
 func (cv ChatView) View() string {
 	var sb strings.Builder
 
-	// Viewport
+	// Viewport (includes thinking pseudo-message when pending)
 	sb.WriteString(cv.viewport.View())
 	sb.WriteString("\n")
 
-	// Status line: thinking indicator or empty separator
-	if cv.pending {
-		sb.WriteString(theme.SystemStyle.Render("  " + cv.spinner.View() + " thinking..."))
-	}
-	sb.WriteString("\n")
-
-	// Always show input
+	// Input (includes separator, textarea, and hints)
 	sb.WriteString(cv.input.View())
 	return sb.String()
 }
@@ -209,7 +224,15 @@ func (cv *ChatView) handleSubmit(text string) tea.Cmd {
 		Timestamp: time.Now(),
 	})
 
+	// Append thinking pseudo-message (animated by spinner ticks)
 	cv.pending = true
+	cv.thinkingActive = true
+	cv.viewport.AppendMessage(ChatMessage{
+		Role:      "thinking",
+		Content:   cv.spinner.View() + " thinking...",
+		Timestamp: time.Now(),
+	})
+
 	req := core.ChatRequest{
 		SessionID: cv.sessionID,
 		Surface:   core.SurfaceTUI,
@@ -226,6 +249,12 @@ func (cv *ChatView) handleSubmit(text string) tea.Cmd {
 func (cv *ChatView) handleChatResult(msg ChatResultMsg) tea.Cmd {
 	cv.pending = false
 
+	// Remove the thinking pseudo-message
+	if cv.thinkingActive {
+		cv.viewport.RemoveLastMessage()
+		cv.thinkingActive = false
+	}
+
 	if msg.Err != nil {
 		cv.viewport.AppendMessage(ChatMessage{
 			Role:      "error",
@@ -236,7 +265,7 @@ func (cv *ChatView) handleChatResult(msg ChatResultMsg) tea.Cmd {
 	}
 
 	// Track profile and model info
-	if cv.provider == "google-gemini-cli" || cv.provider == "google-ai-studio" {
+	if cv.provider == "google-gemini-cli" || cv.provider == "google-ai-studio" || cv.provider == "anthropic" {
 		if strings.EqualFold(cv.modelID, "default") {
 			cv.defaultModel = strings.TrimSpace(msg.Response.Model)
 		}

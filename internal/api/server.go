@@ -43,6 +43,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/auth/ai-studio/use", s.handleAIStudioUse)
 	mux.HandleFunc("/v1/auth/ai-studio/delete", s.handleAIStudioDelete)
 	mux.HandleFunc("/v1/ai-studio/models", s.handleAIStudioModels)
+	mux.HandleFunc("/v1/auth/anthropic/add-token", s.handleAnthropicAddToken)
+	mux.HandleFunc("/v1/auth/anthropic/add-api-key", s.handleAnthropicAddAPIKey)
+	mux.HandleFunc("/v1/auth/anthropic/profiles", s.handleAnthropicProfiles)
+	mux.HandleFunc("/v1/auth/anthropic/use", s.handleAnthropicUse)
+	mux.HandleFunc("/v1/auth/anthropic/delete", s.handleAnthropicDelete)
+	mux.HandleFunc("/v1/auth/anthropic/browser/start", s.handleAnthropicBrowserStart)
+	mux.HandleFunc("/v1/auth/anthropic/browser/manual/complete", s.handleAnthropicBrowserManualComplete)
+	mux.HandleFunc("/v1/auth/anthropic/browser/cancel", s.handleAnthropicBrowserCancel)
+	mux.HandleFunc("/v1/auth/anthropic/browser/jobs/", s.handleAnthropicBrowserJob)
 	mux.HandleFunc("/v1/sessions", s.handleSessions)
 	mux.HandleFunc("/v1/sessions/delete", s.handleSessionDelete)
 	mux.HandleFunc("/v1/memory/search", s.handleMemorySearch)
@@ -451,6 +460,181 @@ func (s *Server) handleAIStudioModels(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) handleAnthropicAddToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req app.AnthropicAddTokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	result, err := s.svc.AddAnthropicToken(r.Context(), req)
+	if err != nil {
+		respondAnthropicError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleAnthropicAddAPIKey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req app.AnthropicAddAPIKeyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	result, err := s.svc.AddAnthropicAPIKey(r.Context(), req)
+	if err != nil {
+		respondAnthropicError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleAnthropicProfiles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	profiles, err := s.svc.ListAnthropicProfiles()
+	if err != nil {
+		respondAnthropicError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"profiles": profiles})
+}
+
+func (s *Server) handleAnthropicUse(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req useProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if err := s.svc.UseAnthropicProfile(req.ProfileID); err != nil {
+		respondAnthropicError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"profile_id": strings.TrimSpace(req.ProfileID),
+		"provider":   "anthropic",
+	})
+}
+
+func (s *Server) handleAnthropicDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req useProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if err := s.svc.DeleteAnthropicProfile(req.ProfileID); err != nil {
+		respondAnthropicError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"profile_id": strings.TrimSpace(req.ProfileID),
+		"provider":   "anthropic",
+	})
+}
+
+func (s *Server) handleAnthropicBrowserStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req app.AnthropicBrowserStartRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	result, err := s.svc.StartAnthropicBrowserLogin(r.Context(), req)
+	if err != nil {
+		respondAnthropicBrowserError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleAnthropicBrowserJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	path := strings.TrimSpace(r.URL.Path)
+	prefix := "/v1/auth/anthropic/browser/jobs/"
+	if !strings.HasPrefix(path, prefix) {
+		respondError(w, http.StatusNotFound, "not found")
+		return
+	}
+	jobID := strings.TrimSpace(strings.TrimPrefix(path, prefix))
+	if jobID == "" {
+		respondError(w, http.StatusBadRequest, "job_id is required")
+		return
+	}
+	result, err := s.svc.GetAnthropicBrowserLoginJob(r.Context(), jobID)
+	if err != nil {
+		respondAnthropicBrowserError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleAnthropicBrowserManualComplete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req app.AnthropicBrowserManualCompleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	result, err := s.svc.CompleteAnthropicBrowserLoginManual(r.Context(), req)
+	if err != nil {
+		respondAnthropicBrowserError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleAnthropicBrowserCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	result, err := s.svc.CancelAnthropicBrowserLogin(r.Context(), req.JobID)
+	if err != nil {
+		respondAnthropicBrowserError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"ok":     true,
+		"job_id": result.JobID,
+		"status": result.Status,
+	})
+}
+
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -541,6 +725,58 @@ func respondAIStudioError(w http.ResponseWriter, err error) {
 			}
 		}
 		respondError(w, http.StatusBadGateway, err.Error())
+	}
+}
+
+func respondAnthropicError(w http.ResponseWriter, err error) {
+	if err == nil {
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	switch {
+	case errors.Is(err, app.ErrInvalidSetupToken):
+		respondErrorDetail(w, http.StatusBadRequest, "invalid_setup_token", err.Error())
+	case errors.Is(err, app.ErrInvalidAPIKey):
+		respondErrorDetail(w, http.StatusBadRequest, "invalid_api_key", err.Error())
+	case errors.Is(err, app.ErrProfileNotFound):
+		respondErrorDetail(w, http.StatusNotFound, "profile_not_found", err.Error())
+	case errors.Is(err, app.ErrProfileInUse):
+		respondErrorDetail(w, http.StatusConflict, "profile_in_use", err.Error())
+	case errors.Is(err, app.ErrProviderNotReady):
+		respondErrorDetail(w, http.StatusServiceUnavailable, "provider_not_ready", err.Error())
+	case errors.Is(err, app.ErrNoAvailableAccount):
+		respondErrorDetail(w, http.StatusConflict, "provider_not_ready", err.Error())
+	default:
+		respondError(w, http.StatusBadGateway, err.Error())
+	}
+}
+
+func respondAnthropicBrowserError(w http.ResponseWriter, err error) {
+	if err == nil {
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	switch {
+	case errors.Is(err, auth.ErrAnthropicInvalidSetupToken):
+		respondErrorDetail(w, http.StatusBadRequest, "invalid_setup_token", err.Error())
+	case errors.Is(err, auth.ErrAnthropicCLINotFound):
+		respondErrorDetail(w, http.StatusServiceUnavailable, "cli_not_found", err.Error())
+	case errors.Is(err, auth.ErrAnthropicPTYUnavailable):
+		respondErrorDetail(w, http.StatusServiceUnavailable, "pty_unavailable", err.Error())
+	case errors.Is(err, auth.ErrAnthropicTokenNotDetected):
+		respondErrorDetail(w, http.StatusBadRequest, "token_not_detected", err.Error())
+	case errors.Is(err, auth.ErrAnthropicLoginManualRequired):
+		respondErrorDetail(w, http.StatusBadRequest, "manual_required", err.Error())
+	case errors.Is(err, auth.ErrAnthropicLoginJobNotFound):
+		respondErrorDetail(w, http.StatusNotFound, "job_not_found", err.Error())
+	case errors.Is(err, auth.ErrAnthropicLoginJobExpired):
+		respondErrorDetail(w, http.StatusGone, "job_expired", err.Error())
+	case errors.Is(err, auth.ErrAnthropicLoginJobCancelled):
+		respondErrorDetail(w, http.StatusConflict, "job_cancelled", err.Error())
+	case errors.Is(err, auth.ErrAnthropicLoginJobCompleted):
+		respondErrorDetail(w, http.StatusConflict, "job_completed", err.Error())
+	default:
+		respondAnthropicError(w, err)
 	}
 }
 

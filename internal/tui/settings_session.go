@@ -173,7 +173,7 @@ func (ss SessionSection) View(width int) string {
 
 	// Status
 	if ss.statusMsg != "" {
-		lines = append(lines, theme.SystemStyle.Render(ss.statusMsg))
+		lines = append(lines, theme.SystemStyle.Render(sanitizeDisplayText(ss.statusMsg)))
 		lines = append(lines, "")
 	}
 

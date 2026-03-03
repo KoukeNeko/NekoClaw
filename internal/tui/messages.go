@@ -118,6 +118,47 @@ type AIStudioProfileActionMsg struct {
 }
 
 // ---------------------------------------------------------------------------
+// Anthropic messages
+// ---------------------------------------------------------------------------
+
+// AnthropicAddMsg carries the result of adding an Anthropic credential.
+type AnthropicAddMsg struct {
+	Response client.AnthropicAddCredentialResponse
+	Err      error
+}
+
+// AnthropicProfilesMsg carries the list of Anthropic profiles.
+type AnthropicProfilesMsg struct {
+	Profiles []client.AnthropicProfile
+	Err      error
+}
+
+// AnthropicProfileActionMsg carries the result of Anthropic profile actions.
+type AnthropicProfileActionMsg struct {
+	ProfileID string
+	Deleted   bool
+	Err       error
+}
+
+// AnthropicBrowserStartMsg carries the result of starting browser login bridge.
+type AnthropicBrowserStartMsg struct {
+	Response client.AnthropicBrowserStartResponse
+	Err      error
+}
+
+// AnthropicBrowserJobMsg carries the polled state for a browser login job.
+type AnthropicBrowserJobMsg struct {
+	Response client.AnthropicBrowserJobResponse
+	Err      error
+}
+
+// AnthropicBrowserCancelMsg carries the result of cancelling a browser login job.
+type AnthropicBrowserCancelMsg struct {
+	JobID string
+	Err   error
+}
+
+// ---------------------------------------------------------------------------
 // Session messages
 // ---------------------------------------------------------------------------
 

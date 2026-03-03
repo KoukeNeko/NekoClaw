@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -16,28 +17,40 @@ type AuthFlow int
 
 const (
 	authFlowNone AuthFlow = iota
-	authFlowOAuthStarted
-	authFlowManualState
 	authFlowManualCallback
 	authFlowAddKey
 	authFlowAddKeyName
+	authFlowAddAnthropicToken
+	authFlowAddAnthropicTokenName
+	authFlowAddAnthropicAPIKey
+	authFlowAddAnthropicAPIKeyName
+	authFlowAnthropicBrowserManualComplete
 )
 
-// AuthSection handles Gemini OAuth and AI Studio key management.
+// AuthSection handles Gemini OAuth, AI Studio key, and Anthropic credential management.
 type AuthSection struct {
-	geminiProfiles  []client.GeminiAuthProfile
-	aiStudioProfiles []client.AIStudioProfile
+	geminiProfiles    []client.GeminiAuthProfile
+	aiStudioProfiles  []client.AIStudioProfile
+	anthropicProfiles []client.AnthropicProfile
 
-	focusArea int // 0=gemini profiles, 1=ai studio profiles, 2=actions
+	focusArea int // 0=gemini, 1=ai studio, 2=anthropic
 	geminiIdx int
 	studioIdx int
+	anthroIdx int
 
 	// Wizard state
-	flow     AuthFlow
-	input    textinput.Model
-	oauthState string
-	apiKeyDraft string
-	statusMsg   string
+	flow                AuthFlow
+	input               textinput.Model
+	oauthState          string
+	aiStudioKeyDraft    string
+	anthropicTokenDraft string
+	anthropicKeyDraft   string
+	statusMsg           string
+	browserJobID        string
+	browserJobMode      string
+	browserJobStatus    string
+	browserJobExpiresAt time.Time
+	browserJobEvents    []client.AnthropicBrowserJobEvent
 
 	loaded bool
 }
@@ -65,6 +78,16 @@ func (as *AuthSection) HandleAIStudioProfiles(msg AIStudioProfilesMsg) tea.Cmd {
 		return nil
 	}
 	as.aiStudioProfiles = sortedAIStudioProfiles(msg.Profiles)
+	as.loaded = true
+	return nil
+}
+
+func (as *AuthSection) HandleAnthropicProfiles(msg AnthropicProfilesMsg) tea.Cmd {
+	if msg.Err != nil {
+		as.statusMsg = "載入 Anthropic profiles 失敗: " + msg.Err.Error()
+		return nil
+	}
+	as.anthropicProfiles = sortedAnthropicProfiles(msg.Profiles)
 	as.loaded = true
 	return nil
 }
@@ -115,13 +138,13 @@ func (as *AuthSection) HandleUseProfile(msg AuthUseMsg) tea.Cmd {
 
 func (as *AuthSection) HandleAddKey(msg AIStudioAddKeyMsg) tea.Cmd {
 	as.flow = authFlowNone
-	as.apiKeyDraft = ""
+	as.aiStudioKeyDraft = ""
 	as.input.Blur()
 	if msg.Err != nil {
 		as.statusMsg = "新增 API key 失敗: " + msg.Err.Error()
 		return nil
 	}
-	as.statusMsg = fmt.Sprintf("API key 已新增: %s (%s)", msg.Response.ProfileID, msg.Response.KeyHint)
+	as.statusMsg = fmt.Sprintf("AI Studio API key 已新增: %s (%s)", msg.Response.ProfileID, msg.Response.KeyHint)
 	return func() tea.Msg {
 		return ProviderChangedMsg{Provider: "google-ai-studio"}
 	}
@@ -140,13 +163,159 @@ func (as *AuthSection) HandleAIStudioAction(msg AIStudioProfileActionMsg) tea.Cm
 	return nil
 }
 
+func (as *AuthSection) HandleAnthropicAdd(msg AnthropicAddMsg) tea.Cmd {
+	as.flow = authFlowNone
+	as.anthropicTokenDraft = ""
+	as.anthropicKeyDraft = ""
+	as.input.Blur()
+	if msg.Err != nil {
+		as.statusMsg = "新增 Anthropic credential 失敗: " + msg.Err.Error()
+		return nil
+	}
+	if as.browserJobID != "" {
+		as.browserJobStatus = "completed"
+	}
+	as.statusMsg = fmt.Sprintf("Anthropic credential 已新增: %s (%s)", msg.Response.ProfileID, msg.Response.KeyHint)
+	return func() tea.Msg {
+		return ProviderChangedMsg{Provider: "anthropic"}
+	}
+}
+
+func (as *AuthSection) HandleAnthropicAction(msg AnthropicProfileActionMsg) tea.Cmd {
+	if msg.Err != nil {
+		as.statusMsg = "操作失敗: " + msg.Err.Error()
+		return nil
+	}
+	if msg.Deleted {
+		as.statusMsg = "已刪除: " + msg.ProfileID
+	} else {
+		as.statusMsg = "已選用: " + msg.ProfileID
+	}
+	return nil
+}
+
+func (as *AuthSection) HandleAnthropicBrowserStart(msg AnthropicBrowserStartMsg, apiClient *client.APIClient) tea.Cmd {
+	if msg.Err != nil {
+		as.statusMsg = "Anthropic Browser Login 啟動失敗: " + msg.Err.Error()
+		return nil
+	}
+	as.browserJobID = strings.TrimSpace(msg.Response.JobID)
+	as.browserJobMode = strings.TrimSpace(msg.Response.Mode)
+	as.browserJobStatus = strings.TrimSpace(msg.Response.Status)
+	as.browserJobExpiresAt = msg.Response.ExpiresAt
+	as.browserJobEvents = nil
+
+	message := strings.TrimSpace(msg.Response.Message)
+	if message == "" {
+		message = "Anthropic Browser Login 已啟動。"
+	}
+	as.statusMsg = message
+
+	switch as.browserJobStatus {
+	case "running":
+		if as.browserJobID == "" {
+			return nil
+		}
+		return pollAnthropicBrowserLoginJobCmd(apiClient, as.browserJobID, time.Second)
+	case "manual_required":
+		as.startAnthropicBrowserManualFlow()
+		return nil
+	case "completed":
+		return tea.Batch(
+			listAnthropicProfilesCmd(apiClient),
+			func() tea.Msg { return ProviderChangedMsg{Provider: "anthropic"} },
+		)
+	default:
+		return nil
+	}
+}
+
+func (as *AuthSection) HandleAnthropicBrowserJob(msg AnthropicBrowserJobMsg, apiClient *client.APIClient) tea.Cmd {
+	if msg.Err != nil {
+		if isAnthropicBrowserJobTerminalError(msg.Err) {
+			as.clearAnthropicBrowserJob()
+			as.flow = authFlowNone
+			as.input.Blur()
+			as.statusMsg = "Browser Login 工作已結束或不存在，已清除本地狀態。"
+			return nil
+		}
+		as.statusMsg = "Anthropic Browser Login 狀態查詢失敗: " + msg.Err.Error()
+		return nil
+	}
+	if as.browserJobID != "" && strings.TrimSpace(msg.Response.JobID) != "" && strings.TrimSpace(msg.Response.JobID) != as.browserJobID {
+		return nil
+	}
+
+	as.browserJobID = strings.TrimSpace(msg.Response.JobID)
+	as.browserJobMode = strings.TrimSpace(msg.Response.Mode)
+	as.browserJobStatus = strings.TrimSpace(msg.Response.Status)
+	as.browserJobExpiresAt = msg.Response.ExpiresAt
+	as.browserJobEvents = make([]client.AnthropicBrowserJobEvent, 0, len(msg.Response.Events))
+	for _, event := range msg.Response.Events {
+		as.browserJobEvents = append(as.browserJobEvents, client.AnthropicBrowserJobEvent{
+			At:      event.At,
+			Message: sanitizeDisplayText(event.Message),
+		})
+	}
+
+	statusText := strings.TrimSpace(msg.Response.Message)
+	if statusText == "" {
+		statusText = "Anthropic Browser Login 狀態更新。"
+	}
+	if hint := strings.TrimSpace(msg.Response.ManualHint); hint != "" && (as.browserJobStatus == "failed" || as.browserJobStatus == "manual_required") {
+		statusText = statusText + " " + hint
+	}
+	as.statusMsg = statusText
+
+	switch as.browserJobStatus {
+	case "running":
+		if as.browserJobID == "" {
+			return nil
+		}
+		return pollAnthropicBrowserLoginJobCmd(apiClient, as.browserJobID, time.Second)
+	case "manual_required":
+		as.startAnthropicBrowserManualFlow()
+		return nil
+	case "completed":
+		as.flow = authFlowNone
+		as.input.Blur()
+		return tea.Batch(
+			listAnthropicProfilesCmd(apiClient),
+			func() tea.Msg { return ProviderChangedMsg{Provider: "anthropic"} },
+		)
+	case "failed":
+		if strings.TrimSpace(msg.Response.ManualHint) != "" {
+			as.startAnthropicBrowserManualFlow()
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+func (as *AuthSection) HandleAnthropicBrowserCancel(msg AnthropicBrowserCancelMsg) tea.Cmd {
+	if msg.Err != nil {
+		if isAnthropicBrowserJobTerminalError(msg.Err) {
+			as.clearAnthropicBrowserJob()
+			as.statusMsg = "Browser Login 工作已結束，已清除本地狀態。"
+			return nil
+		}
+		as.statusMsg = "取消 Browser Login 失敗: " + msg.Err.Error()
+		return nil
+	}
+	as.flow = authFlowNone
+	as.input.Blur()
+	as.clearAnthropicBrowserJob()
+	as.statusMsg = "Anthropic Browser Login 已取消。"
+	return nil
+}
+
 func (as *AuthSection) HasActiveInput() bool {
 	return as.flow != authFlowNone
 }
 
 func (as *AuthSection) Update(msg tea.KeyMsg, apiClient *client.APIClient) tea.Cmd {
-	// If in wizard flow with text input
-	if as.flow == authFlowManualCallback || as.flow == authFlowAddKey || as.flow == authFlowAddKeyName {
+	if as.flow != authFlowNone {
 		return as.handleWizardInput(msg, apiClient)
 	}
 
@@ -159,22 +328,71 @@ func (as *AuthSection) Update(msg tea.KeyMsg, apiClient *client.APIClient) tea.C
 		return as.handleSelect(apiClient)
 	case key.Matches(msg, settingsKeys.Delete):
 		return as.handleDelete(apiClient)
-
-	// Quick action keys
 	case key.Matches(msg, key.NewBinding(key.WithKeys("o"))):
-		// Start OAuth auto
 		return startGeminiOAuthCmd(apiClient, client.GeminiAuthStartRequest{Mode: "auto"})
 	case key.Matches(msg, key.NewBinding(key.WithKeys("a"))):
-		// Add AI Studio key
-		as.flow = authFlowAddKey
-		as.input.Placeholder = "貼上 API key"
-		as.input.EchoMode = textinput.EchoPassword
-		as.input.EchoCharacter = '•'
-		as.input.SetValue("")
-		as.input.Focus()
+		as.startMaskedFlow(authFlowAddKey, "貼上 AI Studio API key")
 		return nil
+	case key.Matches(msg, key.NewBinding(key.WithKeys("t"))):
+		as.startMaskedFlow(authFlowAddAnthropicToken, "貼上 Anthropic setup-token")
+		return nil
+	case key.Matches(msg, key.NewBinding(key.WithKeys("k"))):
+		as.startMaskedFlow(authFlowAddAnthropicAPIKey, "貼上 Anthropic API key")
+		return nil
+	case key.Matches(msg, key.NewBinding(key.WithKeys("b"))):
+		if as.browserJobID != "" && as.browserJobStatus == "running" {
+			as.statusMsg = "已有進行中的 Browser Login，按 c 可取消。"
+			return nil
+		}
+		return startAnthropicBrowserLoginCmd(apiClient, "auto")
+	case key.Matches(msg, key.NewBinding(key.WithKeys("c"))):
+		if as.browserJobID != "" {
+			return cancelAnthropicBrowserLoginCmd(apiClient, as.browserJobID)
+		}
 	}
 	return nil
+}
+
+func (as *AuthSection) startMaskedFlow(flow AuthFlow, placeholder string) {
+	as.flow = flow
+	as.input.Placeholder = placeholder
+	as.input.EchoMode = textinput.EchoPassword
+	as.input.EchoCharacter = '•'
+	as.input.SetValue("")
+	as.input.Focus()
+}
+
+func (as *AuthSection) startAnthropicBrowserManualFlow() {
+	as.flow = authFlowAnthropicBrowserManualComplete
+	as.input.Placeholder = "貼上 Anthropic setup-token"
+	as.input.EchoMode = textinput.EchoPassword
+	as.input.EchoCharacter = '•'
+	as.input.SetValue("")
+	as.input.Focus()
+}
+
+func (as *AuthSection) clearAnthropicBrowserJob() {
+	as.browserJobID = ""
+	as.browserJobMode = ""
+	as.browserJobStatus = ""
+	as.browserJobExpiresAt = time.Time{}
+	as.browserJobEvents = nil
+}
+
+func isAnthropicBrowserJobTerminalError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr *client.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch strings.TrimSpace(apiErr.Code) {
+	case "job_not_found", "job_expired", "job_cancelled", "job_completed":
+		return true
+	default:
+		return false
+	}
 }
 
 func (as *AuthSection) handleWizardInput(msg tea.KeyMsg, apiClient *client.APIClient) tea.Cmd {
@@ -183,6 +401,9 @@ func (as *AuthSection) handleWizardInput(msg tea.KeyMsg, apiClient *client.APICl
 		as.flow = authFlowNone
 		as.input.Blur()
 		as.input.EchoMode = textinput.EchoNormal
+		as.aiStudioKeyDraft = ""
+		as.anthropicTokenDraft = ""
+		as.anthropicKeyDraft = ""
 		return nil
 	}
 	if k == "enter" {
@@ -199,7 +420,7 @@ func (as *AuthSection) handleWizardInput(msg tea.KeyMsg, apiClient *client.APICl
 			if value == "" {
 				return nil
 			}
-			as.apiKeyDraft = value
+			as.aiStudioKeyDraft = value
 			as.flow = authFlowAddKeyName
 			as.input.EchoMode = textinput.EchoNormal
 			as.input.Placeholder = "顯示名稱（可選）"
@@ -208,11 +429,49 @@ func (as *AuthSection) handleWizardInput(msg tea.KeyMsg, apiClient *client.APICl
 		case authFlowAddKeyName:
 			as.flow = authFlowNone
 			as.input.Blur()
-			return addAIStudioKeyCmd(apiClient, as.apiKeyDraft, value)
+			return addAIStudioKeyCmd(apiClient, as.aiStudioKeyDraft, value)
+		case authFlowAddAnthropicToken:
+			if value == "" {
+				return nil
+			}
+			as.anthropicTokenDraft = value
+			as.flow = authFlowAddAnthropicTokenName
+			as.input.EchoMode = textinput.EchoNormal
+			as.input.Placeholder = "顯示名稱（可選）"
+			as.input.SetValue("")
+			return nil
+		case authFlowAddAnthropicTokenName:
+			as.flow = authFlowNone
+			as.input.Blur()
+			return addAnthropicTokenCmd(apiClient, as.anthropicTokenDraft, value)
+		case authFlowAddAnthropicAPIKey:
+			if value == "" {
+				return nil
+			}
+			as.anthropicKeyDraft = value
+			as.flow = authFlowAddAnthropicAPIKeyName
+			as.input.EchoMode = textinput.EchoNormal
+			as.input.Placeholder = "顯示名稱（可選）"
+			as.input.SetValue("")
+			return nil
+		case authFlowAddAnthropicAPIKeyName:
+			as.flow = authFlowNone
+			as.input.Blur()
+			return addAnthropicAPIKeyCmd(apiClient, as.anthropicKeyDraft, value)
+		case authFlowAnthropicBrowserManualComplete:
+			if value == "" {
+				return nil
+			}
+			as.flow = authFlowNone
+			as.input.Blur()
+			jobID := strings.TrimSpace(as.browserJobID)
+			if jobID == "" {
+				return addAnthropicTokenCmd(apiClient, value, "")
+			}
+			return completeAnthropicBrowserManualCmd(apiClient, jobID, value)
 		}
 	}
 
-	// Pass to textinput
 	var cmd tea.Cmd
 	as.input, cmd = as.input.Update(msg)
 	return cmd
@@ -220,24 +479,37 @@ func (as *AuthSection) handleWizardInput(msg tea.KeyMsg, apiClient *client.APICl
 
 func (as *AuthSection) handleSelect(apiClient *client.APIClient) tea.Cmd {
 	switch as.focusArea {
-	case 0: // Gemini profile
+	case 0:
 		if as.geminiIdx < len(as.geminiProfiles) {
 			profileID := as.geminiProfiles[as.geminiIdx].ProfileID
 			return useGeminiProfileCmd(apiClient, profileID)
 		}
-	case 1: // AI Studio profile
+	case 1:
 		if as.studioIdx < len(as.aiStudioProfiles) {
 			profileID := as.aiStudioProfiles[as.studioIdx].ProfileID
 			return useAIStudioProfileCmd(apiClient, profileID)
+		}
+	case 2:
+		if as.anthroIdx < len(as.anthropicProfiles) {
+			profileID := as.anthropicProfiles[as.anthroIdx].ProfileID
+			return useAnthropicProfileCmd(apiClient, profileID)
 		}
 	}
 	return nil
 }
 
 func (as *AuthSection) handleDelete(apiClient *client.APIClient) tea.Cmd {
-	if as.focusArea == 1 && as.studioIdx < len(as.aiStudioProfiles) {
-		profileID := as.aiStudioProfiles[as.studioIdx].ProfileID
-		return deleteAIStudioProfileCmd(apiClient, profileID)
+	switch as.focusArea {
+	case 1:
+		if as.studioIdx < len(as.aiStudioProfiles) {
+			profileID := as.aiStudioProfiles[as.studioIdx].ProfileID
+			return deleteAIStudioProfileCmd(apiClient, profileID)
+		}
+	case 2:
+		if as.anthroIdx < len(as.anthropicProfiles) {
+			profileID := as.anthropicProfiles[as.anthroIdx].ProfileID
+			return deleteAnthropicProfileCmd(apiClient, profileID)
+		}
 	}
 	return nil
 }
@@ -252,7 +524,16 @@ func (as *AuthSection) moveUp() {
 		if as.studioIdx > 0 {
 			as.studioIdx--
 		} else if len(as.geminiProfiles) > 0 {
-			// Jump to last gemini profile
+			as.focusArea = 0
+			as.geminiIdx = len(as.geminiProfiles) - 1
+		}
+	case 2:
+		if as.anthroIdx > 0 {
+			as.anthroIdx--
+		} else if len(as.aiStudioProfiles) > 0 {
+			as.focusArea = 1
+			as.studioIdx = len(as.aiStudioProfiles) - 1
+		} else if len(as.geminiProfiles) > 0 {
 			as.focusArea = 0
 			as.geminiIdx = len(as.geminiProfiles) - 1
 		}
@@ -265,13 +546,22 @@ func (as *AuthSection) moveDown() {
 		if as.geminiIdx < len(as.geminiProfiles)-1 {
 			as.geminiIdx++
 		} else if len(as.aiStudioProfiles) > 0 {
-			// Jump to first studio profile
 			as.focusArea = 1
 			as.studioIdx = 0
+		} else if len(as.anthropicProfiles) > 0 {
+			as.focusArea = 2
+			as.anthroIdx = 0
 		}
 	case 1:
 		if as.studioIdx < len(as.aiStudioProfiles)-1 {
 			as.studioIdx++
+		} else if len(as.anthropicProfiles) > 0 {
+			as.focusArea = 2
+			as.anthroIdx = 0
+		}
+	case 2:
+		if as.anthroIdx < len(as.anthropicProfiles)-1 {
+			as.anthroIdx++
 		}
 	}
 }
@@ -286,8 +576,7 @@ func (as AuthSection) View(width int) string {
 	lines = append(lines, theme.HeaderStyle.Render("Auth"))
 	lines = append(lines, "")
 
-	// Wizard input mode
-	if as.flow == authFlowManualCallback || as.flow == authFlowAddKey || as.flow == authFlowAddKeyName {
+	if as.flow != authFlowNone {
 		var title string
 		switch as.flow {
 		case authFlowManualCallback:
@@ -295,11 +584,21 @@ func (as AuthSection) View(width int) string {
 		case authFlowAddKey:
 			title = "新增 AI Studio API Key"
 		case authFlowAddKeyName:
-			title = "API Key 顯示名稱"
+			title = "AI Studio Key 顯示名稱"
+		case authFlowAddAnthropicToken:
+			title = "新增 Anthropic setup-token"
+		case authFlowAddAnthropicTokenName:
+			title = "Anthropic Token 顯示名稱"
+		case authFlowAddAnthropicAPIKey:
+			title = "新增 Anthropic API key"
+		case authFlowAddAnthropicAPIKeyName:
+			title = "Anthropic API key 顯示名稱"
+		case authFlowAnthropicBrowserManualComplete:
+			title = "Anthropic Browser Manual Complete"
 		}
 		lines = append(lines, theme.SectionStyle.Render(title))
 		if as.statusMsg != "" {
-			lines = append(lines, theme.SystemStyle.Render(as.statusMsg))
+			lines = append(lines, theme.SystemStyle.Render(sanitizeDisplayText(as.statusMsg)))
 		}
 		lines = append(lines, as.input.View())
 		lines = append(lines, "")
@@ -307,13 +606,11 @@ func (as AuthSection) View(width int) string {
 		return strings.Join(lines, "\n")
 	}
 
-	// Gemini OAuth Profiles
 	geminiHeader := "Gemini OAuth"
 	if as.focusArea == 0 {
 		geminiHeader = "› Gemini OAuth"
 	}
 	lines = append(lines, theme.SectionStyle.Render(geminiHeader))
-
 	if len(as.geminiProfiles) == 0 {
 		lines = append(lines, theme.HintStyle.Render("  尚無 profiles。按 o 啟動 OAuth。"))
 	} else {
@@ -342,13 +639,11 @@ func (as AuthSection) View(width int) string {
 
 	lines = append(lines, "")
 
-	// AI Studio Key Profiles
 	studioHeader := "AI Studio Keys"
 	if as.focusArea == 1 {
 		studioHeader = "› AI Studio Keys"
 	}
 	lines = append(lines, theme.SectionStyle.Render(studioHeader))
-
 	if len(as.aiStudioProfiles) == 0 {
 		lines = append(lines, theme.HintStyle.Render("  尚無 keys。按 a 新增。"))
 	} else {
@@ -374,14 +669,63 @@ func (as AuthSection) View(width int) string {
 
 	lines = append(lines, "")
 
-	// Status
+	anthropicHeader := "Anthropic"
+	if as.focusArea == 2 {
+		anthropicHeader = "› Anthropic"
+	}
+	lines = append(lines, theme.SectionStyle.Render(anthropicHeader))
+	if len(as.anthropicProfiles) == 0 {
+		lines = append(lines, theme.HintStyle.Render("  尚無 credentials。按 b 啟動 browser login，或按 t/k 手動新增。"))
+	} else {
+		for i, p := range as.anthropicProfiles {
+			prefix := "  "
+			style := theme.NormalStyle
+			if i == as.anthroIdx && as.focusArea == 2 {
+				prefix = "› "
+				style = theme.SelectedStyle
+			}
+			star := ""
+			if p.Preferred {
+				star = " ★"
+			}
+			state := "✓"
+			if !p.Available {
+				state = "✗"
+				if !p.CooldownUntil.IsZero() {
+					state = fmt.Sprintf("冷卻至 %s", p.CooldownUntil.Format(time.Kitchen))
+				}
+			}
+			name := fallback(p.DisplayName, p.ProfileID)
+			label := fmt.Sprintf("%s [%s] (%s) %s%s", name, fallback(p.Type, "-"), fallback(p.KeyHint, "-"), state, star)
+			lines = append(lines, style.Render(clampLine(prefix+label, textW)))
+		}
+	}
+
+	if as.browserJobID != "" {
+		lines = append(lines, "")
+		lines = append(lines, theme.HintStyle.Render(clampLine("  job="+as.browserJobID+" · mode="+fallback(as.browserJobMode, "-")+" · status="+fallback(as.browserJobStatus, "-"), textW)))
+		if !as.browserJobExpiresAt.IsZero() {
+			lines = append(lines, theme.HintStyle.Render(clampLine("  expires="+as.browserJobExpiresAt.Format(time.RFC3339), textW)))
+		}
+		if len(as.browserJobEvents) > 0 {
+			lines = append(lines, theme.HintStyle.Render("  Recent job events:"))
+			start := len(as.browserJobEvents) - 3
+			if start < 0 {
+				start = 0
+			}
+			for _, event := range as.browserJobEvents[start:] {
+				item := fmt.Sprintf("    %s %s", event.At.Format("15:04:05"), event.Message)
+				lines = append(lines, theme.HintStyle.Render(clampLine(item, textW)))
+			}
+		}
+	}
+
+	lines = append(lines, "")
 	if as.statusMsg != "" {
-		lines = append(lines, theme.SystemStyle.Render(as.statusMsg))
+		lines = append(lines, theme.SystemStyle.Render(sanitizeDisplayText(as.statusMsg)))
 		lines = append(lines, "")
 	}
 
-	// Hints
-	lines = append(lines, theme.HintStyle.Render("o OAuth  ·  a 新增 key  ·  Enter 選用  ·  d 刪除"))
-
+	lines = append(lines, theme.HintStyle.Render("o Gemini OAuth  ·  a AI Studio key  ·  b Anthropic browser login  ·  t/k Anthropic key  ·  c 取消 browser job  ·  Enter 選用  ·  d 刪除"))
 	return strings.Join(lines, "\n")
 }

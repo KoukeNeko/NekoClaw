@@ -88,6 +88,40 @@ export GEMINI_INTERNAL_PROJECT_ID="my-gcp-project"
 go run ./cmd/nekoclaw -mode both -provider google-gemini-cli -model gemini-3-pro-preview
 ```
 
+## Anthropic Provider (Claude setup-token / API key)
+
+The project includes an `anthropic` provider that supports:
+
+- Claude subscription setup-token (`sk-ant-oat01-...`)
+- Anthropic API key
+- account pool rotation/cooldown/failover (`token` naturally preferred over `api_key`)
+- default model runtime fallback (`claude-sonnet-4-6`)
+
+TUI auth flow (Auth section):
+
+- `t` add Anthropic setup-token (masked input)
+- `k` add Anthropic API key (masked input)
+- `Enter` use selected profile
+- `d` delete selected profile
+
+API endpoints:
+
+- `POST /v1/auth/anthropic/add-token`
+- `POST /v1/auth/anthropic/add-api-key`
+- `GET /v1/auth/anthropic/profiles`
+- `POST /v1/auth/anthropic/use`
+- `POST /v1/auth/anthropic/delete`
+
+Env credential loading (optional):
+
+- `ANTHROPIC_OAUTH_TOKEN` / `ANTHROPIC_SETUP_TOKEN`
+- `ANTHROPIC_OAUTH_TOKENS` (CSV)
+- `ANTHROPIC_OAUTH_TOKEN_*`
+- `ANTHROPIC_API_KEY`
+- `ANTHROPIC_API_KEYS` (CSV)
+- `ANTHROPIC_API_KEY_*`
+- `ANTHROPIC_BASE_URL` (default `https://api.anthropic.com`)
+
 ## Accounts File (optional)
 
 Create `accounts.json` in repo root:
@@ -123,6 +157,16 @@ Create `accounts.json` in repo root:
 - `POST /v1/auth/gemini/manual/complete`
 - `GET /v1/auth/gemini/profiles`
 - `POST /v1/auth/gemini/use`
+- `POST /v1/auth/ai-studio/add-key`
+- `GET /v1/auth/ai-studio/profiles`
+- `POST /v1/auth/ai-studio/use`
+- `POST /v1/auth/ai-studio/delete`
+- `GET /v1/ai-studio/models`
+- `POST /v1/auth/anthropic/add-token`
+- `POST /v1/auth/anthropic/add-api-key`
+- `GET /v1/auth/anthropic/profiles`
+- `POST /v1/auth/anthropic/use`
+- `POST /v1/auth/anthropic/delete`
 
 ## Architecture Notes
 

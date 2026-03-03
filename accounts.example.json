@@ -15,6 +15,12 @@
         "project_id": "my-project-id",
         "endpoint": "https://cloudcode-pa.googleapis.com"
       }
+    },
+    {
+      "id": "anthropic-main",
+      "provider": "anthropic",
+      "type": "token",
+      "token": "<claude-setup-token>"
     }
   ]
 }

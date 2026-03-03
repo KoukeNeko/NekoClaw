@@ -11,7 +11,7 @@ import (
 
 // ChatMessage represents a single message in the chat history.
 type ChatMessage struct {
-	Role      string // "user", "assistant", "system", "error"
+	Role      string // "user", "assistant", "system", "error", "thinking"
 	Content   string
 	Timestamp time.Time
 
@@ -88,6 +88,18 @@ func (cv *ChatViewport) AppendMessage(msg ChatMessage) {
 	}
 }
 
+// RemoveLastMessage removes the last message and re-renders.
+func (cv *ChatViewport) RemoveLastMessage() {
+	if len(cv.messages) == 0 {
+		return
+	}
+	cv.messages = cv.messages[:len(cv.messages)-1]
+	cv.rebuildContent()
+	if cv.atBottom {
+		cv.viewport.GotoBottom()
+	}
+}
+
 // UpdateLastMessage replaces the content of the last message (used for streaming).
 func (cv *ChatViewport) UpdateLastMessage(content string) {
 	if len(cv.messages) == 0 {
@@ -144,6 +156,8 @@ func (cv *ChatViewport) renderMessage(msg *ChatMessage) string {
 		rendered = theme.SystemStyle.Render("  " + msg.Content)
 	case "error":
 		rendered = theme.ErrorStyle.Render("  \u2715 " + msg.Content)
+	case "thinking":
+		rendered = "  " + msg.Content // preserve spinner ANSI colors
 	default:
 		rendered = msg.Content
 	}

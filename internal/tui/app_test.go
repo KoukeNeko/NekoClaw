@@ -164,7 +164,7 @@ func TestChatViewportMessageCount(t *testing.T) {
 }
 
 func TestChatInputSlashSuggestions(t *testing.T) {
-	ci := NewChatInput(80)
+	ci := NewChatInput(80, 24)
 	ci.textarea.SetValue("/he")
 	ci.updateSuggestions()
 	if !ci.showSuggestions {
@@ -179,7 +179,7 @@ func TestChatInputSlashSuggestions(t *testing.T) {
 }
 
 func TestChatInputNoSuggestionsForNonSlash(t *testing.T) {
-	ci := NewChatInput(80)
+	ci := NewChatInput(80, 24)
 	ci.textarea.SetValue("hello")
 	ci.updateSuggestions()
 	if ci.showSuggestions {
@@ -188,7 +188,7 @@ func TestChatInputNoSuggestionsForNonSlash(t *testing.T) {
 }
 
 func TestChatInputNoSuggestionsAfterSpace(t *testing.T) {
-	ci := NewChatInput(80)
+	ci := NewChatInput(80, 24)
 	ci.textarea.SetValue("/memory test")
 	ci.updateSuggestions()
 	if ci.showSuggestions {
@@ -197,7 +197,7 @@ func TestChatInputNoSuggestionsAfterSpace(t *testing.T) {
 }
 
 func TestChatInputHistory(t *testing.T) {
-	ci := NewChatInput(80)
+	ci := NewChatInput(80, 24)
 	ci.appendHistory("first")
 	ci.appendHistory("second")
 	ci.appendHistory("third")
@@ -224,7 +224,7 @@ func TestChatInputHistory(t *testing.T) {
 }
 
 func TestChatInputDuplicateHistory(t *testing.T) {
-	ci := NewChatInput(80)
+	ci := NewChatInput(80, 24)
 	ci.appendHistory("same")
 	ci.appendHistory("same")
 	if len(ci.history) != 1 {
@@ -233,7 +233,7 @@ func TestChatInputDuplicateHistory(t *testing.T) {
 }
 
 func TestChatInputNewCommand(t *testing.T) {
-	ci := NewChatInput(80)
+	ci := NewChatInput(80, 24)
 	ci.textarea.SetValue("/ne")
 	ci.updateSuggestions()
 	if !ci.showSuggestions {
@@ -251,7 +251,7 @@ func TestChatInputNewCommand(t *testing.T) {
 }
 
 func TestChatInputConfigCommand(t *testing.T) {
-	ci := NewChatInput(80)
+	ci := NewChatInput(80, 24)
 	ci.textarea.SetValue("/con")
 	ci.updateSuggestions()
 	if !ci.showSuggestions {
@@ -269,7 +269,7 @@ func TestChatInputConfigCommand(t *testing.T) {
 }
 
 func TestChatInputViewHasPrompt(t *testing.T) {
-	ci := NewChatInput(80)
+	ci := NewChatInput(80, 24)
 	view := ci.View()
 	if !strings.Contains(view, ">") {
 		t.Fatal("expected > prompt in input view")
@@ -394,6 +394,66 @@ func TestSettingsOverlayRender(t *testing.T) {
 	}
 	if !strings.Contains(result, "Provider") {
 		t.Fatal("expected Provider tab in overlay")
+	}
+}
+
+func TestChatViewportRemoveLastMessage(t *testing.T) {
+	cv := NewChatViewport(80, 20)
+	cv.AppendMessage(ChatMessage{Role: "user", Content: "Hello", Timestamp: time.Now()})
+	cv.AppendMessage(ChatMessage{Role: "thinking", Content: "thinking...", Timestamp: time.Now()})
+
+	if cv.MessageCount() != 2 {
+		t.Fatalf("expected 2 messages, got %d", cv.MessageCount())
+	}
+
+	cv.RemoveLastMessage()
+	if cv.MessageCount() != 1 {
+		t.Fatalf("expected 1 message after remove, got %d", cv.MessageCount())
+	}
+
+	view := cv.View()
+	if !strings.Contains(view, "Hello") {
+		t.Fatal("expected user message preserved after removing last")
+	}
+}
+
+func TestChatInputMultiLineView(t *testing.T) {
+	ci := NewChatInput(80, 24)
+	view := ci.View()
+
+	// Should contain separator line
+	if !strings.Contains(view, "─") {
+		t.Fatal("expected separator line in input view")
+	}
+
+	// Should contain hint line
+	if !strings.Contains(view, "Shift+Enter") {
+		t.Fatal("expected Shift+Enter hint in input view")
+	}
+
+	// Should contain prompt
+	if !strings.Contains(view, ">") {
+		t.Fatal("expected > prompt in input view")
+	}
+}
+
+func TestChatViewWelcomeMessage(t *testing.T) {
+	cv := NewChatView(nil, "mock", "default", "main", 80, 24)
+	view := cv.View()
+	if !strings.Contains(view, "NekoClaw") {
+		t.Fatal("expected welcome message containing NekoClaw")
+	}
+	if !strings.Contains(view, "/help") {
+		t.Fatal("expected /help hint in welcome message")
+	}
+}
+
+func TestChatInputInputHeight(t *testing.T) {
+	ci := NewChatInput(80, 24)
+	h := ci.InputHeight()
+	// Minimum: textarea(3) + separator(1) + hint(1) = 5
+	if h < 5 {
+		t.Fatalf("expected input height >= 5, got %d", h)
 	}
 }
 

@@ -231,6 +231,10 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		BaseURL: envOr("GOOGLE_AI_STUDIO_BASE_URL", ""),
 	})
 	svc.RegisterProvider(aiStudioProvider)
+	anthropicProvider := provider.NewAnthropicProvider(provider.AnthropicOptions{
+		BaseURL: envOr("ANTHROPIC_BASE_URL", ""),
+	})
+	svc.RegisterProvider(anthropicProvider)
 
 	accounts, err := loadAccounts(opts.AccountsPath)
 	if err != nil {
@@ -238,6 +242,7 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	}
 	accounts = append(accounts, loadGeminiAccountsFromEnv()...)
 	accounts = append(accounts, loadAIStudioAccountsFromEnv()...)
+	accounts = append(accounts, loadAnthropicAccountsFromEnv()...)
 
 	byProvider := map[string][]core.Account{}
 	for _, account := range accounts {
@@ -261,6 +266,9 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	if svc.Pool("google-ai-studio") == nil {
 		svc.RegisterPool(core.NewAccountPool("google-ai-studio", nil, nil, core.DefaultCooldownConfig()))
 	}
+	if svc.Pool("anthropic") == nil {
+		svc.RegisterPool(core.NewAccountPool("anthropic", nil, nil, core.DefaultCooldownConfig()))
+	}
 
 	// When all google-gemini-cli accounts are exhausted, try google-ai-studio.
 	// Reverse fallback is not registered because gemini-cli requires OAuth + project discovery.
@@ -276,12 +284,18 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		Port: resolveOAuthCallbackPort(opts.OAuthCallbackPort, opts.APIAddr),
 	})
 	svc.SetAuthIntegration(oauthManager, authStore)
+	svc.SetAnthropicLoginManager(auth.NewAnthropicLoginManager(auth.AnthropicLoginManagerOptions{
+		JobTTL: envOrDuration("NEKOCLAW_ANTHROPIC_BROWSER_LOGIN_TTL", 10*time.Minute),
+	}))
 
 	if err := hydrateGeminiProfiles(svc, authStore); err != nil {
 		return nil, fmt.Errorf("hydrate gemini profiles: %w", err)
 	}
 	if err := hydrateAIStudioProfiles(svc, authStore); err != nil {
 		return nil, fmt.Errorf("hydrate ai studio profiles: %w", err)
+	}
+	if err := hydrateAnthropicProfiles(svc, authStore); err != nil {
+		return nil, fmt.Errorf("hydrate anthropic profiles: %w", err)
 	}
 
 	return svc, nil
@@ -387,6 +401,53 @@ func hydrateAIStudioProfiles(svc *app.Service, store *auth.Store) error {
 	return nil
 }
 
+func hydrateAnthropicProfiles(svc *app.Service, store *auth.Store) error {
+	if svc == nil || store == nil {
+		return nil
+	}
+	pool := svc.Pool("anthropic")
+	if pool == nil {
+		return nil
+	}
+
+	profiles, err := store.ListProfiles("anthropic")
+	if err != nil {
+		return err
+	}
+	for _, profile := range profiles {
+		if strings.TrimSpace(profile.ProfileID) == "" {
+			continue
+		}
+		credential, err := store.LoadCredential(profile.Provider, profile.ProfileID)
+		if err != nil {
+			continue
+		}
+		accountType := core.AccountAPIKey
+		if strings.TrimSpace(profile.Type) == string(core.AccountToken) {
+			accountType = core.AccountToken
+		}
+		account := core.Account{
+			ID:       profile.ProfileID,
+			Provider: "anthropic",
+			Type:     accountType,
+			Token:    credential.AccessToken,
+			Metadata: core.Metadata{
+				"display_name": strings.TrimSpace(profile.DisplayName),
+				"key_hint":     strings.TrimSpace(profile.KeyHint),
+				"endpoint":     strings.TrimSpace(profile.Endpoint),
+			},
+		}
+		pool.SetCredential(profile.ProfileID, account)
+		log.Printf(
+			"event=profile_hydrated provider=anthropic profile_id=%s type=%s key_hint=%s",
+			profile.ProfileID,
+			accountType,
+			strings.TrimSpace(profile.KeyHint),
+		)
+	}
+	return nil
+}
+
 func loadAccounts(path string) ([]core.Account, error) {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
@@ -469,6 +530,73 @@ func loadAIStudioAccountsFromEnv() []core.Account {
 	return accounts
 }
 
+func loadAnthropicAccountsFromEnv() []core.Account {
+	type accountSeed struct {
+		secret      string
+		accountType core.AccountType
+	}
+
+	tokenSecrets := collectAnthropicTokensFromEnv()
+	keySecrets := collectAnthropicAPIKeysFromEnv()
+	if len(tokenSecrets) == 0 && len(keySecrets) == 0 {
+		return nil
+	}
+
+	seen := map[string]struct{}{}
+	seeds := make([]accountSeed, 0, len(tokenSecrets)+len(keySecrets))
+	for _, secret := range tokenSecrets {
+		secret = strings.TrimSpace(secret)
+		if secret == "" {
+			continue
+		}
+		key := string(core.AccountToken) + ":" + secret
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		seeds = append(seeds, accountSeed{secret: secret, accountType: core.AccountToken})
+	}
+	for _, secret := range keySecrets {
+		secret = strings.TrimSpace(secret)
+		if secret == "" {
+			continue
+		}
+		key := string(core.AccountAPIKey) + ":" + secret
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		seeds = append(seeds, accountSeed{secret: secret, accountType: core.AccountAPIKey})
+	}
+
+	accounts := make([]core.Account, 0, len(seeds))
+	for idx, seed := range seeds {
+		hint := maskAPIKeyHint(seed.secret)
+		suffix := strings.TrimPrefix(hint, "****")
+		if suffix == "" {
+			suffix = fmt.Sprintf("%d", idx+1)
+		}
+		typeSlug := "api"
+		displayName := fmt.Sprintf("api key %d", idx+1)
+		if seed.accountType == core.AccountToken {
+			typeSlug = "token"
+			displayName = fmt.Sprintf("setup token %d", idx+1)
+		}
+		profileID := fmt.Sprintf("anthropic:env_%s_%s_%d", typeSlug, suffix, idx+1)
+		accounts = append(accounts, core.Account{
+			ID:       profileID,
+			Provider: "anthropic",
+			Type:     seed.accountType,
+			Token:    seed.secret,
+			Metadata: core.Metadata{
+				"display_name": displayName,
+				"key_hint":     hint,
+			},
+		})
+	}
+	return accounts
+}
+
 func collectAIStudioKeysFromEnv() []string {
 	values := make([]string, 0, 8)
 	appendValue := func(v string) {
@@ -497,6 +625,112 @@ func collectAIStudioKeysFromEnv() []string {
 			continue
 		}
 		if strings.HasPrefix(name, "GEMINI_API_KEY_") || strings.HasPrefix(name, "GOOGLE_API_KEY_") {
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			prefixedValues = append(prefixedValues, prefixed{name: name, value: value})
+		}
+	}
+	sort.SliceStable(prefixedValues, func(i, j int) bool {
+		return prefixedValues[i].name < prefixedValues[j].name
+	})
+	for _, item := range prefixedValues {
+		appendValue(item.value)
+	}
+
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func collectAnthropicTokensFromEnv() []string {
+	values := make([]string, 0, 8)
+	appendValue := func(v string) {
+		if t := strings.TrimSpace(v); t != "" {
+			values = append(values, t)
+		}
+	}
+
+	for _, key := range []string{"ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_SETUP_TOKEN"} {
+		appendValue(os.Getenv(key))
+	}
+	for _, key := range []string{"ANTHROPIC_OAUTH_TOKENS"} {
+		for _, value := range splitCSV(os.Getenv(key)) {
+			appendValue(value)
+		}
+	}
+
+	type prefixed struct {
+		name  string
+		value string
+	}
+	prefixedValues := make([]prefixed, 0, 8)
+	for _, envEntry := range os.Environ() {
+		name, value, found := strings.Cut(envEntry, "=")
+		if !found {
+			continue
+		}
+		if strings.HasPrefix(name, "ANTHROPIC_OAUTH_TOKEN_") {
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			prefixedValues = append(prefixedValues, prefixed{name: name, value: value})
+		}
+	}
+	sort.SliceStable(prefixedValues, func(i, j int) bool {
+		return prefixedValues[i].name < prefixedValues[j].name
+	})
+	for _, item := range prefixedValues {
+		appendValue(item.value)
+	}
+
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func collectAnthropicAPIKeysFromEnv() []string {
+	values := make([]string, 0, 8)
+	appendValue := func(v string) {
+		if t := strings.TrimSpace(v); t != "" {
+			values = append(values, t)
+		}
+	}
+
+	for _, key := range []string{"ANTHROPIC_API_KEY"} {
+		appendValue(os.Getenv(key))
+	}
+	for _, key := range []string{"ANTHROPIC_API_KEYS"} {
+		for _, value := range splitCSV(os.Getenv(key)) {
+			appendValue(value)
+		}
+	}
+
+	type prefixed struct {
+		name  string
+		value string
+	}
+	prefixedValues := make([]prefixed, 0, 8)
+	for _, envEntry := range os.Environ() {
+		name, value, found := strings.Cut(envEntry, "=")
+		if !found {
+			continue
+		}
+		if strings.HasPrefix(name, "ANTHROPIC_API_KEY_") {
 			if strings.TrimSpace(value) == "" {
 				continue
 			}
@@ -573,6 +807,18 @@ func envOrInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func envOrDuration(key string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 func ensureGeminiOAuthEnvAliases() {

@@ -99,6 +99,115 @@ func TestHydrateAIStudioProfilesLoadsCredentials(t *testing.T) {
 	}
 }
 
+func TestLoadAnthropicAccountsFromEnv_MergesAndDedupes(t *testing.T) {
+	token1 := "sk-ant-oat01-" + strings.Repeat("a", 80)
+	token2 := "sk-ant-oat01-" + strings.Repeat("b", 80)
+	key1 := "sk-ant-api-1"
+	key2 := "sk-ant-api-2"
+	key3 := "sk-ant-api-3"
+
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN", token1)
+	t.Setenv("ANTHROPIC_SETUP_TOKEN", token1)
+	t.Setenv("ANTHROPIC_OAUTH_TOKENS", token2+","+token1)
+	t.Setenv("ANTHROPIC_OAUTH_TOKEN_TEAM", token2)
+	t.Setenv("ANTHROPIC_API_KEY", key1)
+	t.Setenv("ANTHROPIC_API_KEYS", key2+","+key1)
+	t.Setenv("ANTHROPIC_API_KEY_TEAM", key3)
+
+	accounts := loadAnthropicAccountsFromEnv()
+	if len(accounts) != 5 {
+		t.Fatalf("unexpected accounts length: %d", len(accounts))
+	}
+
+	type keyed struct {
+		secret string
+		typ    core.AccountType
+	}
+	seen := map[keyed]struct{}{}
+	for _, account := range accounts {
+		if account.Provider != "anthropic" {
+			t.Fatalf("unexpected provider: %s", account.Provider)
+		}
+		if strings.TrimSpace(account.Token) == "" {
+			t.Fatalf("missing token")
+		}
+		seen[keyed{secret: account.Token, typ: account.Type}] = struct{}{}
+	}
+	want := []keyed{
+		{secret: token1, typ: core.AccountToken},
+		{secret: token2, typ: core.AccountToken},
+		{secret: key1, typ: core.AccountAPIKey},
+		{secret: key2, typ: core.AccountAPIKey},
+		{secret: key3, typ: core.AccountAPIKey},
+	}
+	for _, item := range want {
+		if _, ok := seen[item]; !ok {
+			t.Fatalf("missing expected account: %+v", item)
+		}
+	}
+}
+
+func TestHydrateAnthropicProfilesLoadsCredentials(t *testing.T) {
+	svc := app.NewService(app.ServiceOptions{})
+	svc.RegisterPool(core.NewAccountPool("anthropic", nil, nil, core.DefaultCooldownConfig()))
+	store := mustNewAuthStore(t)
+
+	if err := store.SaveCredential("anthropic", "anthropic:token_main", auth.Credential{
+		AccessToken: "sk-ant-oat01-" + strings.Repeat("a", 80),
+	}); err != nil {
+		t.Fatalf("save token credential: %v", err)
+	}
+	if err := store.UpsertProfile(auth.ProfileMetadata{
+		ProfileID:   "anthropic:token_main",
+		Provider:    "anthropic",
+		Type:        string(core.AccountToken),
+		DisplayName: "token-main",
+		KeyHint:     "****aaaaaa",
+	}); err != nil {
+		t.Fatalf("upsert token profile: %v", err)
+	}
+
+	if err := store.SaveCredential("anthropic", "anthropic:key_main", auth.Credential{
+		AccessToken: "sk-ant-api-1",
+	}); err != nil {
+		t.Fatalf("save key credential: %v", err)
+	}
+	if err := store.UpsertProfile(auth.ProfileMetadata{
+		ProfileID:   "anthropic:key_main",
+		Provider:    "anthropic",
+		Type:        string(core.AccountAPIKey),
+		DisplayName: "key-main",
+		KeyHint:     "****pi-1",
+	}); err != nil {
+		t.Fatalf("upsert key profile: %v", err)
+	}
+
+	if err := hydrateAnthropicProfiles(svc, store); err != nil {
+		t.Fatalf("hydrate anthropic profiles: %v", err)
+	}
+
+	pool := svc.Pool("anthropic")
+	if pool == nil {
+		t.Fatalf("missing anthropic pool")
+	}
+
+	tokenAccount, ok := pool.GetAccount("anthropic:token_main")
+	if !ok {
+		t.Fatalf("expected token profile loaded")
+	}
+	if tokenAccount.Type != core.AccountToken {
+		t.Fatalf("unexpected token account type: %s", tokenAccount.Type)
+	}
+
+	keyAccount, ok := pool.GetAccount("anthropic:key_main")
+	if !ok {
+		t.Fatalf("expected api key profile loaded")
+	}
+	if keyAccount.Type != core.AccountAPIKey {
+		t.Fatalf("unexpected key account type: %s", keyAccount.Type)
+	}
+}
+
 func TestResolveDefaultLogFilePath_AuthDirParentRoot(t *testing.T) {
 	got := resolveDefaultLogFilePath("/tmp/custom/auth")
 	want := filepath.Join("/tmp/custom", "logs", "nekoclaw.log")

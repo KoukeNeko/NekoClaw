@@ -37,14 +37,14 @@ type ChatInput struct {
 	historyDraft string
 }
 
-func NewChatInput(width int) ChatInput {
+func NewChatInput(width, termHeight int) ChatInput {
 	ta := textarea.New()
-	ta.Placeholder = "Send a message..."
+	ta.Placeholder = "輸入訊息... (Shift+Enter 換行)"
 	ta.CharLimit = 0
 	ta.ShowLineNumbers = false
 	ta.SetWidth(width - 3) // account for "> " prefix
-	ta.SetHeight(1)
-	ta.MaxHeight = 10
+	ta.SetHeight(3)        // start at 3 lines — visually multi-line
+	ta.MaxHeight = responsiveMaxHeight(termHeight)
 
 	// Strip all border/padding styling for a clean look
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
@@ -58,6 +58,10 @@ func NewChatInput(width int) ChatInput {
 	ta.KeyMap.InsertNewline = key.NewBinding(
 		key.WithKeys("shift+enter", "alt+enter"),
 	)
+
+	// Focus during construction so the textarea accepts input immediately.
+	// Init() uses a value receiver — focus set there is lost on the copy.
+	ta.Focus()
 
 	ci := ChatInput{
 		textarea:     ta,
@@ -87,6 +91,24 @@ func (ci *ChatInput) Blur() {
 func (ci *ChatInput) SetWidth(width int) {
 	ci.width = width
 	ci.textarea.SetWidth(width - 3) // account for "> " prefix
+}
+
+// SetSize updates width and responsive max height.
+func (ci *ChatInput) SetSize(width, termHeight int) {
+	ci.width = width
+	ci.textarea.SetWidth(width - 3)
+	ci.textarea.MaxHeight = responsiveMaxHeight(termHeight)
+}
+
+func responsiveMaxHeight(termHeight int) int {
+	maxH := termHeight / 3
+	if maxH > 10 {
+		maxH = 10
+	}
+	if maxH < 3 {
+		maxH = 3
+	}
+	return maxH
 }
 
 func (ci *ChatInput) Value() string {
@@ -165,6 +187,10 @@ func (ci *ChatInput) Update(msg tea.Msg) tea.Cmd {
 func (ci ChatInput) View() string {
 	var sb strings.Builder
 
+	// Visual separator between messages and input
+	sb.WriteString(theme.SystemStyle.Render(strings.Repeat("─", ci.width)))
+	sb.WriteString("\n")
+
 	// Slash command suggestions above the input
 	if ci.showSuggestions && len(ci.suggestions) > 0 {
 		for i, cmd := range ci.suggestions {
@@ -179,15 +205,22 @@ func (ci ChatInput) View() string {
 		}
 	}
 
-	// Clean "> " prompt prefix + textarea
+	// Prompt + textarea
 	sb.WriteString(theme.PromptStyle.Render("> "))
 	sb.WriteString(ci.textarea.View())
+	sb.WriteString("\n")
+
+	// Keybinding hint line
+	sb.WriteString(theme.HintStyle.Render("  Shift+Enter 換行 · Enter 送出 · Esc 設定"))
+
 	return sb.String()
 }
 
-// InputHeight returns the current rendered height of the input component.
+// InputHeight returns the current rendered height of the input component
+// including separator line, suggestions, textarea, and hint line.
 func (ci ChatInput) InputHeight() int {
 	h := ci.textarea.Height()
+	h += 2 // separator line + hint line
 	if ci.showSuggestions && len(ci.suggestions) > 0 {
 		h += len(ci.suggestions)
 	}

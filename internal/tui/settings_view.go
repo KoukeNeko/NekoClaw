@@ -164,6 +164,18 @@ func (sv *SettingsView) Update(msg tea.Msg) tea.Cmd {
 		return sv.auth.HandleAIStudioProfiles(msg)
 	case AIStudioProfileActionMsg:
 		return sv.auth.HandleAIStudioAction(msg)
+	case AnthropicAddMsg:
+		return sv.auth.HandleAnthropicAdd(msg)
+	case AnthropicProfilesMsg:
+		return sv.auth.HandleAnthropicProfiles(msg)
+	case AnthropicProfileActionMsg:
+		return sv.auth.HandleAnthropicAction(msg)
+	case AnthropicBrowserStartMsg:
+		return sv.auth.HandleAnthropicBrowserStart(msg, sv.apiClient)
+	case AnthropicBrowserJobMsg:
+		return sv.auth.HandleAnthropicBrowserJob(msg, sv.apiClient)
+	case AnthropicBrowserCancelMsg:
+		return sv.auth.HandleAnthropicBrowserCancel(msg)
 	case SessionsListMsg:
 		return sv.session.HandleSessionsList(msg)
 	case SessionDeleteMsg:
@@ -184,6 +196,7 @@ func (sv *SettingsView) enterSection() tea.Cmd {
 		return tea.Batch(
 			listGeminiProfilesCmd(sv.apiClient),
 			listAIStudioProfilesCmd(sv.apiClient),
+			listAnthropicProfilesCmd(sv.apiClient),
 		)
 	case SectionSessions:
 		return listSessionsCmd(sv.apiClient)

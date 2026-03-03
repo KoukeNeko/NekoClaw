@@ -24,6 +24,7 @@ var ErrProviderNotFound = errors.New("provider not found")
 var ErrNoAvailableAccount = errors.New("no available account")
 var ErrGeminiMissingProject = errors.New("gemini project is required")
 var ErrInvalidAPIKey = errors.New("invalid api key")
+var ErrInvalidSetupToken = errors.New("invalid setup token")
 var ErrKeyValidationFailed = errors.New("key validation failed")
 var ErrProfileNotFound = errors.New("profile not found")
 var ErrProfileInUse = errors.New("profile in use")
@@ -36,6 +37,7 @@ type Service struct {
 	sessions          *core.SessionStore
 	lifecycle         *core.SessionLifecycle
 	oauthManager      *auth.GeminiOAuthManager
+	anthropicLoginMgr *auth.AnthropicLoginManager
 	authStore         *auth.Store
 	memoryDir         string
 	searchIndex       *memory.SearchIndex
@@ -107,6 +109,12 @@ func (s *Service) SetAuthIntegration(manager *auth.GeminiOAuthManager, store *au
 	defer s.mu.Unlock()
 	s.oauthManager = manager
 	s.authStore = store
+}
+
+func (s *Service) SetAnthropicLoginManager(manager *auth.AnthropicLoginManager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.anthropicLoginMgr = manager
 }
 
 func (s *Service) Providers() []string {
@@ -215,6 +223,90 @@ type AIStudioModelsResult struct {
 	Models      []string  `json:"models"`
 	Source      string    `json:"source"`
 	CachedUntil time.Time `json:"cached_until,omitempty"`
+}
+
+type AnthropicAddTokenRequest struct {
+	SetupToken   string `json:"setup_token"`
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+}
+
+type AnthropicAddAPIKeyRequest struct {
+	APIKey       string `json:"api_key"`
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+}
+
+type AnthropicAddCredentialResult struct {
+	ProfileID   string `json:"profile_id"`
+	Provider    string `json:"provider"`
+	Type        string `json:"type"`
+	DisplayName string `json:"display_name"`
+	KeyHint     string `json:"key_hint"`
+	Preferred   bool   `json:"preferred"`
+	Available   bool   `json:"available"`
+}
+
+type AnthropicBrowserStartRequest struct {
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+	Mode         string `json:"mode,omitempty"` // auto|local|remote
+}
+
+type AnthropicBrowserStartResult struct {
+	JobID      string    `json:"job_id"`
+	Provider   string    `json:"provider"`
+	Mode       string    `json:"mode"`
+	Status     string    `json:"status"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	Message    string    `json:"message,omitempty"`
+	ManualHint string    `json:"manual_hint,omitempty"`
+}
+
+type AnthropicBrowserJobEvent struct {
+	At      time.Time `json:"at"`
+	Message string    `json:"message"`
+}
+
+type AnthropicBrowserJobResult struct {
+	JobID        string                     `json:"job_id"`
+	Provider     string                     `json:"provider"`
+	Mode         string                     `json:"mode"`
+	Status       string                     `json:"status"`
+	Events       []AnthropicBrowserJobEvent `json:"events,omitempty"`
+	ProfileID    string                     `json:"profile_id,omitempty"`
+	KeyHint      string                     `json:"key_hint,omitempty"`
+	ExpiresAt    time.Time                  `json:"expires_at"`
+	Message      string                     `json:"message,omitempty"`
+	ManualHint   string                     `json:"manual_hint,omitempty"`
+	ErrorCode    string                     `json:"error_code,omitempty"`
+	ErrorMessage string                     `json:"error_message,omitempty"`
+}
+
+type AnthropicBrowserManualCompleteRequest struct {
+	JobID        string `json:"job_id"`
+	SetupToken   string `json:"setup_token"`
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+}
+
+type AnthropicProfileStatus struct {
+	ProfileID      string    `json:"profile_id"`
+	Provider       string    `json:"provider"`
+	Type           string    `json:"type"`
+	DisplayName    string    `json:"display_name,omitempty"`
+	KeyHint        string    `json:"key_hint,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	Available      bool      `json:"available"`
+	CooldownUntil  time.Time `json:"cooldown_until,omitempty"`
+	DisabledUntil  time.Time `json:"disabled_until,omitempty"`
+	DisabledReason string    `json:"disabled_reason,omitempty"`
+	Preferred      bool      `json:"preferred"`
 }
 
 func (s *Service) StartGeminiOAuth(ctx context.Context, req GeminiOAuthStartRequest) (auth.StartResult, error) {
@@ -655,6 +747,440 @@ func (s *Service) ListAIStudioModels(ctx context.Context, profileID string) (AIS
 		Models:      models,
 		Source:      chooseFirstNonEmpty(source, "live"),
 		CachedUntil: cachedUntil,
+	}, nil
+}
+
+func (s *Service) AddAnthropicToken(_ context.Context, req AnthropicAddTokenRequest) (AnthropicAddCredentialResult, error) {
+	setupToken := strings.TrimSpace(req.SetupToken)
+	if err := provider.ValidateAnthropicSetupToken(setupToken); err != nil {
+		return AnthropicAddCredentialResult{}, fmt.Errorf("%w: %v", ErrInvalidSetupToken, err)
+	}
+	return s.addAnthropicCredential(commonAnthropicAddRequest{
+		secret:       setupToken,
+		accountType:  core.AccountToken,
+		displayName:  req.DisplayName,
+		profileID:    req.ProfileID,
+		setPreferred: req.SetPreferred,
+	})
+}
+
+func (s *Service) AddAnthropicAPIKey(_ context.Context, req AnthropicAddAPIKeyRequest) (AnthropicAddCredentialResult, error) {
+	apiKey := strings.TrimSpace(req.APIKey)
+	if apiKey == "" {
+		return AnthropicAddCredentialResult{}, fmt.Errorf("%w: api_key is required", ErrInvalidAPIKey)
+	}
+	return s.addAnthropicCredential(commonAnthropicAddRequest{
+		secret:       apiKey,
+		accountType:  core.AccountAPIKey,
+		displayName:  req.DisplayName,
+		profileID:    req.ProfileID,
+		setPreferred: req.SetPreferred,
+	})
+}
+
+func (s *Service) ListAnthropicProfiles() ([]AnthropicProfileStatus, error) {
+	store := s.authStoreSafe()
+	if store == nil {
+		return nil, fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	profiles, err := store.ListProfiles("anthropic")
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.RLock()
+	preferred := s.preferredProfiles["anthropic"]
+	pool := s.pools["anthropic"]
+	s.mu.RUnlock()
+
+	snapByID := map[string]core.AccountSnapshot{}
+	if pool != nil {
+		for _, snap := range pool.Snapshot() {
+			snapByID[snap.ID] = snap
+		}
+	}
+	now := time.Now()
+	result := make([]AnthropicProfileStatus, 0, len(profiles))
+	for _, profile := range profiles {
+		status := AnthropicProfileStatus{
+			ProfileID:   profile.ProfileID,
+			Provider:    profile.Provider,
+			Type:        profile.Type,
+			DisplayName: strings.TrimSpace(profile.DisplayName),
+			KeyHint:     strings.TrimSpace(profile.KeyHint),
+			CreatedAt:   profile.CreatedAt,
+			UpdatedAt:   profile.UpdatedAt,
+			Preferred:   profile.ProfileID == preferred,
+		}
+		if snap, ok := snapByID[profile.ProfileID]; ok {
+			if status.DisplayName == "" {
+				status.DisplayName = strings.TrimSpace(snap.Metadata["display_name"])
+			}
+			if status.KeyHint == "" {
+				status.KeyHint = strings.TrimSpace(snap.Metadata["key_hint"])
+			}
+			if snap.Usage != nil {
+				status.CooldownUntil = snap.Usage.CooldownUntil
+				status.DisabledUntil = snap.Usage.DisabledUntil
+				status.DisabledReason = string(snap.Usage.DisabledReason)
+				status.Available = (snap.Usage.CooldownUntil.IsZero() || now.After(snap.Usage.CooldownUntil)) &&
+					(snap.Usage.DisabledUntil.IsZero() || now.After(snap.Usage.DisabledUntil))
+			} else {
+				status.Available = true
+			}
+		} else {
+			status.CooldownUntil = profile.CooldownUntil
+			status.DisabledUntil = profile.DisabledUntil
+			status.DisabledReason = profile.DisabledReason
+			status.Available = (profile.CooldownUntil.IsZero() || now.After(profile.CooldownUntil)) &&
+				(profile.DisabledUntil.IsZero() || now.After(profile.DisabledUntil))
+		}
+		result = append(result, status)
+	}
+	return result, nil
+}
+
+func (s *Service) UseAnthropicProfile(profileID string) error {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		return fmt.Errorf("profile_id is required")
+	}
+	store := s.authStoreSafe()
+	if store == nil {
+		return fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	if _, err := store.GetProfile("anthropic", profileID); err != nil {
+		if errors.Is(err, auth.ErrProfileNotFound) {
+			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		}
+		return err
+	}
+
+	s.mu.Lock()
+	pool := s.pools["anthropic"]
+	s.preferredProfiles["anthropic"] = profileID
+	s.mu.Unlock()
+	if pool != nil {
+		if ok := pool.SetPreferred(profileID); !ok {
+			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		}
+	}
+	log.Printf("event=anthropic_profile_use provider=anthropic profile_id=%s", profileID)
+	return nil
+}
+
+func (s *Service) DeleteAnthropicProfile(profileID string) error {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		return fmt.Errorf("profile_id is required")
+	}
+	store := s.authStoreSafe()
+	if store == nil {
+		return fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	if _, err := store.GetProfile("anthropic", profileID); err != nil {
+		if errors.Is(err, auth.ErrProfileNotFound) {
+			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		}
+		return err
+	}
+
+	_ = store.DeleteCredential("anthropic", profileID)
+	if err := store.DeleteProfile("anthropic", profileID); err != nil && !errors.Is(err, auth.ErrProfileNotFound) {
+		return err
+	}
+
+	s.mu.Lock()
+	if s.preferredProfiles["anthropic"] == profileID {
+		delete(s.preferredProfiles, "anthropic")
+	}
+	pool := s.pools["anthropic"]
+	s.mu.Unlock()
+	if pool != nil {
+		pool.RemoveAccount(profileID)
+	}
+	log.Printf("event=anthropic_profile_delete provider=anthropic profile_id=%s", profileID)
+	return nil
+}
+
+func (s *Service) StartAnthropicBrowserLogin(
+	ctx context.Context,
+	req AnthropicBrowserStartRequest,
+) (AnthropicBrowserStartResult, error) {
+	manager := s.anthropicLoginManagerSafe()
+	if manager == nil {
+		return AnthropicBrowserStartResult{}, fmt.Errorf("%w: anthropic login manager not configured", ErrProviderNotReady)
+	}
+	if _, _, err := s.resolveProviderPool("anthropic"); err != nil {
+		return AnthropicBrowserStartResult{}, fmt.Errorf("%w: %v", ErrProviderNotReady, err)
+	}
+
+	snapshot, err := manager.Start(ctx, auth.AnthropicLoginStartRequest{
+		DisplayName:  strings.TrimSpace(req.DisplayName),
+		ProfileID:    strings.TrimSpace(req.ProfileID),
+		SetPreferred: req.SetPreferred,
+		Mode:         strings.TrimSpace(req.Mode),
+		OnToken: func(_ context.Context, token, displayName, profileID string, setPreferred bool) (auth.AnthropicPersistResult, error) {
+			added, addErr := s.addAnthropicCredential(commonAnthropicAddRequest{
+				secret:       token,
+				accountType:  core.AccountToken,
+				displayName:  displayName,
+				profileID:    profileID,
+				setPreferred: setPreferred,
+			})
+			if addErr != nil {
+				return auth.AnthropicPersistResult{}, addErr
+			}
+			return auth.AnthropicPersistResult{
+				ProfileID:   added.ProfileID,
+				DisplayName: added.DisplayName,
+				KeyHint:     added.KeyHint,
+				Preferred:   added.Preferred,
+			}, nil
+		},
+	})
+	if err != nil {
+		return AnthropicBrowserStartResult{}, err
+	}
+	log.Printf(
+		"event=anthropic_browser_login_start provider=anthropic job_id=%s mode=%s status=%s",
+		snapshot.JobID,
+		snapshot.Mode,
+		snapshot.Status,
+	)
+	return AnthropicBrowserStartResult{
+		JobID:      snapshot.JobID,
+		Provider:   snapshot.Provider,
+		Mode:       snapshot.Mode,
+		Status:     snapshot.Status,
+		ExpiresAt:  snapshot.ExpiresAt,
+		Message:    snapshot.Message,
+		ManualHint: snapshot.ManualHint,
+	}, nil
+}
+
+func (s *Service) GetAnthropicBrowserLoginJob(
+	_ context.Context,
+	jobID string,
+) (AnthropicBrowserJobResult, error) {
+	manager := s.anthropicLoginManagerSafe()
+	if manager == nil {
+		return AnthropicBrowserJobResult{}, fmt.Errorf("%w: anthropic login manager not configured", ErrProviderNotReady)
+	}
+	snapshot, err := manager.Get(strings.TrimSpace(jobID))
+	if err != nil {
+		return AnthropicBrowserJobResult{}, err
+	}
+	events := make([]AnthropicBrowserJobEvent, 0, len(snapshot.Events))
+	for _, event := range snapshot.Events {
+		events = append(events, AnthropicBrowserJobEvent{
+			At:      event.At,
+			Message: event.Message,
+		})
+	}
+	if snapshot.Status == string(auth.AnthropicLoginStatusCompleted) {
+		log.Printf(
+			"event=anthropic_browser_login_complete provider=anthropic job_id=%s profile_id=%s",
+			snapshot.JobID,
+			snapshot.ProfileID,
+		)
+	}
+	if snapshot.Status == string(auth.AnthropicLoginStatusFailed) {
+		log.Printf(
+			"event=anthropic_browser_login_failed provider=anthropic job_id=%s failure_reason=%s",
+			snapshot.JobID,
+			snapshot.ErrorCode,
+		)
+	}
+	return AnthropicBrowserJobResult{
+		JobID:        snapshot.JobID,
+		Provider:     snapshot.Provider,
+		Mode:         snapshot.Mode,
+		Status:       snapshot.Status,
+		Events:       events,
+		ProfileID:    snapshot.ProfileID,
+		KeyHint:      snapshot.KeyHint,
+		ExpiresAt:    snapshot.ExpiresAt,
+		Message:      snapshot.Message,
+		ManualHint:   snapshot.ManualHint,
+		ErrorCode:    snapshot.ErrorCode,
+		ErrorMessage: snapshot.ErrorMessage,
+	}, nil
+}
+
+func (s *Service) CompleteAnthropicBrowserLoginManual(
+	ctx context.Context,
+	req AnthropicBrowserManualCompleteRequest,
+) (AnthropicAddCredentialResult, error) {
+	manager := s.anthropicLoginManagerSafe()
+	if manager == nil {
+		return AnthropicAddCredentialResult{}, fmt.Errorf("%w: anthropic login manager not configured", ErrProviderNotReady)
+	}
+	snapshot, err := manager.CompleteManual(ctx, auth.AnthropicLoginManualCompleteRequest{
+		JobID:        strings.TrimSpace(req.JobID),
+		SetupToken:   strings.TrimSpace(req.SetupToken),
+		DisplayName:  strings.TrimSpace(req.DisplayName),
+		ProfileID:    strings.TrimSpace(req.ProfileID),
+		SetPreferred: req.SetPreferred,
+		OnToken: func(_ context.Context, token, displayName, profileID string, setPreferred bool) (auth.AnthropicPersistResult, error) {
+			added, addErr := s.addAnthropicCredential(commonAnthropicAddRequest{
+				secret:       token,
+				accountType:  core.AccountToken,
+				displayName:  displayName,
+				profileID:    profileID,
+				setPreferred: setPreferred,
+			})
+			if addErr != nil {
+				return auth.AnthropicPersistResult{}, addErr
+			}
+			return auth.AnthropicPersistResult{
+				ProfileID:   added.ProfileID,
+				DisplayName: added.DisplayName,
+				KeyHint:     added.KeyHint,
+				Preferred:   added.Preferred,
+			}, nil
+		},
+	})
+	if err != nil {
+		return AnthropicAddCredentialResult{}, err
+	}
+	displayName := strings.TrimSpace(req.DisplayName)
+	if store := s.authStoreSafe(); store != nil && strings.TrimSpace(snapshot.ProfileID) != "" {
+		if profile, getErr := store.GetProfile("anthropic", snapshot.ProfileID); getErr == nil {
+			if displayName == "" {
+				displayName = strings.TrimSpace(profile.DisplayName)
+			}
+		}
+	}
+	if displayName == "" {
+		displayName = chooseFirstNonEmpty(snapshot.ProfileID, "anthropic token")
+	}
+	preferred := s.preferredProfile("anthropic") == strings.TrimSpace(snapshot.ProfileID)
+	return AnthropicAddCredentialResult{
+		ProfileID:   snapshot.ProfileID,
+		Provider:    "anthropic",
+		Type:        string(core.AccountToken),
+		DisplayName: displayName,
+		KeyHint:     snapshot.KeyHint,
+		Preferred:   preferred,
+		Available:   true,
+	}, nil
+}
+
+func (s *Service) CancelAnthropicBrowserLogin(
+	_ context.Context,
+	jobID string,
+) (auth.AnthropicLoginCancelResult, error) {
+	manager := s.anthropicLoginManagerSafe()
+	if manager == nil {
+		return auth.AnthropicLoginCancelResult{}, fmt.Errorf("%w: anthropic login manager not configured", ErrProviderNotReady)
+	}
+	result, err := manager.Cancel(strings.TrimSpace(jobID))
+	if err != nil {
+		return auth.AnthropicLoginCancelResult{}, err
+	}
+	log.Printf(
+		"event=anthropic_browser_login_cancelled provider=anthropic job_id=%s status=%s",
+		result.JobID,
+		result.Status,
+	)
+	return result, nil
+}
+
+type commonAnthropicAddRequest struct {
+	secret       string
+	accountType  core.AccountType
+	displayName  string
+	profileID    string
+	setPreferred bool
+}
+
+func (s *Service) addAnthropicCredential(req commonAnthropicAddRequest) (AnthropicAddCredentialResult, error) {
+	store := s.authStoreSafe()
+	if store == nil {
+		return AnthropicAddCredentialResult{}, fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	prov, pool, err := s.resolveProviderPool("anthropic")
+	if err != nil {
+		return AnthropicAddCredentialResult{}, fmt.Errorf("%w: %v", ErrProviderNotReady, err)
+	}
+
+	secret := strings.TrimSpace(req.secret)
+	accountType := req.accountType
+	displayName := strings.TrimSpace(req.displayName)
+	profileID := strings.TrimSpace(req.profileID)
+
+	if profileID == "" {
+		profileID = deriveAnthropicProfileID(accountType, displayName, secret)
+	}
+	keyHint := maskAPIKeyForHint(secret)
+	if displayName == "" {
+		if accountType == core.AccountToken {
+			displayName = "Anthropic setup-token " + keyHint
+		} else {
+			displayName = "Anthropic api-key " + keyHint
+		}
+	}
+
+	if err := store.SaveCredential("anthropic", profileID, auth.Credential{
+		AccessToken: secret,
+	}); err != nil {
+		return AnthropicAddCredentialResult{}, err
+	}
+
+	meta := auth.ProfileMetadata{
+		ProfileID:   profileID,
+		Provider:    "anthropic",
+		Type:        string(accountType),
+		DisplayName: displayName,
+		KeyHint:     keyHint,
+		Endpoint:    pEndpoint(prov),
+	}
+	if err := store.UpsertProfile(meta); err != nil {
+		_ = store.DeleteCredential("anthropic", profileID)
+		return AnthropicAddCredentialResult{}, err
+	}
+
+	pool.SetCredential(profileID, core.Account{
+		ID:       profileID,
+		Provider: "anthropic",
+		Type:     accountType,
+		Token:    secret,
+		Metadata: core.Metadata{
+			"display_name": displayName,
+			"key_hint":     keyHint,
+		},
+	})
+
+	preferred := req.setPreferred
+	if !preferred {
+		snapshots := pool.Snapshot()
+		preferred = len(snapshots) == 1
+	}
+	if preferred {
+		s.mu.Lock()
+		s.preferredProfiles["anthropic"] = profileID
+		s.mu.Unlock()
+		_ = pool.SetPreferred(profileID)
+	}
+
+	s.syncProfileState("anthropic", profileID)
+	log.Printf(
+		"event=anthropic_profile_add provider=anthropic profile_id=%s type=%s key_hint=%s preferred=%t",
+		profileID,
+		accountType,
+		keyHint,
+		preferred,
+	)
+
+	return AnthropicAddCredentialResult{
+		ProfileID:   profileID,
+		Provider:    "anthropic",
+		Type:        string(accountType),
+		DisplayName: displayName,
+		KeyHint:     keyHint,
+		Preferred:   preferred,
+		Available:   true,
 	}, nil
 }
 
@@ -1117,6 +1643,12 @@ func (s *Service) oauthManagerSafe() *auth.GeminiOAuthManager {
 	return s.oauthManager
 }
 
+func (s *Service) anthropicLoginManagerSafe() *auth.AnthropicLoginManager {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.anthropicLoginMgr
+}
+
 func (s *Service) authStoreSafe() *auth.Store {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1372,6 +1904,8 @@ func fallbackDefaultModel(providerID string) string {
 		return "gemini-3-pro-preview"
 	case "google-ai-studio":
 		return "gemini-2.5-pro"
+	case "anthropic":
+		return "claude-sonnet-4-6"
 	default:
 		return "default"
 	}
@@ -1469,6 +2003,28 @@ func deriveAIStudioProfileID(displayName, apiKey string) string {
 		suffix = fmt.Sprintf("%d", time.Now().Unix())
 	}
 	return "google-ai-studio:" + base + "_" + suffix
+}
+
+func deriveAnthropicProfileID(accountType core.AccountType, displayName, secret string) string {
+	base := strings.TrimSpace(strings.ToLower(displayName))
+	if base == "" {
+		if accountType == core.AccountToken {
+			base = "setup_token"
+		} else {
+			base = "api_key"
+		}
+	}
+	base = sanitizeProfileSlug(base)
+
+	suffix := strings.TrimSpace(secret)
+	if len(suffix) > 6 {
+		suffix = suffix[len(suffix)-6:]
+	}
+	suffix = sanitizeProfileSlug(strings.ToLower(suffix))
+	if suffix == "" {
+		suffix = fmt.Sprintf("%d", time.Now().Unix())
+	}
+	return "anthropic:" + base + "_" + suffix
 }
 
 func sanitizeProfileSlug(raw string) string {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/doeshing/nekoclaw/internal/client"
+	"github.com/doeshing/nekoclaw/internal/termclean"
 )
 
 // ---------------------------------------------------------------------------
@@ -27,6 +28,7 @@ func fallback(value, fallbackValue string) string {
 }
 
 func clampLine(text string, max int) string {
+	text = sanitizeDisplayText(text)
 	if max <= 0 {
 		return text
 	}
@@ -241,6 +243,17 @@ func sortedAIStudioProfiles(in []client.AIStudioProfile) []client.AIStudioProfil
 	return profiles
 }
 
+func sortedAnthropicProfiles(in []client.AnthropicProfile) []client.AnthropicProfile {
+	profiles := append([]client.AnthropicProfile(nil), in...)
+	sort.SliceStable(profiles, func(i, j int) bool {
+		if profiles[i].Preferred != profiles[j].Preferred {
+			return profiles[i].Preferred
+		}
+		return profiles[i].ProfileID < profiles[j].ProfileID
+	})
+	return profiles
+}
+
 func formatProfileLine(profile client.GeminiAuthProfile) string {
 	state := "available"
 	if !profile.Available {
@@ -278,6 +291,8 @@ func modelOptionsForProvider(providerID, current string) []string {
 		models = []string{"default", "gemini-3-pro-preview", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-2.5-flash"}
 	case "google-ai-studio":
 		models = []string{"default", "gemini-2.5-pro", "gemini-2.5-flash"}
+	case "anthropic":
+		models = []string{"default", "claude-sonnet-4-6", "claude-opus-4-6", "claude-sonnet-4-5", "claude-haiku-3-5"}
 	case "mock":
 		models = []string{"default"}
 	}
@@ -296,7 +311,7 @@ func dimLines(content string) string {
 	lines := strings.Split(content, "\n")
 	dimStyle := theme.DimStyle
 	for i, line := range lines {
-		plain := stripAnsi(line)
+		plain := stripTerminalControlSequences(line)
 		lines[i] = dimStyle.Render(plain)
 	}
 	return strings.Join(lines, "\n")
@@ -365,21 +380,13 @@ func centerOverlay(bg, overlay string, bgW, bgH int) string {
 
 // stripAnsi removes ANSI escape codes from a string.
 func stripAnsi(s string) string {
-	var result strings.Builder
-	result.Grow(len(s))
-	inEscape := false
-	for _, r := range s {
-		if r == '\x1b' {
-			inEscape = true
-			continue
-		}
-		if inEscape {
-			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
-				inEscape = false
-			}
-			continue
-		}
-		result.WriteRune(r)
-	}
-	return result.String()
+	return stripTerminalControlSequences(s)
+}
+
+func stripTerminalControlSequences(s string) string {
+	return termclean.StripTerminalControlSequences(s)
+}
+
+func sanitizeDisplayText(s string) string {
+	return termclean.SanitizeDisplayText(s)
 }

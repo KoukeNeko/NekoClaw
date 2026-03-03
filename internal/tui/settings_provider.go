@@ -32,7 +32,7 @@ func (ps *ProviderSection) SetModel(m string)    { ps.currentModel = m }
 
 func (ps *ProviderSection) HandleProviders(msg ProvidersMsg) tea.Cmd {
 	if msg.Err != nil {
-		ps.providers = []string{"mock", "google-gemini-cli", "google-ai-studio"}
+		ps.providers = []string{"mock", "google-gemini-cli", "google-ai-studio", "anthropic"}
 	} else {
 		ps.providers = msg.Providers
 	}
