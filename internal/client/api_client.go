@@ -1183,3 +1183,87 @@ func (c *APIClient) ToggleMCPBuiltin(ctx context.Context, name string, enabled b
 	var out map[string]any
 	return c.doAndDecodeJSON(httpReq, &out)
 }
+
+// ---------------------------------------------------------------------------
+// Personas
+// ---------------------------------------------------------------------------
+
+// PersonaInfo is a lightweight persona summary returned by the API.
+type PersonaInfo struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	DirName     string `json:"dir_name"`
+}
+
+// ListPersonas returns all available personas.
+func (c *APIClient) ListPersonas(ctx context.Context) ([]PersonaInfo, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/personas", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Personas []PersonaInfo `json:"personas"`
+	}
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return nil, err
+	}
+	return out.Personas, nil
+}
+
+// ActivePersona returns the currently active persona, or nil if none.
+func (c *APIClient) ActivePersona(ctx context.Context) (*PersonaInfo, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/personas/active", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Persona *PersonaInfo `json:"persona"`
+	}
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return nil, err
+	}
+	return out.Persona, nil
+}
+
+// UsePersona activates a persona by its directory name.
+func (c *APIClient) UsePersona(ctx context.Context, dirName string) error {
+	payload, err := json.Marshal(map[string]any{
+		"dir_name": strings.TrimSpace(dirName),
+	})
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/personas/use",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out map[string]any
+	return c.doAndDecodeJSON(httpReq, &out)
+}
+
+// ClearPersona deactivates the current persona.
+func (c *APIClient) ClearPersona(ctx context.Context) error {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/personas/clear", nil)
+	if err != nil {
+		return err
+	}
+	var out map[string]any
+	return c.doAndDecodeJSON(httpReq, &out)
+}
+
+// ReloadPersonas re-scans the persona directory.
+func (c *APIClient) ReloadPersonas(ctx context.Context) error {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/personas/reload", nil)
+	if err != nil {
+		return err
+	}
+	var out map[string]any
+	return c.doAndDecodeJSON(httpReq, &out)
+}

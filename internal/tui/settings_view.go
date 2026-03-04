@@ -14,6 +14,7 @@ type SettingsSection int
 
 const (
 	SectionProvider SettingsSection = iota
+	SectionPersona
 	SectionAuth
 	SectionSessions
 	SectionMemory
@@ -21,7 +22,7 @@ const (
 	SectionMCP
 )
 
-var sectionNames = []string{"Provider", "Auth", "Sessions", "Memory", "Usage", "MCP"}
+var sectionNames = []string{"Provider", "Persona", "Auth", "Sessions", "Memory", "Usage", "MCP"}
 
 // SettingsView is a modal overlay with tabbed navigation.
 type SettingsView struct {
@@ -30,6 +31,7 @@ type SettingsView struct {
 	initialized   bool // tracks whether enterSection has been called for current tab
 
 	provider ProviderSection
+	persona  PersonaSection
 	auth     AuthSection
 	session  SessionSection
 	memory   MemorySection
@@ -50,6 +52,7 @@ func NewSettingsView(apiClient *client.APIClient, providerID, modelID, sessionID
 	return SettingsView{
 		activeSection: SectionProvider,
 		provider:      NewProviderSection(providerID, modelID),
+		persona:       NewPersonaSection(),
 		auth:          NewAuthSection(),
 		session:       NewSessionSection(sessionID),
 		memory:        NewMemorySection(),
@@ -223,6 +226,34 @@ func (sv *SettingsView) Update(msg tea.Msg) tea.Cmd {
 		cmd := sv.mcp.HandleBuiltinToggle(msg)
 		// Refresh full list after toggle to get accurate tool counts and statuses.
 		return tea.Batch(cmd, listMCPServersCmd(sv.apiClient), listMCPBuiltinCmd(sv.apiClient))
+	case PersonasListMsg:
+		return sv.persona.HandlePersonasList(msg)
+	case PersonaActiveMsg:
+		return sv.persona.HandlePersonaActive(msg)
+	case PersonaUseMsg:
+		cmd := sv.persona.HandlePersonaUse(msg)
+		if msg.Err == nil {
+			// Notify the app about the persona change.
+			name := msg.DirName
+			for _, p := range sv.persona.personas {
+				if p.DirName == msg.DirName {
+					name = p.Name
+					break
+				}
+			}
+			return tea.Batch(cmd, func() tea.Msg {
+				return PersonaChangedMsg{Name: name}
+			})
+		}
+		return cmd
+	case PersonaClearMsg:
+		cmd := sv.persona.HandlePersonaClear(msg)
+		if msg.Err == nil {
+			return tea.Batch(cmd, func() tea.Msg {
+				return PersonaChangedMsg{Name: ""}
+			})
+		}
+		return cmd
 	}
 
 	return nil
@@ -233,6 +264,11 @@ func (sv *SettingsView) enterSection() tea.Cmd {
 	switch sv.activeSection {
 	case SectionProvider:
 		return loadProvidersCmd(sv.apiClient)
+	case SectionPersona:
+		return tea.Batch(
+			listPersonasCmd(sv.apiClient),
+			activePersonaCmd(sv.apiClient),
+		)
 	case SectionAuth:
 		return tea.Batch(
 			listGeminiProfilesCmd(sv.apiClient),
@@ -260,6 +296,8 @@ func (sv *SettingsView) sectionHasActiveInput() bool {
 	switch sv.activeSection {
 	case SectionProvider:
 		return false
+	case SectionPersona:
+		return sv.persona.HasActiveInput()
 	case SectionAuth:
 		return sv.auth.HasActiveInput()
 	case SectionSessions:
@@ -278,6 +316,8 @@ func (sv *SettingsView) delegateToSection(msg tea.KeyMsg) tea.Cmd {
 	switch sv.activeSection {
 	case SectionProvider:
 		return sv.provider.Update(msg, sv.apiClient, sv.providerID)
+	case SectionPersona:
+		return sv.persona.Update(msg, sv.apiClient)
 	case SectionAuth:
 		return sv.auth.Update(msg, sv.apiClient)
 	case SectionSessions:
@@ -328,6 +368,8 @@ func (sv SettingsView) RenderOverlay(chatBg string, width, height int) string {
 	switch sv.activeSection {
 	case SectionProvider:
 		sectionContent = sv.provider.View(textW)
+	case SectionPersona:
+		sectionContent = sv.persona.View(textW)
 	case SectionAuth:
 		sectionContent = sv.auth.View(textW)
 	case SectionSessions:

@@ -128,6 +128,24 @@ func (p *GoogleAIStudioProvider) Generate(ctx context.Context, req GenerateReque
 	payload := map[string]any{
 		"contents": toAIStudioContents(req.Messages),
 	}
+	if req.Generation != nil {
+		genConfig := map[string]any{}
+		if req.Generation.Temperature != nil {
+			genConfig["temperature"] = *req.Generation.Temperature
+		}
+		if req.Generation.TopP != nil {
+			genConfig["topP"] = *req.Generation.TopP
+		}
+		if req.Generation.FrequencyPenalty != nil {
+			genConfig["frequencyPenalty"] = *req.Generation.FrequencyPenalty
+		}
+		if req.Generation.PresencePenalty != nil {
+			genConfig["presencePenalty"] = *req.Generation.PresencePenalty
+		}
+		if len(genConfig) > 0 {
+			payload["generationConfig"] = genConfig
+		}
+	}
 	raw, _ := json.Marshal(payload)
 	callURL, err := p.buildURL("models/"+url.PathEscape(modelID)+":generateContent", apiKey)
 	if err != nil {

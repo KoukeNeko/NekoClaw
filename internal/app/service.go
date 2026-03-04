@@ -18,6 +18,7 @@ import (
 	"github.com/doeshing/nekoclaw/internal/core"
 	"github.com/doeshing/nekoclaw/internal/mcp"
 	"github.com/doeshing/nekoclaw/internal/memory"
+	"github.com/doeshing/nekoclaw/internal/persona"
 	"github.com/doeshing/nekoclaw/internal/provider"
 	"github.com/doeshing/nekoclaw/internal/tooling"
 )
@@ -50,6 +51,7 @@ type Service struct {
 	fallbacks         map[string][]string // primary provider -> fallback provider IDs
 	toolRuntime       *tooling.Runtime
 	mcpManager        *mcp.Manager
+	personaManager    *persona.Manager
 	titleGenPending   sync.Map // sessionID -> bool; dedup concurrent title generation
 }
 
@@ -61,6 +63,7 @@ type ServiceOptions struct {
 	WorkspaceRoot string
 	ToolRunTTL    time.Duration
 	MCPConfigDir  string
+	PersonasDir   string
 }
 
 func NewService(opts ServiceOptions) *Service {
@@ -90,6 +93,11 @@ func NewService(opts ServiceOptions) *Service {
 	}
 
 	svc.toolRuntime = tooling.NewRuntime(executor, tooling.NewApprovalStore(opts.ToolRunTTL))
+
+	if opts.PersonasDir != "" {
+		svc.personaManager = persona.NewManager(opts.PersonasDir)
+	}
+
 	return svc
 }
 
@@ -155,6 +163,63 @@ func (s *Service) ToggleMCPBuiltin(ctx context.Context, name string, enabled boo
 		return fmt.Errorf("mcp not configured")
 	}
 	return s.mcpManager.SetBuiltinEnabled(ctx, name, enabled)
+}
+
+// ---------------------------------------------------------------------------
+// Persona management
+// ---------------------------------------------------------------------------
+
+// StartPersonas loads all persona definitions from disk.
+func (s *Service) StartPersonas() error {
+	if s.personaManager == nil {
+		return nil
+	}
+	return s.personaManager.Start()
+}
+
+// ListPersonas returns lightweight info for every loaded persona.
+func (s *Service) ListPersonas() []persona.PersonaInfo {
+	if s.personaManager == nil {
+		return nil
+	}
+	return s.personaManager.List()
+}
+
+// ActivePersona returns the currently active persona, or nil.
+func (s *Service) ActivePersona() *persona.PersonaInfo {
+	if s.personaManager == nil {
+		return nil
+	}
+	return s.personaManager.ActiveInfo()
+}
+
+// SetActivePersona switches the active persona by directory name.
+func (s *Service) SetActivePersona(dirName string) error {
+	if s.personaManager == nil {
+		return fmt.Errorf("personas not configured")
+	}
+	return s.personaManager.SetActive(dirName)
+}
+
+// ClearActivePersona deactivates the current persona.
+func (s *Service) ClearActivePersona() error {
+	if s.personaManager == nil {
+		return fmt.Errorf("personas not configured")
+	}
+	return s.personaManager.ClearActive()
+}
+
+// ReloadPersonas re-scans the persona directory from disk.
+func (s *Service) ReloadPersonas() error {
+	if s.personaManager == nil {
+		return fmt.Errorf("personas not configured")
+	}
+	return s.personaManager.Reload()
+}
+
+// PersonaManager exposes the persona manager for direct access (e.g. rendering).
+func (s *Service) PersonaManager() *persona.Manager {
+	return s.personaManager
 }
 
 // RenameSession sets a custom title for the given session.
@@ -2041,18 +2106,37 @@ func (s *Service) attemptSingleProvider(
 		compressedMessages, compressionMeta, compressed = contextwindow.Compress(baseMessages, policy)
 	}
 
-	// Inject memory context (MEMORY.md + daily logs) as a leading system message.
+	// Build memory prompt string (used by both persona-based and plain injection).
+	var memoryPrompt string
 	if s.memoryDir != "" {
 		memCtx, memErr := memory.LoadMemoryContext(s.memoryDir)
 		if memErr != nil {
 			log.Printf("event=memory_load_error error=%q", memErr)
 		} else if !memCtx.IsEmpty() {
+			memoryPrompt = memory.BuildSystemPrompt(memCtx)
+		}
+	}
+
+	// Inject system prompt: persona template (with embedded memory) or plain memory.
+	var generationParams *provider.GenerationParams
+	if activePersona := s.activePersona(); activePersona != nil {
+		rendered, renderErr := persona.RenderSystemPrompt(activePersona, memoryPrompt)
+		if renderErr != nil {
+			log.Printf("event=persona_render_error persona=%s error=%q", activePersona.DirName, renderErr)
+		} else {
 			systemMsg := core.Message{
 				Role:    core.RoleSystem,
-				Content: memory.BuildSystemPrompt(memCtx),
+				Content: rendered,
 			}
 			compressedMessages = append([]core.Message{systemMsg}, compressedMessages...)
 		}
+		generationParams = s.personaGenerationParams(activePersona)
+	} else if memoryPrompt != "" {
+		systemMsg := core.Message{
+			Role:    core.RoleSystem,
+			Content: memoryPrompt,
+		}
+		compressedMessages = append([]core.Message{systemMsg}, compressedMessages...)
 	}
 
 	attemptLimit := len(pool.Snapshot())
@@ -2138,6 +2222,7 @@ func (s *Service) attemptSingleProvider(
 				Approvals:    params.toolApprovals,
 				Compressed:   compressed,
 				Compression:  compressionMeta,
+				Generation:   generationParams,
 			})
 			if runErr == nil {
 				if !runResult.Pending && len(runResult.SessionMessages) > 0 {
@@ -2202,9 +2287,10 @@ func (s *Service) attemptSingleProvider(
 		}
 
 		resp, err := prov.Generate(ctx, provider.GenerateRequest{
-			Model:    attemptModelID,
-			Messages: compressedMessages,
-			Account:  account,
+			Model:      attemptModelID,
+			Messages:   compressedMessages,
+			Account:    account,
+			Generation: generationParams,
 		})
 		if err == nil {
 			assistant := core.Message{Role: core.RoleAssistant, Content: resp.Text, CreatedAt: time.Now()}
@@ -3077,4 +3163,31 @@ func truncateRunes(s string, maxRunes int) string {
 		return string(runes)
 	}
 	return string(runes[:maxRunes-1]) + "…"
+}
+
+// ---------------------------------------------------------------------------
+// Persona helpers (used inside attemptSingleProvider)
+// ---------------------------------------------------------------------------
+
+// activePersona returns the currently active Persona, or nil.
+func (s *Service) activePersona() *persona.Persona {
+	if s.personaManager == nil {
+		return nil
+	}
+	return s.personaManager.Active()
+}
+
+// personaGenerationParams converts persona generation params to provider params.
+// Returns nil when no overrides are configured.
+func (s *Service) personaGenerationParams(p *persona.Persona) *provider.GenerationParams {
+	gen := p.Config.Generation
+	if gen.IsZero() {
+		return nil
+	}
+	return &provider.GenerationParams{
+		Temperature:      gen.Temperature,
+		TopP:             gen.TopP,
+		FrequencyPenalty: gen.FrequencyPenalty,
+		PresencePenalty:  gen.PresencePenalty,
+	}
 }

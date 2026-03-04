@@ -279,3 +279,35 @@ type MCPBuiltinToggleMsg struct {
 	Enabled bool
 	Err     error
 }
+
+// ---------------------------------------------------------------------------
+// Persona messages
+// ---------------------------------------------------------------------------
+
+// PersonasListMsg carries the list of available personas.
+type PersonasListMsg struct {
+	Personas []client.PersonaInfo
+	Err      error
+}
+
+// PersonaActiveMsg carries the currently active persona (may be nil).
+type PersonaActiveMsg struct {
+	Persona *client.PersonaInfo
+	Err     error
+}
+
+// PersonaUseMsg carries the result of activating a persona.
+type PersonaUseMsg struct {
+	DirName string
+	Err     error
+}
+
+// PersonaClearMsg carries the result of deactivating a persona.
+type PersonaClearMsg struct {
+	Err error
+}
+
+// PersonaChangedMsg notifies the TUI that the active persona changed.
+type PersonaChangedMsg struct {
+	Name string
+}

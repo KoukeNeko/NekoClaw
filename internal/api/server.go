@@ -14,6 +14,7 @@ import (
 	"github.com/doeshing/nekoclaw/internal/auth"
 	"github.com/doeshing/nekoclaw/internal/core"
 	"github.com/doeshing/nekoclaw/internal/mcp"
+	"github.com/doeshing/nekoclaw/internal/persona"
 	"github.com/doeshing/nekoclaw/internal/provider"
 	"github.com/doeshing/nekoclaw/internal/tooling"
 )
@@ -75,6 +76,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/mcp/tools", s.handleMCPTools)
 	mux.HandleFunc("/v1/mcp/builtin", s.handleMCPBuiltin)
 	mux.HandleFunc("/v1/mcp/builtin/toggle", s.handleMCPBuiltinToggle)
+	mux.HandleFunc("/v1/personas", s.handlePersonas)
+	mux.HandleFunc("/v1/personas/active", s.handlePersonaActive)
+	mux.HandleFunc("/v1/personas/use", s.handlePersonaUse)
+	mux.HandleFunc("/v1/personas/clear", s.handlePersonaClear)
+	mux.HandleFunc("/v1/personas/reload", s.handlePersonaReload)
 	return mux
 }
 
@@ -1300,6 +1306,79 @@ func (s *Server) handleMCPBuiltinToggle(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := s.svc.ToggleMCPBuiltin(r.Context(), strings.TrimSpace(req.Name), req.Enabled); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// ---------------------------------------------------------------------------
+// Persona endpoints
+// ---------------------------------------------------------------------------
+
+func (s *Server) handlePersonas(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	personas := s.svc.ListPersonas()
+	if personas == nil {
+		personas = []persona.PersonaInfo{}
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"personas": personas})
+}
+
+func (s *Server) handlePersonaActive(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	active := s.svc.ActivePersona()
+	respondJSON(w, http.StatusOK, map[string]any{"persona": active})
+}
+
+func (s *Server) handlePersonaUse(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		DirName string `json:"dir_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	dirName := strings.TrimSpace(req.DirName)
+	if dirName == "" {
+		respondError(w, http.StatusBadRequest, "dir_name is required")
+		return
+	}
+	if err := s.svc.SetActivePersona(dirName); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handlePersonaClear(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := s.svc.ClearActivePersona(); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handlePersonaReload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := s.svc.ReloadPersonas(); err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

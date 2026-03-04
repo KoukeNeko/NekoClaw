@@ -430,3 +430,57 @@ func toggleMCPBuiltinCmd(apiClient *client.APIClient, name string, enabled bool)
 		return MCPBuiltinToggleMsg{Name: strings.TrimSpace(name), Enabled: enabled, Err: err}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Persona commands
+// ---------------------------------------------------------------------------
+
+func listPersonasCmd(apiClient *client.APIClient) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		personas, err := apiClient.ListPersonas(ctx)
+		return PersonasListMsg{Personas: personas, Err: err}
+	}
+}
+
+func activePersonaCmd(apiClient *client.APIClient) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		p, err := apiClient.ActivePersona(ctx)
+		return PersonaActiveMsg{Persona: p, Err: err}
+	}
+}
+
+func usePersonaCmd(apiClient *client.APIClient, dirName string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err := apiClient.UsePersona(ctx, dirName)
+		return PersonaUseMsg{DirName: dirName, Err: err}
+	}
+}
+
+func clearPersonaCmd(apiClient *client.APIClient) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err := apiClient.ClearPersona(ctx)
+		return PersonaClearMsg{Err: err}
+	}
+}
+
+func reloadPersonasCmd(apiClient *client.APIClient) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err := apiClient.ReloadPersonas(ctx)
+		if err != nil {
+			return PersonasListMsg{Err: err}
+		}
+		// After reload, fetch the updated list.
+		personas, listErr := apiClient.ListPersonas(ctx)
+		return PersonasListMsg{Personas: personas, Err: listErr}
+	}
+}

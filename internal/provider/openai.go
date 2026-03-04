@@ -35,14 +35,22 @@ type OpenAIProvider struct {
 }
 
 type openAIResponsesRequest struct {
-	Model string `json:"model"`
-	Input []any  `json:"input"`
+	Model            string   `json:"model"`
+	Input            []any    `json:"input"`
+	Temperature      *float64 `json:"temperature,omitempty"`
+	TopP             *float64 `json:"top_p,omitempty"`
+	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
+	PresencePenalty  *float64 `json:"presence_penalty,omitempty"`
 }
 
 type openAIToolResponsesRequest struct {
-	Model      string `json:"model"`
-	Input      []any  `json:"input"`
-	ToolChoice string `json:"tool_choice,omitempty"`
+	Model            string   `json:"model"`
+	Input            []any    `json:"input"`
+	ToolChoice       string   `json:"tool_choice,omitempty"`
+	Temperature      *float64 `json:"temperature,omitempty"`
+	TopP             *float64 `json:"top_p,omitempty"`
+	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
+	PresencePenalty  *float64 `json:"presence_penalty,omitempty"`
 	Tools      []struct {
 		Type        string          `json:"type"`
 		Name        string          `json:"name"`
@@ -171,6 +179,12 @@ func (p *OpenAIProvider) Generate(ctx context.Context, req GenerateRequest) (Gen
 		Model: modelID,
 		Input: input,
 	}
+	if req.Generation != nil {
+		payload.Temperature = req.Generation.Temperature
+		payload.TopP = req.Generation.TopP
+		payload.FrequencyPenalty = req.Generation.FrequencyPenalty
+		payload.PresencePenalty = req.Generation.PresencePenalty
+	}
 	raw, _ := json.Marshal(payload)
 
 	targetURL := strings.TrimRight(p.baseURL, "/") + "/responses"
@@ -253,6 +267,12 @@ func (p *OpenAIProvider) GenerateToolTurn(ctx context.Context, req ToolTurnReque
 		Model:      modelID,
 		Input:      input,
 		ToolChoice: "auto",
+	}
+	if req.Generation != nil {
+		payload.Temperature = req.Generation.Temperature
+		payload.TopP = req.Generation.TopP
+		payload.FrequencyPenalty = req.Generation.FrequencyPenalty
+		payload.PresencePenalty = req.Generation.PresencePenalty
 	}
 	if len(req.Tools) > 0 {
 		payload.Tools = make([]struct {

@@ -49,10 +49,12 @@ type AnthropicProvider struct {
 }
 
 type anthropicRequest struct {
-	Model     string             `json:"model"`
-	MaxTokens int                `json:"max_tokens"`
-	System    string             `json:"system,omitempty"`
-	Messages  []anthropicMessage `json:"messages"`
+	Model       string             `json:"model"`
+	MaxTokens   int                `json:"max_tokens"`
+	System      string             `json:"system,omitempty"`
+	Messages    []anthropicMessage `json:"messages"`
+	Temperature *float64           `json:"temperature,omitempty"`
+	TopP        *float64           `json:"top_p,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -89,11 +91,13 @@ type anthropicResponse struct {
 }
 
 type anthropicToolRequest struct {
-	Model     string                    `json:"model"`
-	MaxTokens int                       `json:"max_tokens"`
-	System    string                    `json:"system,omitempty"`
-	Messages  []anthropicToolMessage    `json:"messages"`
-	Tools     []anthropicToolDefinition `json:"tools,omitempty"`
+	Model       string                    `json:"model"`
+	MaxTokens   int                       `json:"max_tokens"`
+	System      string                    `json:"system,omitempty"`
+	Messages    []anthropicToolMessage    `json:"messages"`
+	Tools       []anthropicToolDefinition `json:"tools,omitempty"`
+	Temperature *float64                  `json:"temperature,omitempty"`
+	TopP        *float64                  `json:"top_p,omitempty"`
 }
 
 type anthropicToolMessage struct {
@@ -203,6 +207,10 @@ func (p *AnthropicProvider) Generate(ctx context.Context, req GenerateRequest) (
 		System:    system,
 		Messages:  turns,
 	}
+	if req.Generation != nil {
+		payload.Temperature = req.Generation.Temperature
+		payload.TopP = req.Generation.TopP
+	}
 	raw, _ := json.Marshal(payload)
 
 	targetURL := strings.TrimRight(p.baseURL, "/") + "/v1/messages"
@@ -301,6 +309,10 @@ func (p *AnthropicProvider) GenerateToolTurn(ctx context.Context, req ToolTurnRe
 		System:    system,
 		Messages:  turns,
 		Tools:     tools,
+	}
+	if req.Generation != nil {
+		payload.Temperature = req.Generation.Temperature
+		payload.TopP = req.Generation.TopP
 	}
 	raw, _ := json.Marshal(payload)
 	targetURL := strings.TrimRight(p.baseURL, "/") + "/v1/messages"

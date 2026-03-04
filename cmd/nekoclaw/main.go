@@ -74,6 +74,11 @@ func main() {
 	if err := service.StartMCP(context.Background()); err != nil {
 		log.Printf("event=mcp_start_error error=%q", err)
 	}
+
+	// Load persona definitions (non-fatal on failure).
+	if err := service.StartPersonas(); err != nil {
+		log.Printf("event=personas_start_error error=%q", err)
+	}
 	defer func() {
 		if err := service.StopMCP(); err != nil {
 			log.Printf("event=mcp_stop_error error=%q", err)
@@ -228,6 +233,14 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		}
 	}
 
+	// Resolve personas directory (default: ~/.nekoclaw/personas/).
+	personasDir := strings.TrimSpace(envOr("NEKOCLAW_PERSONAS_DIR", ""))
+	if personasDir == "" {
+		if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+			personasDir = filepath.Join(home, ".nekoclaw", "personas")
+		}
+	}
+
 	svc := app.NewService(app.ServiceOptions{
 		SessionStore:  sessionStore,
 		Lifecycle:     lifecycle,
@@ -236,6 +249,7 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		WorkspaceRoot: workspaceRoot,
 		ToolRunTTL:    envOrDuration("NEKOCLAW_TOOL_RUN_TTL", 10*time.Minute),
 		MCPConfigDir:  mcpDir,
+		PersonasDir:   personasDir,
 	})
 
 	mockProvider := provider.NewMockProvider()

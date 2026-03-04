@@ -86,10 +86,11 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	for round := 0; round < maxToolRounds; round++ {
 		if len(pending) == 0 {
 			turnResp, err := req.ToolProvider.GenerateToolTurn(ctx, provider.ToolTurnRequest{
-				Model:    modelID,
-				Messages: messages,
-				Account:  account,
-				Tools:    r.executor.Definitions(),
+				Model:      modelID,
+				Messages:   messages,
+				Account:    account,
+				Tools:      r.executor.Definitions(),
+				Generation: req.Generation,
 			})
 			if err != nil {
 				return RunResult{}, err

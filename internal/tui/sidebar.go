@@ -23,6 +23,7 @@ type Sidebar struct {
 	// Inspector data
 	provider       string
 	model          string
+	personaName    string
 	contextPercent int
 	cost           float64
 	messageCount   int
@@ -52,6 +53,7 @@ func (s *Sidebar) IsFocused() bool       { return s.focused }
 
 func (s *Sidebar) SetProvider(p string)        { s.provider = p }
 func (s *Sidebar) SetModel(m string)           { s.model = m }
+func (s *Sidebar) SetPersonaName(name string)  { s.personaName = name }
 func (s *Sidebar) SetCurrentSession(session string) { s.currentSession = session }
 func (s *Sidebar) SetContextPercent(p int)     { s.contextPercent = p }
 func (s *Sidebar) SetCost(c float64)           { s.cost = c }
@@ -295,6 +297,13 @@ func (s Sidebar) renderInspectorFooter(width int) string {
 	sb.WriteString(theme.SubtleStyle.Render("PROVIDER") + "\n")
 	sb.WriteString(theme.NormalStyle.Render(clampLine(s.provider+" · "+s.model, width)) + "\n\n")
 
+	sb.WriteString(theme.SubtleStyle.Render("PERSONA") + "\n")
+	if s.personaName != "" {
+		sb.WriteString(theme.HighlightStyle.Render(clampLine(s.personaName, width)) + "\n\n")
+	} else {
+		sb.WriteString(theme.HintStyle.Render("未啟用") + "\n\n")
+	}
+
 	sb.WriteString(theme.SubtleStyle.Render("CONTEXT USAGE") + "\n")
 	sb.WriteString(renderProgressBar(s.contextPercent, width) + "\n\n")
 
@@ -317,11 +326,12 @@ func (s Sidebar) renderInspectorFooter(width int) string {
 func (s Sidebar) inspectorFooterHeight() int {
 	// INSPECTOR(1) + blank(1)
 	// + PROVIDER(1) + value(1) + blank(1)
+	// + PERSONA(1) + value(1) + blank(1)
 	// + CONTEXT USAGE(1) + bar(1) + blank(1)
 	// + COST(1) + value(1) + blank(1)
 	// + MESSAGES(1) + value(1) + blank(1)
-	// + SHORTCUTS(1) + Ctrl+N(1) + Ctrl+B(1) + Esc(1) + /help(1) = 19
-	return 19
+	// + SHORTCUTS(1) + Ctrl+N(1) + Ctrl+B(1) + Esc(1) + /help(1) = 22
+	return 22
 }
 
 // renderProgressBar renders a text-based progress bar (moved from inspector.go).

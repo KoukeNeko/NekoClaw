@@ -40,6 +40,7 @@ type RunRequest struct {
 	Approvals    []core.ToolApprovalDecision
 	Compressed   bool
 	Compression  core.CompressionMeta
+	Generation   *provider.GenerationParams // optional persona-driven sampling overrides
 }
 
 type RunResult struct {

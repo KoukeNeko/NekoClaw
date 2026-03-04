@@ -12,10 +12,20 @@ import (
 
 var ErrProjectDiscoveryFailed = errors.New("project discovery failed")
 
+// GenerationParams holds optional sampling parameters from persona configs.
+// Pointer fields distinguish "not set" (nil) from explicit zero values.
+type GenerationParams struct {
+	Temperature      *float64
+	TopP             *float64
+	FrequencyPenalty *float64
+	PresencePenalty  *float64
+}
+
 type GenerateRequest struct {
-	Model    string
-	Messages []core.Message
-	Account  core.Account
+	Model      string
+	Messages   []core.Message
+	Account    core.Account
+	Generation *GenerationParams // optional persona-driven sampling overrides
 }
 
 type GenerateResponse struct {
@@ -38,10 +48,11 @@ type ToolCall struct {
 }
 
 type ToolTurnRequest struct {
-	Model    string
-	Messages []core.Message
-	Account  core.Account
-	Tools    []ToolDefinition
+	Model      string
+	Messages   []core.Message
+	Account    core.Account
+	Tools      []ToolDefinition
+	Generation *GenerationParams // optional persona-driven sampling overrides
 }
 
 type ToolTurnResponse struct {

@@ -155,11 +155,30 @@ func (p *GeminiInternalProvider) DiscoverPreferredModel(
 
 func (p *GeminiInternalProvider) Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
 	endpointOrder := p.resolveEndpointOrder(req.Account)
+	requestBody := map[string]any{
+		"contents": toGeminiContents(req.Messages),
+	}
+	if req.Generation != nil {
+		genConfig := map[string]any{}
+		if req.Generation.Temperature != nil {
+			genConfig["temperature"] = *req.Generation.Temperature
+		}
+		if req.Generation.TopP != nil {
+			genConfig["topP"] = *req.Generation.TopP
+		}
+		if req.Generation.FrequencyPenalty != nil {
+			genConfig["frequencyPenalty"] = *req.Generation.FrequencyPenalty
+		}
+		if req.Generation.PresencePenalty != nil {
+			genConfig["presencePenalty"] = *req.Generation.PresencePenalty
+		}
+		if len(genConfig) > 0 {
+			requestBody["generationConfig"] = genConfig
+		}
+	}
 	payload := map[string]any{
-		"model": strings.TrimSpace(req.Model),
-		"request": map[string]any{
-			"contents": toGeminiContents(req.Messages),
-		},
+		"model":   strings.TrimSpace(req.Model),
+		"request": requestBody,
 	}
 	if projectID := strings.TrimSpace(req.Account.Metadata["project_id"]); projectID != "" {
 		payload["project"] = projectID

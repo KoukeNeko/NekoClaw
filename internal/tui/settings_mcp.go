@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -76,6 +78,8 @@ func (ms *MCPSection) Update(msg tea.KeyMsg, apiClient *client.APIClient) tea.Cm
 			listMCPServersCmd(apiClient),
 			listMCPBuiltinCmd(apiClient),
 		)
+	case "o":
+		return openMCPDirCmd()
 	}
 	return nil
 }
@@ -230,7 +234,7 @@ func (ms *MCPSection) View(width int) string {
 	// Show tools for the selected server.
 	ms.renderSelectedTools(&lines, custom, textW)
 
-	lines = append(lines, theme.HintStyle.Render("↑↓ 選擇  ·  Enter 切換啟用  ·  r 重新載入  ·  Esc 返回"))
+	lines = append(lines, theme.HintStyle.Render("↑↓ 選擇  ·  Enter 切換啟用  ·  r 重新載入  ·  o 開啟資料夾  ·  Esc 返回"))
 
 	return strings.Join(lines, "\n")
 }
@@ -251,7 +255,28 @@ func (ms *MCPSection) renderEmptyState(lines *[]string) {
 	*lines = append(*lines, theme.HintStyle.Render(`    "trust": "trusted"`))
 	*lines = append(*lines, theme.HintStyle.Render(`  }`))
 	*lines = append(*lines, "")
-	*lines = append(*lines, theme.HintStyle.Render("r 重新載入  ·  Esc 返回"))
+	*lines = append(*lines, theme.HintStyle.Render("r 重新載入  ·  o 開啟資料夾  ·  Esc 返回"))
+}
+
+// openMCPDirCmd opens the MCP config directory in the system file manager.
+func openMCPDirCmd() tea.Cmd {
+	return func() tea.Msg {
+		dir := resolveMCPDir()
+		_ = os.MkdirAll(dir, 0o755)
+		_ = openExternalURL(dir)
+		return nil
+	}
+}
+
+// resolveMCPDir returns the MCP config directory path.
+func resolveMCPDir() string {
+	if envDir := strings.TrimSpace(os.Getenv("NEKOCLAW_MCP_DIR")); envDir != "" {
+		return envDir
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		return filepath.Join(home, ".nekoclaw", "mcp")
+	}
+	return "./mcp"
 }
 
 // renderSelectedTools shows tools for the currently selected server.

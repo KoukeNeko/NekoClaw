@@ -66,6 +66,7 @@ func (m appModel) Init() tea.Cmd {
 		m.settings.Show(),
 		listSessionsCmd(m.client),
 		loadSessionTranscriptCmd(m.client, m.sessionID),
+		activePersonaCmd(m.client),
 	)
 }
 
@@ -197,6 +198,38 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Always route to chatView regardless of current view
 		cmd := m.chatView.Update(msg)
 		return m, cmd
+
+	case PersonaActiveMsg:
+		if msg.Err == nil && msg.Persona != nil {
+			m.sidebar.SetPersonaName(msg.Persona.Name)
+		} else if msg.Err == nil {
+			m.sidebar.SetPersonaName("")
+		}
+		// Forward to settings for tab display.
+		if m.currentView == ViewSettings {
+			cmd := m.settings.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+
+	case PersonaChangedMsg:
+		m.sidebar.SetPersonaName(msg.Name)
+		return m, nil
+
+	case PersonaUseMsg:
+		// Forward to settings for tab display, then emit PersonaChangedMsg.
+		if m.currentView == ViewSettings {
+			cmd := m.settings.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+
+	case PersonaClearMsg:
+		if m.currentView == ViewSettings {
+			cmd := m.settings.Update(msg)
+			return m, cmd
+		}
+		return m, nil
 
 	case ProfileChangedMsg:
 		m.settings.SetActiveProfile(msg.ProfileID)
