@@ -289,6 +289,30 @@ func (s *SessionStore) updateMetadataLocked(sessionID string) {
 	}
 }
 
+// SetTitle updates the session title in metadata. Safe for concurrent use.
+func (s *SessionStore) SetTitle(sessionID, title string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	meta, exists := s.metadata[sessionID]
+	if !exists {
+		return
+	}
+	meta.Title = title
+	s.metadata[sessionID] = meta
+	if s.dataDir != "" {
+		s.writeMetadataLocked()
+	}
+}
+
+// GetMetadata returns the metadata for a single session.
+func (s *SessionStore) GetMetadata(sessionID string) (SessionMetadata, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	meta, ok := s.metadata[sessionID]
+	return meta, ok
+}
+
 // countMessagesLocked counts only message-type entries (excludes headers,
 // compaction entries, etc.) for an accurate message count.
 func (s *SessionStore) countMessagesLocked(sessionID string) int {

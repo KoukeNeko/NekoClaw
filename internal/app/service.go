@@ -88,6 +88,20 @@ func (s *Service) DeleteSession(sessionID string) error {
 	return s.sessions.DeleteSession(sessionID)
 }
 
+// RenameSession sets a custom title for the given session.
+func (s *Service) RenameSession(sessionID, title string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	title = strings.TrimSpace(title)
+	if sessionID == "" {
+		return fmt.Errorf("session_id is required")
+	}
+	if _, exists := s.sessions.GetMetadata(sessionID); !exists {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+	s.sessions.SetTitle(sessionID, title)
+	return nil
+}
+
 func (s *Service) SearchMemory(query string, limit int) ([]memory.SearchResult, error) {
 	if s.searchIndex == nil {
 		return nil, fmt.Errorf("search index not configured")
@@ -2021,6 +2035,19 @@ func (s *Service) attemptSingleProvider(
 			if runErr == nil {
 				if !runResult.Pending && len(runResult.SessionMessages) > 0 {
 					s.sessions.AppendMessage(sessionID, runResult.SessionMessages...)
+					// Async title generation on first exchange (tool path).
+					if hasUserMessage {
+						var firstAssistant string
+						for _, msg := range runResult.SessionMessages {
+							if msg.Role == core.RoleAssistant && strings.TrimSpace(msg.Content) != "" {
+								firstAssistant = msg.Content
+								break
+							}
+						}
+						if firstAssistant != "" {
+							s.generateSessionTitleAsync(providerID, attemptModelID, sessionID, account, userMessage.Content, firstAssistant)
+						}
+					}
 					if s.searchIndex != nil {
 						newEntries := make([]core.SessionEntry, 0, len(runResult.SessionMessages))
 						for _, msg := range runResult.SessionMessages {
@@ -2078,6 +2105,10 @@ func (s *Service) attemptSingleProvider(
 				s.sessions.AppendMessage(sessionID, userMessage, assistant)
 			} else {
 				s.sessions.AppendMessage(sessionID, assistant)
+			}
+			// Async title generation on first exchange.
+			if hasUserMessage {
+				s.generateSessionTitleAsync(providerID, attemptModelID, sessionID, account, userMessage.Content, assistant.Content)
 			}
 			// Async index for memory search.
 			if s.searchIndex != nil {
@@ -2864,4 +2895,71 @@ func (b serviceToolBackend) Accounts(providerID string) []core.AccountSnapshot {
 		return nil
 	}
 	return b.svc.Accounts(providerID)
+}
+
+// ---------------------------------------------------------------------------
+// Session title generation
+// ---------------------------------------------------------------------------
+
+const titleGenSystemPrompt = `Generate a short title (under 25 characters) for this conversation based on the first exchange. Reply with ONLY the title text, no quotes, no explanation. Use the same language as the user's message.`
+
+// generateSessionTitleAsync spawns a background goroutine that uses the LLM
+// to produce a short session title from the first user+assistant exchange.
+// Fire-and-forget: errors are logged but never surface to the user.
+func (s *Service) generateSessionTitleAsync(
+	providerID, modelID, sessionID string,
+	account core.Account,
+	userContent, assistantContent string,
+) {
+	meta, exists := s.sessions.GetMetadata(sessionID)
+	if !exists || meta.Title != "" || meta.MessageCount > 2 {
+		return
+	}
+
+	prov, _, err := s.resolveProviderPool(providerID)
+	if err != nil {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		userSnippet := truncateRunes(userContent, 500)
+		assistantSnippet := truncateRunes(assistantContent, 500)
+		prompt := fmt.Sprintf("User: %s\nAssistant: %s", userSnippet, assistantSnippet)
+
+		resp, err := prov.Generate(ctx, provider.GenerateRequest{
+			Model: modelID,
+			Messages: []core.Message{
+				{Role: core.RoleSystem, Content: titleGenSystemPrompt},
+				{Role: core.RoleUser, Content: prompt},
+			},
+			Account: account,
+		})
+		if err != nil {
+			log.Printf("event=title_gen_error session_id=%s error=%q", sessionID, err)
+			return
+		}
+
+		title := strings.TrimSpace(resp.Text)
+		if title == "" {
+			return
+		}
+		runes := []rune(title)
+		if len(runes) > 30 {
+			title = string(runes[:29]) + "…"
+		}
+
+		s.sessions.SetTitle(sessionID, title)
+		log.Printf("event=title_generated session_id=%s title=%q", sessionID, title)
+	}()
+}
+
+func truncateRunes(s string, maxRunes int) string {
+	runes := []rune(strings.TrimSpace(s))
+	if len(runes) <= maxRunes {
+		return string(runes)
+	}
+	return string(runes[:maxRunes-1]) + "…"
 }

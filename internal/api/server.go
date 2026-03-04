@@ -67,6 +67,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/auth/openai-codex/delete", s.handleOpenAICodexDelete)
 	mux.HandleFunc("/v1/sessions", s.handleSessions)
 	mux.HandleFunc("/v1/sessions/delete", s.handleSessionDelete)
+	mux.HandleFunc("/v1/sessions/rename", s.handleSessionRename)
 	mux.HandleFunc("/v1/memory/search", s.handleMemorySearch)
 	return mux
 }
@@ -898,6 +899,32 @@ func (s *Server) handleSessionDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]any{"ok": true, "session_id": sessionID})
+}
+
+type renameSessionRequest struct {
+	SessionID string `json:"session_id"`
+	Title     string `json:"title"`
+}
+
+func (s *Server) handleSessionRename(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req renameSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if err := s.svc.RenameSession(req.SessionID, req.Title); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"session_id": strings.TrimSpace(req.SessionID),
+		"title":      strings.TrimSpace(req.Title),
+	})
 }
 
 type memorySearchRequest struct {

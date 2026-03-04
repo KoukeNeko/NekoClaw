@@ -124,6 +124,7 @@ type CompressionMeta struct {
 
 type SessionMetadata struct {
 	SessionID       string    `json:"session_id"`
+	Title           string    `json:"title,omitempty"`
 	MessageCount    int       `json:"message_count"`
 	InputTokens     int       `json:"input_tokens"`
 	OutputTokens    int       `json:"output_tokens"`

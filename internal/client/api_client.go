@@ -93,6 +93,7 @@ type AIStudioProfile struct {
 
 type SessionInfo struct {
 	SessionID    string    `json:"session_id"`
+	Title        string    `json:"title,omitempty"`
 	MessageCount int       `json:"message_count"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -932,6 +933,28 @@ func (c *APIClient) DeleteSession(ctx context.Context, sessionID string) error {
 		ctx,
 		http.MethodPost,
 		c.baseURL+"/v1/sessions/delete",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out map[string]any
+	return c.doAndDecodeJSON(httpReq, &out)
+}
+
+func (c *APIClient) RenameSession(ctx context.Context, sessionID, title string) error {
+	payload, err := json.Marshal(map[string]string{
+		"session_id": strings.TrimSpace(sessionID),
+		"title":      strings.TrimSpace(title),
+	})
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/sessions/rename",
 		bytes.NewReader(payload),
 	)
 	if err != nil {

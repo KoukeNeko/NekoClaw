@@ -200,6 +200,8 @@ func (sv *SettingsView) Update(msg tea.Msg) tea.Cmd {
 		return sv.session.HandleSessionsList(msg)
 	case SessionDeleteMsg:
 		return sv.session.HandleSessionDelete(msg, sv.apiClient)
+	case SessionRenameMsg:
+		return sv.session.HandleSessionRename(msg, sv.apiClient)
 	case MemorySearchMsg:
 		return sv.memory.HandleSearchResults(msg)
 	}

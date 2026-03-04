@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"time"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/doeshing/nekoclaw/internal/client"
@@ -140,6 +142,19 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.settings.Usage().RecordUsage(msg.Response.Usage, msg.Response.Model)
 			m.sidebar.SetCost(m.settings.Usage().TotalCost())
 		}
+		// Delegate to chat view, then schedule delayed session refresh
+		// to pick up auto-generated titles.
+		cmd := m.chatView.Update(msg)
+		if msg.Err == nil {
+			return m, tea.Batch(cmd, tea.Tick(3*time.Second, func(_ time.Time) tea.Msg {
+				return refreshSessionsTickMsg{}
+			}))
+		}
+		return m, cmd
+
+	// Delayed session list reload (picks up auto-generated titles)
+	case refreshSessionsTickMsg:
+		return m, listSessionsCmd(m.client)
 
 	// Status bar updates
 	case StatusUpdateMsg:

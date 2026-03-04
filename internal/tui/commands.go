@@ -351,6 +351,15 @@ func deleteSessionCmd(apiClient *client.APIClient, sessionID string) tea.Cmd {
 	}
 }
 
+func renameSessionCmd(apiClient *client.APIClient, sessionID, title string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err := apiClient.RenameSession(ctx, strings.TrimSpace(sessionID), strings.TrimSpace(title))
+		return SessionRenameMsg{SessionID: sessionID, Title: title, Err: err}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Memory
 // ---------------------------------------------------------------------------

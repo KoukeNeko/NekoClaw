@@ -324,7 +324,7 @@ func modelOptionsForProvider(providerID, current string) []string {
 	case "google-ai-studio":
 		models = []string{"default", "gemini-2.5-pro", "gemini-2.5-flash"}
 	case "anthropic":
-		models = []string{"default", "claude-sonnet-4-5", "claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-3-5"}
+		models = []string{"default", "claude-opus-4-6", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-3-5"}
 	case "openai":
 		models = []string{"default", "gpt-5.1-codex", "gpt-5", "gpt-4.1"}
 	case "openai-codex":

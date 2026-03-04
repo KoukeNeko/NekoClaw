@@ -10,17 +10,18 @@ import (
 	"github.com/doeshing/nekoclaw/internal/client"
 )
 
-// SessionSection handles session list, create, and delete.
+// SessionSection handles session list, create, rename, and delete.
 type SessionSection struct {
 	sessions       []client.SessionInfo
 	selectedIdx    int
 	currentSession string
 	loaded         bool
 
-	// New session input
-	creatingNew bool
-	input       textinput.Model
-	statusMsg   string
+	// Shared text input for create/rename
+	creatingNew     bool
+	renamingSession bool
+	input           textinput.Model
+	statusMsg       string
 }
 
 func NewSessionSection(currentSession string) SessionSection {
@@ -66,14 +67,23 @@ func (ss *SessionSection) HandleSessionDelete(msg SessionDeleteMsg, apiClient *c
 	return listSessionsCmd(apiClient)
 }
 
+func (ss *SessionSection) HandleSessionRename(msg SessionRenameMsg, apiClient *client.APIClient) tea.Cmd {
+	if msg.Err != nil {
+		ss.statusMsg = "重命名失敗: " + msg.Err.Error()
+		return nil
+	}
+	ss.statusMsg = "已重命名: " + msg.Title
+	return listSessionsCmd(apiClient)
+}
+
 func (ss *SessionSection) HasActiveInput() bool {
-	return ss.creatingNew
+	return ss.creatingNew || ss.renamingSession
 }
 
 func (ss *SessionSection) Update(msg tea.KeyMsg, apiClient *client.APIClient) tea.Cmd {
-	// New session input mode
-	if ss.creatingNew {
-		return ss.handleNewSessionInput(msg)
+	// Input mode (create or rename)
+	if ss.creatingNew || ss.renamingSession {
+		return ss.handleInputMode(msg, apiClient)
 	}
 
 	switch {
@@ -98,17 +108,34 @@ func (ss *SessionSection) Update(msg tea.KeyMsg, apiClient *client.APIClient) te
 		}
 	case key.Matches(msg, key.NewBinding(key.WithKeys("n"))):
 		ss.creatingNew = true
+		ss.renamingSession = false
+		ss.input.Placeholder = "Session 名稱"
 		ss.input.SetValue("")
 		ss.input.Focus()
 		return nil
+	case key.Matches(msg, key.NewBinding(key.WithKeys("r"))):
+		if ss.selectedIdx < len(ss.sessions) {
+			ss.renamingSession = true
+			ss.creatingNew = false
+			sess := ss.sessions[ss.selectedIdx]
+			prefill := sess.Title
+			if prefill == "" {
+				prefill = sess.SessionID
+			}
+			ss.input.Placeholder = "新標題"
+			ss.input.SetValue(prefill)
+			ss.input.Focus()
+			return nil
+		}
 	}
 	return nil
 }
 
-func (ss *SessionSection) handleNewSessionInput(msg tea.KeyMsg) tea.Cmd {
+func (ss *SessionSection) handleInputMode(msg tea.KeyMsg, apiClient *client.APIClient) tea.Cmd {
 	k := msg.String()
 	if k == "esc" {
 		ss.creatingNew = false
+		ss.renamingSession = false
 		ss.input.Blur()
 		return nil
 	}
@@ -117,8 +144,16 @@ func (ss *SessionSection) handleNewSessionInput(msg tea.KeyMsg) tea.Cmd {
 		if name == "" {
 			return nil
 		}
-		ss.creatingNew = false
 		ss.input.Blur()
+
+		if ss.renamingSession {
+			sessionID := ss.sessions[ss.selectedIdx].SessionID
+			ss.renamingSession = false
+			return renameSessionCmd(apiClient, sessionID, name)
+		}
+
+		// Creating new session
+		ss.creatingNew = false
 		ss.currentSession = name
 		return func() tea.Msg { return SessionChangedMsg{SessionID: name} }
 	}
@@ -137,12 +172,19 @@ func (ss SessionSection) View(width int) string {
 	lines = append(lines, theme.HeaderStyle.Render("Sessions"))
 	lines = append(lines, "")
 
-	// New session input
+	// Input mode (create or rename)
 	if ss.creatingNew {
 		lines = append(lines, theme.SectionStyle.Render("新建 Session"))
 		lines = append(lines, ss.input.View())
 		lines = append(lines, "")
 		lines = append(lines, theme.HintStyle.Render("Enter 建立  ·  Esc 取消"))
+		return strings.Join(lines, "\n")
+	}
+	if ss.renamingSession {
+		lines = append(lines, theme.SectionStyle.Render("重命名 Session"))
+		lines = append(lines, ss.input.View())
+		lines = append(lines, "")
+		lines = append(lines, theme.HintStyle.Render("Enter 確認  ·  Esc 取消"))
 		return strings.Join(lines, "\n")
 	}
 
@@ -163,8 +205,12 @@ func (ss SessionSection) View(width int) string {
 			if s.SessionID == ss.currentSession {
 				current = " ✓"
 			}
+			displayName := s.SessionID
+			if s.Title != "" {
+				displayName = s.Title
+			}
 			age := formatTimeAgo(s.UpdatedAt)
-			label := fmt.Sprintf("%-18s %3d 訊息  %s%s", s.SessionID, s.MessageCount, age, current)
+			label := fmt.Sprintf("%-18s %3d 訊息  %s%s", displayName, s.MessageCount, age, current)
 			lines = append(lines, style.Render(clampLine(prefix+label, textW)))
 		}
 	}
@@ -177,7 +223,7 @@ func (ss SessionSection) View(width int) string {
 		lines = append(lines, "")
 	}
 
-	lines = append(lines, theme.HintStyle.Render("Enter 選擇  ·  n 新建  ·  d 刪除  ·  Esc 返回"))
+	lines = append(lines, theme.HintStyle.Render("Enter 選擇  ·  n 新建  ·  r 重命名  ·  d 刪除  ·  Esc 返回"))
 
 	return strings.Join(lines, "\n")
 }

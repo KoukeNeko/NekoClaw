@@ -220,6 +220,16 @@ type SessionDeleteMsg struct {
 	Err       error
 }
 
+// SessionRenameMsg carries the result of renaming a session.
+type SessionRenameMsg struct {
+	SessionID string
+	Title     string
+	Err       error
+}
+
+// refreshSessionsTickMsg triggers a delayed session list reload.
+type refreshSessionsTickMsg struct{}
+
 // ---------------------------------------------------------------------------
 // Memory messages
 // ---------------------------------------------------------------------------

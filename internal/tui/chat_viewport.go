@@ -105,6 +105,7 @@ func (cv *ChatViewport) UpdateLastMessage(content string) {
 	if len(cv.messages) == 0 {
 		return
 	}
+	cv.atBottom = cv.viewport.AtBottom()
 	last := &cv.messages[len(cv.messages)-1]
 	last.Content = content
 	last.renderedCache = ""

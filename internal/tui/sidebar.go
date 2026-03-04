@@ -260,7 +260,11 @@ func (s Sidebar) renderSessionList(width, maxHeight int) string {
 		}
 
 		age := formatTimeAgo(sess.UpdatedAt)
-		label := fmt.Sprintf("%s%s", sess.SessionID, suffix)
+		displayName := sess.SessionID
+		if sess.Title != "" {
+			displayName = sess.Title
+		}
+		label := fmt.Sprintf("%s%s", displayName, suffix)
 		if age != "" {
 			label = fmt.Sprintf("%s · %s", label, age)
 		}
