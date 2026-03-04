@@ -60,7 +60,6 @@ func TestSettingsEscCloses(t *testing.T) {
 	}
 
 	// Simulate Esc from within settings — settings_view sends ToggleSettingsMsg
-	// (without calling Hide first, which was the bug fix)
 	updated, _ = app.Update(ToggleSettingsMsg{})
 	app = updated.(appModel)
 	if app.settings.visible {
@@ -99,7 +98,7 @@ func TestAppModelViewRender(t *testing.T) {
 	m := newTestAppModel()
 	m.width = 100
 	m.height = 30
-	m.inspector.SetSize(25, 30)
+	m.sidebar.SetSize(25, 30)
 	m.chatView.SetSize(75, 30)
 	m.settings.SetSize(75, 30)
 
@@ -111,37 +110,94 @@ func TestAppModelViewRender(t *testing.T) {
 
 func TestAppModelDualPaneLayout(t *testing.T) {
 	m := newTestAppModel()
-	// Test width calculation logic
+	// Test width calculation logic: sidebar 25% left, chat 75% right
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	app := updated.(appModel)
 
-	if app.inspector.width != 25 {
-		t.Fatalf("expected inspector width 25 (25%% of 100), got %d", app.inspector.width)
+	if app.sidebar.width != 25 {
+		t.Fatalf("expected sidebar width 25 (25%% of 100), got %d", app.sidebar.width)
 	}
 	if app.chatView.width != 75 {
 		t.Fatalf("expected chatView width 75 (75%% of 100), got %d", app.chatView.width)
 	}
 }
 
-func TestInspectorComponent(t *testing.T) {
-	i := NewInspector("mock", "default", "main")
-	i.SetSize(25, 30)
-	i.SetContextPercent(12)
-	i.SetCost(0.05)
-	i.SetMessageCount(3)
+func TestSidebarComponent(t *testing.T) {
+	s := NewSidebar("mock", "default", "main")
+	s.SetSize(25, 30)
+	s.SetContextPercent(12)
+	s.SetCost(0.05)
+	s.SetMessageCount(3)
 
-	view := i.View()
+	view := s.View()
 	if !strings.Contains(view, "mock") {
-		t.Fatal("expected provider in inspector")
+		t.Fatal("expected provider in sidebar")
 	}
 	if !strings.Contains(view, "default") {
-		t.Fatal("expected model in inspector")
-	}
-	if !strings.Contains(view, "main") {
-		t.Fatal("expected session in inspector")
+		t.Fatal("expected model in sidebar")
 	}
 	if !strings.Contains(view, "12%") {
-		t.Fatal("expected context percent in inspector")
+		t.Fatal("expected context percent in sidebar")
+	}
+	if !strings.Contains(view, "SESSIONS") {
+		t.Fatal("expected SESSIONS header in sidebar")
+	}
+	if !strings.Contains(view, "INSPECTOR") {
+		t.Fatal("expected INSPECTOR header in sidebar footer")
+	}
+}
+
+func TestSidebarSessionList(t *testing.T) {
+	s := NewSidebar("mock", "default", "main")
+	s.SetSize(30, 40)
+
+	// Load sessions
+	s.HandleSessionsList(SessionsListMsg{
+		Sessions: []client.SessionInfo{
+			{SessionID: "main", MessageCount: 5, UpdatedAt: time.Now()},
+			{SessionID: "chat-01", MessageCount: 3, UpdatedAt: time.Now().Add(-time.Hour)},
+		},
+	})
+
+	if !s.loaded {
+		t.Fatal("expected loaded to be true after HandleSessionsList")
+	}
+	if len(s.sessions) != 2 {
+		t.Fatalf("expected 2 sessions, got %d", len(s.sessions))
+	}
+
+	view := s.View()
+	if !strings.Contains(view, "main") {
+		t.Fatal("expected 'main' session in sidebar view")
+	}
+	if !strings.Contains(view, "chat-01") {
+		t.Fatal("expected 'chat-01' session in sidebar view")
+	}
+}
+
+func TestSidebarFocusToggle(t *testing.T) {
+	m := newTestAppModel()
+
+	// Initially sidebar should not be focused
+	if m.sidebarFocused {
+		t.Fatal("expected sidebar to not be focused initially")
+	}
+
+	// Toggle sidebar focus
+	updated, _ := m.Update(SidebarToggleFocusMsg{})
+	app := updated.(appModel)
+	if !app.sidebarFocused {
+		t.Fatal("expected sidebar to be focused after toggle")
+	}
+	if !app.sidebar.IsFocused() {
+		t.Fatal("expected sidebar.IsFocused() to be true")
+	}
+
+	// Toggle back
+	updated, _ = app.Update(SidebarToggleFocusMsg{})
+	app = updated.(appModel)
+	if app.sidebarFocused {
+		t.Fatal("expected sidebar to not be focused after second toggle")
 	}
 }
 
@@ -472,7 +528,7 @@ func newTestAppModel() appModel {
 		sessionID: "main",
 		provider:  "mock",
 		modelID:   "default",
-		inspector: NewInspector("mock", "default", "main"),
+		sidebar:   NewSidebar("mock", "default", "main"),
 		chatView:  NewChatView(nil, "mock", "default", "main", 80, 24),
 		settings:  NewSettingsView(nil, "mock", "default", "main", 80, 24),
 	}

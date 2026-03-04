@@ -34,6 +34,9 @@ type SessionChangedMsg struct{ SessionID string }
 // ProfileChangedMsg indicates the active profile was changed.
 type ProfileChangedMsg struct{ ProfileID string }
 
+// SidebarToggleFocusMsg toggles keyboard focus between sidebar and chat.
+type SidebarToggleFocusMsg struct{}
+
 // ---------------------------------------------------------------------------
 // Chat messages
 // ---------------------------------------------------------------------------

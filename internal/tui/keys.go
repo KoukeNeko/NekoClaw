@@ -10,30 +10,39 @@ type AppKeyMap struct {
 
 // ChatKeyMap defines key bindings for the chat view.
 type ChatKeyMap struct {
-	Submit       key.Binding
-	NewLine      key.Binding
-	OpenSettings key.Binding
-	ScrollUp     key.Binding
-	ScrollDown   key.Binding
-	PageUp       key.Binding
-	PageDown     key.Binding
-	GoToTop      key.Binding
-	GoToBottom   key.Binding
-	HistoryPrev  key.Binding
-	HistoryNext  key.Binding
+	Submit        key.Binding
+	NewLine       key.Binding
+	OpenSettings  key.Binding
+	ToggleSidebar key.Binding
+	ScrollUp      key.Binding
+	ScrollDown    key.Binding
+	PageUp        key.Binding
+	PageDown      key.Binding
+	GoToTop       key.Binding
+	GoToBottom    key.Binding
+	HistoryPrev   key.Binding
+	HistoryNext   key.Binding
+}
+
+// SidebarKeyMap defines key bindings for sidebar navigation.
+type SidebarKeyMap struct {
+	Up     key.Binding
+	Down   key.Binding
+	Select key.Binding
+	Back   key.Binding
 }
 
 // SettingsKeyMap defines key bindings for the settings view.
 type SettingsKeyMap struct {
-	Back        key.Binding
-	Up          key.Binding
-	Down        key.Binding
-	Left        key.Binding
-	Right       key.Binding
-	Select      key.Binding
-	Delete      key.Binding
-	Tab         key.Binding
-	ShiftTab    key.Binding
+	Back     key.Binding
+	Up       key.Binding
+	Down     key.Binding
+	Left     key.Binding
+	Right    key.Binding
+	Select   key.Binding
+	Delete   key.Binding
+	Tab      key.Binding
+	ShiftTab key.Binding
 }
 
 var appKeys = AppKeyMap{
@@ -42,17 +51,25 @@ var appKeys = AppKeyMap{
 }
 
 var chatKeys = ChatKeyMap{
-	Submit:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "send")),
-	NewLine:      key.NewBinding(key.WithKeys("shift+enter", "alt+enter"), key.WithHelp("shift+enter", "new line")),
-	OpenSettings: key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "settings")),
-	ScrollUp:     key.NewBinding(key.WithKeys("ctrl+up"), key.WithHelp("ctrl+↑", "scroll up")),
-	ScrollDown:   key.NewBinding(key.WithKeys("ctrl+down"), key.WithHelp("ctrl+↓", "scroll down")),
-	PageUp:       key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup", "page up")),
-	PageDown:     key.NewBinding(key.WithKeys("pgdown"), key.WithHelp("pgdn", "page down")),
-	GoToTop:      key.NewBinding(key.WithKeys("home"), key.WithHelp("home", "top")),
-	GoToBottom:   key.NewBinding(key.WithKeys("end"), key.WithHelp("end", "bottom")),
-	HistoryPrev:  key.NewBinding(key.WithKeys("alt+up"), key.WithHelp("alt+↑", "prev input")),
-	HistoryNext:  key.NewBinding(key.WithKeys("alt+down"), key.WithHelp("alt+↓", "next input")),
+	Submit:        key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "send")),
+	NewLine:       key.NewBinding(key.WithKeys("shift+enter", "alt+enter"), key.WithHelp("shift+enter", "new line")),
+	OpenSettings:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "settings")),
+	ToggleSidebar: key.NewBinding(key.WithKeys("ctrl+b"), key.WithHelp("ctrl+b", "sidebar")),
+	ScrollUp:      key.NewBinding(key.WithKeys("ctrl+up"), key.WithHelp("ctrl+↑", "scroll up")),
+	ScrollDown:    key.NewBinding(key.WithKeys("ctrl+down"), key.WithHelp("ctrl+↓", "scroll down")),
+	PageUp:        key.NewBinding(key.WithKeys("pgup"), key.WithHelp("pgup", "page up")),
+	PageDown:      key.NewBinding(key.WithKeys("pgdown"), key.WithHelp("pgdn", "page down")),
+	GoToTop:       key.NewBinding(key.WithKeys("home"), key.WithHelp("home", "top")),
+	GoToBottom:    key.NewBinding(key.WithKeys("end"), key.WithHelp("end", "bottom")),
+	HistoryPrev:   key.NewBinding(key.WithKeys("alt+up"), key.WithHelp("alt+↑", "prev input")),
+	HistoryNext:   key.NewBinding(key.WithKeys("alt+down"), key.WithHelp("alt+↓", "next input")),
+}
+
+var sidebarKeys = SidebarKeyMap{
+	Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+	Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+	Select: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select session")),
+	Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back to chat")),
 }
 
 var settingsKeys = SettingsKeyMap{

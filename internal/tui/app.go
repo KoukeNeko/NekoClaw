@@ -16,11 +16,12 @@ const (
 
 // appModel is the root bubbletea model.
 type appModel struct {
-	chatView  ChatView
-	settings  SettingsView
-	inspector Inspector
+	chatView ChatView
+	settings SettingsView
+	sidebar  Sidebar
 
-	currentView ViewID
+	currentView    ViewID
+	sidebarFocused bool
 
 	client    *client.APIClient
 	sessionID string
@@ -44,7 +45,7 @@ func Run(apiBaseURL, providerID, modelID, sessionID string) error {
 		provider:    prov,
 		modelID:     model,
 		currentView: ViewChat,
-		inspector:   NewInspector(prov, model, session),
+		sidebar:     NewSidebar(prov, model, session),
 		chatView:    NewChatView(apiClient, prov, model, session, 80, 24),
 		settings:    NewSettingsView(apiClient, prov, model, session, 80, 24),
 	}
@@ -58,7 +59,11 @@ func Run(apiBaseURL, providerID, modelID, sessionID string) error {
 }
 
 func (m appModel) Init() tea.Cmd {
-	return tea.Batch(m.chatView.Init(), m.settings.Show())
+	return tea.Batch(
+		m.chatView.Init(),
+		m.settings.Show(),
+		listSessionsCmd(m.client),
+	)
 }
 
 func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -67,20 +72,18 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		// macOS Settings Style: left is ~25-30% for Sidebar (Inspector), right is 70-75% for Content
-		// Chat Style: left is 75% for Chat, right is 25% for Inspector
-		// To simplify state machine resizing, we assign fixed ratios: Inspector always 25%, Content/Chat 75%
-		leftW := (msg.Width * 75) / 100
+		// Sidebar on left (25%), Chat on right (75%)
+		leftW := (msg.Width * 25) / 100
 		rightW := msg.Width - leftW
 
-		m.inspector.SetSize(rightW, msg.Height)
+		m.sidebar.SetSize(leftW, msg.Height)
 
 		contentH := msg.Height
 		if contentH < 3 {
 			contentH = 3
 		}
-		m.chatView.SetSize(leftW, contentH)
-		m.settings.SetSize(leftW, contentH)
+		m.chatView.SetSize(rightW, contentH)
+		m.settings.SetSize(rightW, contentH)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -93,9 +96,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.currentView == ViewSettings {
 			m.currentView = ViewChat
 			m.settings.Hide()
+			m.sidebarFocused = false
+			m.sidebar.SetFocus(false)
 			return m, m.chatView.Focus()
 		}
 		m.currentView = ViewSettings
+		m.sidebarFocused = false
+		m.sidebar.SetFocus(false)
 		return m, m.settings.Show()
 
 	// Legacy: SwitchViewMsg still works for compatibility
@@ -108,39 +115,60 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.settings.Hide()
 		return m, m.chatView.Focus()
 
+	// Toggle sidebar focus
+	case SidebarToggleFocusMsg:
+		m.sidebarFocused = !m.sidebarFocused
+		m.sidebar.SetFocus(m.sidebarFocused)
+		if m.sidebarFocused {
+			m.chatView.Blur()
+			return m, nil
+		}
+		return m, m.chatView.Focus()
+
+	// Session list loaded — forward to both sidebar and settings
+	case SessionsListMsg:
+		m.sidebar.HandleSessionsList(msg)
+		if m.currentView == ViewSettings {
+			cmd := m.settings.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+
 	// Record token usage from chat responses
 	case ChatResultMsg:
 		if msg.Err == nil {
 			m.settings.Usage().RecordUsage(msg.Response.Usage, msg.Response.Model)
-			m.inspector.SetCost(m.settings.Usage().TotalCost())
+			m.sidebar.SetCost(m.settings.Usage().TotalCost())
 		}
 
 	// Status bar updates
 	case StatusUpdateMsg:
-		m.inspector.SetContextPercent(msg.ContextPercent)
-		m.inspector.SetCost(msg.Cost)
-		m.inspector.SetMessageCount(msg.MessageCount)
+		m.sidebar.SetContextPercent(msg.ContextPercent)
+		m.sidebar.SetCost(msg.Cost)
+		m.sidebar.SetMessageCount(msg.MessageCount)
 
 	// Shared state changes
 	case ProviderChangedMsg:
 		m.provider = msg.Provider
-		m.inspector.SetProvider(msg.Provider)
+		m.sidebar.SetProvider(msg.Provider)
 		m.chatView.SetProvider(msg.Provider)
 		m.settings.SetProvider(msg.Provider)
 
 	case ModelChangedMsg:
 		m.modelID = msg.ModelID
-		m.inspector.SetModel(msg.ModelID)
+		m.sidebar.SetModel(msg.ModelID)
 		m.chatView.SetModel(msg.ModelID)
 		m.settings.SetModel(msg.ModelID)
 
 	case SessionChangedMsg:
 		m.sessionID = msg.SessionID
-		m.inspector.SetSession(msg.SessionID)
+		m.sidebar.SetCurrentSession(msg.SessionID)
 		m.chatView.SetSession(msg.SessionID)
 		m.settings.SetSession(msg.SessionID)
 		m.settings.Usage().Reset()
-		m.inspector.SetCost(0)
+		m.sidebar.SetCost(0)
+		// Reload session list to reflect changes
+		return m, listSessionsCmd(m.client)
 
 	case ProfileChangedMsg:
 		m.settings.SetActiveProfile(msg.ProfileID)
@@ -149,6 +177,12 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// When settings overlay is visible, delegate all events to settings first
 	if m.currentView == ViewSettings {
 		cmd := m.settings.Update(msg)
+		return m, cmd
+	}
+
+	// When sidebar is focused, delegate key events to sidebar
+	if m.sidebarFocused {
+		cmd := m.sidebar.Update(msg)
 		return m, cmd
 	}
 
@@ -163,11 +197,11 @@ func (m appModel) View() string {
 		return ""
 	}
 
+	sidebarContent := m.sidebar.View()
 	chatContent := m.chatView.View()
-	inspectorContent := m.inspector.View()
 
-	// The background is always Chat (Left) + Inspector (Right)
-	rendered := lipgloss.JoinHorizontal(lipgloss.Top, chatContent, inspectorContent)
+	// Sidebar (Left) + Chat (Right)
+	rendered := lipgloss.JoinHorizontal(lipgloss.Top, sidebarContent, chatContent)
 
 	// If in Settings mode, overlay the settings modal on top of the dimmed background
 	if m.currentView == ViewSettings {

@@ -108,6 +108,11 @@ func (cv *ChatView) Update(msg tea.Msg) tea.Cmd {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Sidebar toggle (not during pending)
+		if key.Matches(msg, chatKeys.ToggleSidebar) && !cv.pending {
+			return func() tea.Msg { return SidebarToggleFocusMsg{} }
+		}
+
 		// Settings shortcut (not during pending)
 		if key.Matches(msg, chatKeys.OpenSettings) && !cv.pending {
 			cv.input.Blur()
