@@ -65,6 +65,7 @@ func (m appModel) Init() tea.Cmd {
 		m.chatView.Init(),
 		m.settings.Show(),
 		listSessionsCmd(m.client),
+		loadSessionTranscriptCmd(m.client, m.sessionID),
 	)
 }
 
@@ -178,12 +179,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SessionChangedMsg:
 		m.sessionID = msg.SessionID
 		m.sidebar.SetCurrentSession(msg.SessionID)
-		m.chatView.SetSession(msg.SessionID)
 		m.settings.SetSession(msg.SessionID)
 		m.settings.Usage().Reset()
 		m.sidebar.SetCost(0)
-		// Reload session list to reflect changes
-		return m, listSessionsCmd(m.client)
+		// Delegate to chatView so it triggers transcript loading
+		chatCmd := m.chatView.Update(msg)
+		return m, tea.Batch(chatCmd, listSessionsCmd(m.client))
+
+	case TranscriptLoadedMsg:
+		// Always route to chatView regardless of current view
+		cmd := m.chatView.Update(msg)
+		return m, cmd
 
 	case ProfileChangedMsg:
 		m.settings.SetActiveProfile(msg.ProfileID)

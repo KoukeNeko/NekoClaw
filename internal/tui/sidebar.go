@@ -302,6 +302,7 @@ func (s Sidebar) renderInspectorFooter(width int) string {
 	sb.WriteString(theme.NormalStyle.Render(fmt.Sprintf("%d", s.messageCount)) + "\n\n")
 
 	sb.WriteString(theme.SectionStyle.Render("SHORTCUTS") + "\n")
+	sb.WriteString(theme.HintStyle.Render("Ctrl+N New Chat") + "\n")
 	sb.WriteString(theme.HintStyle.Render("Ctrl+B Sidebar") + "\n")
 	sb.WriteString(theme.HintStyle.Render("Esc    Settings") + "\n")
 	sb.WriteString(theme.HintStyle.Render("/help  Commands"))
@@ -313,8 +314,8 @@ func (s Sidebar) renderInspectorFooter(width int) string {
 func (s Sidebar) inspectorFooterHeight() int {
 	// INSPECTOR(1) + blank(1) + CONTEXT(1) + bar(1) + blank(1)
 	// + COST(1) + value(1) + blank(1) + MESSAGES(1) + value(1) + blank(1)
-	// + SHORTCUTS(1) + line(1) + line(1) + line(1) = 14
-	return 14
+	// + SHORTCUTS(1) + line(1) + line(1) + line(1) + line(1) = 15
+	return 15
 }
 
 // renderProgressBar renders a text-based progress bar (moved from inspector.go).

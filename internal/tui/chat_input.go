@@ -154,7 +154,7 @@ func (ci *ChatInput) Update(msg tea.Msg) tea.Cmd {
 					ci.selectedIdx = len(ci.suggestions) - 1
 				}
 				return nil
-			case key.Matches(msg, chatKeys.Submit):
+			case key.Matches(msg, chatKeys.Submit) && !key.Matches(msg, chatKeys.NewLine):
 				if len(ci.suggestions) > 0 && ci.selectedIdx < len(ci.suggestions) {
 					cmd := ci.suggestions[ci.selectedIdx]
 					ci.textarea.SetValue(cmd.Name + " ")
@@ -164,8 +164,8 @@ func (ci *ChatInput) Update(msg tea.Msg) tea.Cmd {
 			}
 		}
 
-		// Handle Enter as submit
-		if key.Matches(msg, chatKeys.Submit) {
+		// Handle Enter as submit (exclude Shift+Enter / Alt+Enter which insert newlines)
+		if key.Matches(msg, chatKeys.Submit) && !key.Matches(msg, chatKeys.NewLine) {
 			text := strings.TrimSpace(ci.textarea.Value())
 			if text == "" {
 				return nil
@@ -256,7 +256,7 @@ func (ci ChatInput) View() string {
 	sb.WriteString("\n")
 
 	// Keybinding hint line
-	sb.WriteString(theme.HintStyle.Render("  Shift+Enter 換行 · Enter 送出 · Esc 設定"))
+	sb.WriteString(theme.HintStyle.Render("  Shift+Enter 換行 · Enter 送出 · Ctrl+N 新對話 · Esc 設定"))
 
 	return sb.String()
 }

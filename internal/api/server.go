@@ -68,6 +68,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/sessions", s.handleSessions)
 	mux.HandleFunc("/v1/sessions/delete", s.handleSessionDelete)
 	mux.HandleFunc("/v1/sessions/rename", s.handleSessionRename)
+	mux.HandleFunc("/v1/sessions/transcript", s.handleSessionTranscript)
 	mux.HandleFunc("/v1/memory/search", s.handleMemorySearch)
 	return mux
 }
@@ -925,6 +926,20 @@ func (s *Server) handleSessionRename(w http.ResponseWriter, r *http.Request) {
 		"session_id": strings.TrimSpace(req.SessionID),
 		"title":      strings.TrimSpace(req.Title),
 	})
+}
+
+func (s *Server) handleSessionTranscript(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	sessionID := strings.TrimSpace(r.URL.Query().Get("session_id"))
+	if sessionID == "" {
+		respondError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+	messages := s.svc.GetSessionTranscript(sessionID)
+	respondJSON(w, http.StatusOK, map[string]any{"messages": messages})
 }
 
 type memorySearchRequest struct {

@@ -12,6 +12,7 @@ type AppKeyMap struct {
 type ChatKeyMap struct {
 	Submit        key.Binding
 	NewLine       key.Binding
+	NewChat       key.Binding
 	OpenSettings  key.Binding
 	ToggleSidebar key.Binding
 	ScrollUp      key.Binding
@@ -53,6 +54,7 @@ var appKeys = AppKeyMap{
 var chatKeys = ChatKeyMap{
 	Submit:        key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "send")),
 	NewLine:       key.NewBinding(key.WithKeys("shift+enter", "alt+enter"), key.WithHelp("shift+enter", "new line")),
+	NewChat:       key.NewBinding(key.WithKeys("ctrl+n"), key.WithHelp("ctrl+n", "new chat")),
 	OpenSettings:  key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "settings")),
 	ToggleSidebar: key.NewBinding(key.WithKeys("ctrl+b"), key.WithHelp("ctrl+b", "sidebar")),
 	ScrollUp:      key.NewBinding(key.WithKeys("ctrl+up"), key.WithHelp("ctrl+↑", "scroll up")),

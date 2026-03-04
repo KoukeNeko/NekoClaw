@@ -360,6 +360,15 @@ func renameSessionCmd(apiClient *client.APIClient, sessionID, title string) tea.
 	}
 }
 
+func loadSessionTranscriptCmd(apiClient *client.APIClient, sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		msgs, err := apiClient.GetSessionTranscript(ctx, sessionID)
+		return TranscriptLoadedMsg{SessionID: sessionID, Messages: msgs, Err: err}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Memory
 // ---------------------------------------------------------------------------

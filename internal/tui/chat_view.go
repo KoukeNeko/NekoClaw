@@ -22,6 +22,7 @@ type ChatView struct {
 
 	// Thinking pseudo-message tracking
 	thinkingActive bool
+	thinkingStart  time.Time
 
 	// Shared state (set by parent)
 	client    *client.APIClient
@@ -76,6 +77,7 @@ func NewChatView(apiClient *client.APIClient, provider, modelID, sessionID strin
 			"快捷鍵：\n" +
 			"  Enter       送出訊息\n" +
 			"  Shift+Enter 換行\n" +
+			"  Ctrl+N      新對話\n" +
 			"  Esc         開啟設定\n" +
 			"  /help       查看所有指令",
 		Timestamp: time.Now(),
@@ -135,6 +137,12 @@ func (cv *ChatView) Update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 
+		// New chat (Ctrl+N)
+		if key.Matches(msg, chatKeys.NewChat) && !cv.pending {
+			newSession := fmt.Sprintf("chat-%s", time.Now().Format("0102-150405"))
+			return func() tea.Msg { return SessionChangedMsg{SessionID: newSession} }
+		}
+
 		// Sidebar toggle (not during pending/approval flow)
 		if key.Matches(msg, chatKeys.ToggleSidebar) && !cv.pending {
 			return func() tea.Msg { return SidebarToggleFocusMsg{} }
@@ -183,9 +191,33 @@ func (cv *ChatView) Update(msg tea.Msg) tea.Cmd {
 		cv.sessionID = msg.SessionID
 		cv.viewport.SetMessages([]ChatMessage{{
 			Role:      "system",
-			Content:   "Switched to session: " + msg.SessionID,
+			Content:   "Loading session…",
 			Timestamp: time.Now(),
 		}})
+		return loadSessionTranscriptCmd(cv.client, msg.SessionID)
+
+	case TranscriptLoadedMsg:
+		if msg.SessionID != cv.sessionID {
+			return nil // stale response from a previous session switch
+		}
+		if msg.Err != nil {
+			cv.viewport.SetMessages([]ChatMessage{{
+				Role:      "error",
+				Content:   "Failed to load history: " + msg.Err.Error(),
+				Timestamp: time.Now(),
+			}})
+			return nil
+		}
+		chatMsgs := transcriptToChatMessages(msg.Messages)
+		if len(chatMsgs) == 0 {
+			chatMsgs = []ChatMessage{{
+				Role:    "system",
+				Content: "No messages yet. Start chatting!",
+				Timestamp: time.Now(),
+			}}
+		}
+		cv.viewport.SetMessages(chatMsgs)
+		cv.viewport.viewport.GotoBottom()
 		return nil
 
 	case ProviderChangedMsg:
@@ -213,7 +245,7 @@ func (cv *ChatView) Update(msg tea.Msg) tea.Cmd {
 			var cmd tea.Cmd
 			cv.spinner, cmd = cv.spinner.Update(msg)
 			if cv.thinkingActive {
-				cv.viewport.UpdateLastMessage(cv.spinner.View() + " thinking...")
+				cv.viewport.UpdateLastMessage(cv.thinkingStatus())
 			}
 			cmds = append(cmds, cmd)
 		}
@@ -269,6 +301,12 @@ func (cv ChatView) renderHeader() string {
 	return header + "\n" + separator
 }
 
+// thinkingStatus builds a single-line status: ⠋ provider · model · 3.2s
+func (cv ChatView) thinkingStatus() string {
+	elapsed := time.Since(cv.thinkingStart).Truncate(100 * time.Millisecond)
+	return fmt.Sprintf("%s %s · %s · %s", cv.spinner.View(), cv.provider, cv.modelID, elapsed)
+}
+
 func (cv *ChatView) handleSubmit(text string) tea.Cmd {
 	// Check for local commands first
 	if cmd := cv.handleSlashCommand(text); cmd != nil {
@@ -282,12 +320,13 @@ func (cv *ChatView) handleSubmit(text string) tea.Cmd {
 		Timestamp: time.Now(),
 	})
 
-	// Append thinking pseudo-message (animated by spinner ticks)
+	// Append status pseudo-message (animated by spinner ticks)
 	cv.pending = true
 	cv.thinkingActive = true
+	cv.thinkingStart = time.Now()
 	cv.viewport.AppendMessage(ChatMessage{
 		Role:      "thinking",
-		Content:   cv.spinner.View() + " thinking...",
+		Content:   cv.thinkingStatus(),
 		Timestamp: time.Now(),
 	})
 
@@ -412,9 +451,10 @@ func (cv *ChatView) handleApprovalDecision(decision string) tea.Cmd {
 
 	cv.pending = true
 	cv.thinkingActive = true
+	cv.thinkingStart = time.Now()
 	cv.viewport.AppendMessage(ChatMessage{
 		Role:      "thinking",
-		Content:   cv.spinner.View() + " applying approvals...",
+		Content:   cv.thinkingStatus(),
 		Timestamp: time.Now(),
 	})
 	return tea.Batch(sendChatCmd(cv.client, req), cv.spinner.Tick)
@@ -509,4 +549,18 @@ func (cv *ChatView) handleSlashCommand(text string) tea.Cmd {
 	}
 
 	return nil // not a slash command, proceed with normal send
+}
+
+// transcriptToChatMessages converts API transcript messages to TUI ChatMessages.
+func transcriptToChatMessages(msgs []client.TranscriptMessage) []ChatMessage {
+	out := make([]ChatMessage, 0, len(msgs))
+	for _, m := range msgs {
+		ts, _ := time.Parse(time.RFC3339Nano, m.CreatedAt)
+		out = append(out, ChatMessage{
+			Role:      m.Role,
+			Content:   m.Content,
+			Timestamp: ts,
+		})
+	}
+	return out
 }

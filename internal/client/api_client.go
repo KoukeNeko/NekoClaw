@@ -965,6 +965,29 @@ func (c *APIClient) RenameSession(ctx context.Context, sessionID, title string) 
 	return c.doAndDecodeJSON(httpReq, &out)
 }
 
+// TranscriptMessage represents a single message returned by the transcript API.
+type TranscriptMessage struct {
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	CreatedAt string `json:"created_at"`
+}
+
+// GetSessionTranscript fetches the user/assistant messages for a session.
+func (c *APIClient) GetSessionTranscript(ctx context.Context, sessionID string) ([]TranscriptMessage, error) {
+	url := c.baseURL + "/v1/sessions/transcript?session_id=" + urlQueryEscape(strings.TrimSpace(sessionID))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Messages []TranscriptMessage `json:"messages"`
+	}
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return nil, err
+	}
+	return out.Messages, nil
+}
+
 type MemorySearchResult struct {
 	SessionID string    `json:"session_id"`
 	EntryID   string    `json:"entry_id"`

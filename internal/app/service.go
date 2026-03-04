@@ -48,6 +48,7 @@ type Service struct {
 	preferredProfiles map[string]string
 	fallbacks         map[string][]string // primary provider -> fallback provider IDs
 	toolRuntime       *tooling.Runtime
+	titleGenPending   sync.Map // sessionID -> bool; dedup concurrent title generation
 }
 
 type ServiceOptions struct {
@@ -100,6 +101,21 @@ func (s *Service) RenameSession(sessionID, title string) error {
 	}
 	s.sessions.SetTitle(sessionID, title)
 	return nil
+}
+
+// GetSessionTranscript returns user and assistant messages for display in the TUI.
+// It skips system/tool messages and compaction entries since they aren't useful
+// in the chat viewport.
+func (s *Service) GetSessionTranscript(sessionID string) []core.Message {
+	msgs := s.sessions.HistoryAsMessages(sessionID)
+	display := make([]core.Message, 0, len(msgs))
+	for _, m := range msgs {
+		switch m.Role {
+		case core.RoleUser, core.RoleAssistant:
+			display = append(display, m)
+		}
+	}
+	return display
 }
 
 func (s *Service) SearchMemory(query string, limit int) ([]memory.SearchResult, error) {
@@ -2912,16 +2928,24 @@ func (s *Service) generateSessionTitleAsync(
 	userContent, assistantContent string,
 ) {
 	meta, exists := s.sessions.GetMetadata(sessionID)
-	if !exists || meta.Title != "" || meta.MessageCount > 2 {
+	if !exists || meta.Title != "" {
+		return
+	}
+
+	// Prevent duplicate goroutines for the same session.
+	if _, loaded := s.titleGenPending.LoadOrStore(sessionID, true); loaded {
 		return
 	}
 
 	prov, _, err := s.resolveProviderPool(providerID)
 	if err != nil {
+		s.titleGenPending.Delete(sessionID)
 		return
 	}
 
 	go func() {
+		defer s.titleGenPending.Delete(sessionID)
+
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 

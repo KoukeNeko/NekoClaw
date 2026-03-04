@@ -227,6 +227,13 @@ type SessionRenameMsg struct {
 	Err       error
 }
 
+// TranscriptLoadedMsg carries the loaded transcript for a session.
+type TranscriptLoadedMsg struct {
+	SessionID string
+	Messages  []client.TranscriptMessage
+	Err       error
+}
+
 // refreshSessionsTickMsg triggers a delayed session list reload.
 type refreshSessionsTickMsg struct{}
 
