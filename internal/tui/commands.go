@@ -393,3 +393,22 @@ func searchMemoryCmd(apiClient *client.APIClient, query string, limit int) tea.C
 		return MemorySearchMsg{Results: results, Err: err}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// MCP
+// ---------------------------------------------------------------------------
+
+func listMCPServersCmd(apiClient *client.APIClient) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		servers, sErr := apiClient.ListMCPServers(ctx)
+		tools, tErr := apiClient.ListMCPTools(ctx)
+		// Prefer server error; if none, use tool error.
+		err := sErr
+		if err == nil {
+			err = tErr
+		}
+		return MCPServersMsg{Servers: servers, Tools: tools, Err: err}
+	}
+}

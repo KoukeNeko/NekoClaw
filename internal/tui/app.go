@@ -108,6 +108,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sidebar.SetFocus(false)
 		return m, m.settings.Show()
 
+	// Open settings overlay to a specific section tab
+	case OpenSettingsSectionMsg:
+		m.currentView = ViewSettings
+		m.sidebarFocused = false
+		m.sidebar.SetFocus(false)
+		return m, m.settings.ShowSection(msg.Section)
+
 	// Legacy: SwitchViewMsg still works for compatibility
 	case SwitchViewMsg:
 		if msg.View == ViewSettings {

@@ -571,6 +571,7 @@ func (cv *ChatView) handleSlashCommand(text string) (tea.Cmd, bool) {
 				"  /model     — Switch model\n" +
 				"  /session   — Switch session\n" +
 				"  /memory    — Search memory\n" +
+				"  /mcp       — Show MCP servers\n" +
 				"\n  Esc — Settings  ·  Shift+Enter — New line",
 			Timestamp: time.Now(),
 		})
@@ -657,6 +658,10 @@ func (cv *ChatView) handleSlashCommand(text string) (tea.Cmd, bool) {
 			Timestamp: time.Now(),
 		})
 		return nil, true
+
+	case "/mcp":
+		cv.input.Blur()
+		return func() tea.Msg { return OpenSettingsSectionMsg{Section: SectionMCP} }, true
 	}
 
 	return nil, false // not a slash command, proceed with normal send

@@ -70,6 +70,16 @@ func main() {
 		fatal(err)
 	}
 
+	// Start MCP server connections (non-fatal on failure).
+	if err := service.StartMCP(context.Background()); err != nil {
+		log.Printf("event=mcp_start_error error=%q", err)
+	}
+	defer func() {
+		if err := service.StopMCP(); err != nil {
+			log.Printf("event=mcp_stop_error error=%q", err)
+		}
+	}()
+
 	switch runMode {
 	case "api":
 		ctx := context.Background()
@@ -210,6 +220,14 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	}
 	workspaceRoot, _ := os.Getwd()
 
+	// Resolve MCP config directory (default: ~/.nekoclaw/mcp/).
+	mcpDir := strings.TrimSpace(envOr("NEKOCLAW_MCP_DIR", ""))
+	if mcpDir == "" {
+		if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+			mcpDir = filepath.Join(home, ".nekoclaw", "mcp")
+		}
+	}
+
 	svc := app.NewService(app.ServiceOptions{
 		SessionStore:  sessionStore,
 		Lifecycle:     lifecycle,
@@ -217,6 +235,7 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		SearchIndex:   searchIndex,
 		WorkspaceRoot: workspaceRoot,
 		ToolRunTTL:    envOrDuration("NEKOCLAW_TOOL_RUN_TTL", 10*time.Minute),
+		MCPConfigDir:  mcpDir,
 	})
 
 	mockProvider := provider.NewMockProvider()

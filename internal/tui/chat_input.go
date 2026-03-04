@@ -83,6 +83,7 @@ func NewChatInput(width, termHeight int) ChatInput {
 			{Name: "/model", Description: "Switch model"},
 			{Name: "/session", Description: "Switch session"},
 			{Name: "/memory", Description: "Search memory"},
+			{Name: "/mcp", Description: "Show MCP servers"},
 		},
 	}
 	return ci

@@ -16,6 +16,7 @@ import (
 	"github.com/doeshing/nekoclaw/internal/compaction"
 	"github.com/doeshing/nekoclaw/internal/contextwindow"
 	"github.com/doeshing/nekoclaw/internal/core"
+	"github.com/doeshing/nekoclaw/internal/mcp"
 	"github.com/doeshing/nekoclaw/internal/memory"
 	"github.com/doeshing/nekoclaw/internal/provider"
 	"github.com/doeshing/nekoclaw/internal/tooling"
@@ -48,6 +49,7 @@ type Service struct {
 	preferredProfiles map[string]string
 	fallbacks         map[string][]string // primary provider -> fallback provider IDs
 	toolRuntime       *tooling.Runtime
+	mcpManager        *mcp.Manager
 	titleGenPending   sync.Map // sessionID -> bool; dedup concurrent title generation
 }
 
@@ -58,6 +60,7 @@ type ServiceOptions struct {
 	SearchIndex   *memory.SearchIndex
 	WorkspaceRoot string
 	ToolRunTTL    time.Duration
+	MCPConfigDir  string
 }
 
 func NewService(opts ServiceOptions) *Service {
@@ -76,7 +79,16 @@ func NewService(opts ServiceOptions) *Service {
 		fallbacks:         map[string][]string{},
 	}
 	policy := tooling.DefaultPolicy(opts.WorkspaceRoot)
-	executor := tooling.NewRuntimeExecutor(serviceToolBackend{svc: svc}, policy)
+	builtinExecutor := tooling.NewRuntimeExecutor(serviceToolBackend{svc: svc}, policy)
+
+	// If MCP config directory is provided, create a Manager and wrap with CompositeExecutor.
+	var executor tooling.Executor = builtinExecutor
+	if opts.MCPConfigDir != "" {
+		mcpMgr := mcp.NewManager(opts.MCPConfigDir)
+		svc.mcpManager = mcpMgr
+		executor = tooling.NewCompositeExecutor(builtinExecutor, mcpMgr)
+	}
+
 	svc.toolRuntime = tooling.NewRuntime(executor, tooling.NewApprovalStore(opts.ToolRunTTL))
 	return svc
 }
@@ -87,6 +99,46 @@ func (s *Service) ListSessions() []core.SessionMetadata {
 
 func (s *Service) DeleteSession(sessionID string) error {
 	return s.sessions.DeleteSession(sessionID)
+}
+
+// StartMCP initializes all MCP server connections. Non-fatal errors are logged.
+func (s *Service) StartMCP(ctx context.Context) error {
+	if s.mcpManager == nil {
+		return nil
+	}
+	return s.mcpManager.Start(ctx)
+}
+
+// StopMCP gracefully shuts down all MCP server connections.
+func (s *Service) StopMCP() error {
+	if s.mcpManager == nil {
+		return nil
+	}
+	return s.mcpManager.Stop()
+}
+
+// MCPServers returns status info for all configured MCP servers.
+func (s *Service) MCPServers() []mcp.ServerInfo {
+	if s.mcpManager == nil {
+		return nil
+	}
+	return s.mcpManager.Servers()
+}
+
+// MCPToolDefinitions returns all tool definitions from connected MCP servers.
+func (s *Service) MCPToolDefinitions() []mcp.ToolInfo {
+	if s.mcpManager == nil {
+		return nil
+	}
+	return s.mcpManager.ToolInfos()
+}
+
+// ReconnectMCPServer attempts to reconnect a specific MCP server.
+func (s *Service) ReconnectMCPServer(ctx context.Context, serverName string) error {
+	if s.mcpManager == nil {
+		return fmt.Errorf("mcp not configured")
+	}
+	return s.mcpManager.Reconnect(ctx, serverName)
 }
 
 // RenameSession sets a custom title for the given session.

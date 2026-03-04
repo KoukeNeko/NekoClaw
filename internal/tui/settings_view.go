@@ -18,9 +18,10 @@ const (
 	SectionSessions
 	SectionMemory
 	SectionUsage
+	SectionMCP
 )
 
-var sectionNames = []string{"Provider", "Auth", "Sessions", "Memory", "Usage"}
+var sectionNames = []string{"Provider", "Auth", "Sessions", "Memory", "Usage", "MCP"}
 
 // SettingsView is a modal overlay with tabbed navigation.
 type SettingsView struct {
@@ -33,6 +34,7 @@ type SettingsView struct {
 	session  SessionSection
 	memory   MemorySection
 	usage    UsageSection
+	mcp      MCPSection
 
 	// Shared state from parent
 	apiClient     *client.APIClient
@@ -52,6 +54,7 @@ func NewSettingsView(apiClient *client.APIClient, providerID, modelID, sessionID
 		session:       NewSessionSection(sessionID),
 		memory:        NewMemorySection(),
 		usage:         NewUsageSection(providerID, modelID),
+		mcp:           NewMCPSection(),
 		apiClient:     apiClient,
 		providerID:    providerID,
 		modelID:       modelID,
@@ -85,6 +88,14 @@ func (sv *SettingsView) Usage() *UsageSection { return &sv.usage }
 // Show makes the overlay visible and loads data for the active tab.
 func (sv *SettingsView) Show() tea.Cmd {
 	sv.visible = true
+	sv.initialized = false
+	return sv.enterSection()
+}
+
+// ShowSection opens the overlay and navigates to a specific section.
+func (sv *SettingsView) ShowSection(section SettingsSection) tea.Cmd {
+	sv.visible = true
+	sv.activeSection = section
 	sv.initialized = false
 	return sv.enterSection()
 }
@@ -204,6 +215,8 @@ func (sv *SettingsView) Update(msg tea.Msg) tea.Cmd {
 		return sv.session.HandleSessionRename(msg, sv.apiClient)
 	case MemorySearchMsg:
 		return sv.memory.HandleSearchResults(msg)
+	case MCPServersMsg:
+		return sv.mcp.HandleServers(msg)
 	}
 
 	return nil
@@ -228,6 +241,8 @@ func (sv *SettingsView) enterSection() tea.Cmd {
 		return sv.memory.Focus()
 	case SectionUsage:
 		return nil // Usage is local state, no API call needed
+	case SectionMCP:
+		return listMCPServersCmd(sv.apiClient)
 	}
 	return nil
 }
@@ -243,6 +258,8 @@ func (sv *SettingsView) sectionHasActiveInput() bool {
 	case SectionMemory:
 		return sv.memory.HasActiveInput()
 	case SectionUsage:
+		return false
+	case SectionMCP:
 		return false
 	}
 	return false
@@ -260,6 +277,8 @@ func (sv *SettingsView) delegateToSection(msg tea.KeyMsg) tea.Cmd {
 		return sv.memory.Update(msg, sv.apiClient)
 	case SectionUsage:
 		return sv.usage.Update(msg)
+	case SectionMCP:
+		return sv.mcp.Update(msg, sv.apiClient)
 	}
 	return nil
 }
@@ -308,6 +327,8 @@ func (sv SettingsView) RenderOverlay(chatBg string, width, height int) string {
 		sectionContent = sv.memory.View(textW)
 	case SectionUsage:
 		sectionContent = sv.usage.View(textW)
+	case SectionMCP:
+		sectionContent = sv.mcp.View(textW)
 	}
 
 	var lines []string

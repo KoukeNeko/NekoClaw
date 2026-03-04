@@ -15,6 +15,9 @@ type SwitchViewMsg struct{ View ViewID }
 // ToggleSettingsMsg requests the settings overlay to toggle visibility.
 type ToggleSettingsMsg struct{}
 
+// OpenSettingsSectionMsg opens the settings overlay to a specific section.
+type OpenSettingsSectionMsg struct{ Section SettingsSection }
+
 // StatusUpdateMsg carries updated status bar information from chat view.
 type StatusUpdateMsg struct {
 	ContextPercent int
@@ -250,5 +253,16 @@ type refreshSessionsTickMsg struct{}
 // MemorySearchMsg carries memory search results.
 type MemorySearchMsg struct {
 	Results []client.MemorySearchResult
+	Err     error
+}
+
+// ---------------------------------------------------------------------------
+// MCP messages
+// ---------------------------------------------------------------------------
+
+// MCPServersMsg carries MCP server and tool info for the settings tab.
+type MCPServersMsg struct {
+	Servers []client.MCPServerInfo
+	Tools   []client.MCPToolInfo
 	Err     error
 }

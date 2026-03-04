@@ -110,9 +110,15 @@ func (ps *ProviderSection) Update(msg tea.KeyMsg, apiClient *client.APIClient, c
 		if ps.focusField == 0 && ps.providerIdx < len(ps.providers) {
 			selected := ps.providers[ps.providerIdx]
 			ps.currentProvider = selected
-			ps.models = modelOptionsForProvider(selected, ps.currentModel)
+			// Reset model list to provider-specific defaults (don't carry old model).
+			ps.models = modelOptionsForProvider(selected, "")
 			ps.modelIdx = 0
-			return func() tea.Msg { return ProviderChangedMsg{Provider: selected} }
+			defaultModel := ps.models[0] // always "default"
+			ps.currentModel = defaultModel
+			return tea.Batch(
+				func() tea.Msg { return ProviderChangedMsg{Provider: selected} },
+				func() tea.Msg { return ModelChangedMsg{ModelID: defaultModel} },
+			)
 		}
 		if ps.focusField == 1 && ps.modelIdx < len(ps.models) {
 			selected := ps.models[ps.modelIdx]

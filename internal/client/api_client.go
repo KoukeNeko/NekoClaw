@@ -1083,3 +1083,54 @@ func decodeAPIError(status int, body []byte) error {
 func urlQueryEscape(raw string) string {
 	return url.QueryEscape(strings.TrimSpace(raw))
 }
+
+// ---------------------------------------------------------------------------
+// MCP
+// ---------------------------------------------------------------------------
+
+// MCPServerInfo represents an MCP server's status.
+type MCPServerInfo struct {
+	Name      string `json:"name"`
+	Transport string `json:"transport"`
+	Trust     string `json:"trust"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
+	ToolCount int    `json:"tool_count"`
+}
+
+// MCPToolInfo represents an MCP tool.
+type MCPToolInfo struct {
+	Server      string `json:"server"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// ListMCPServers returns the list of configured MCP servers and their status.
+func (c *APIClient) ListMCPServers(ctx context.Context) ([]MCPServerInfo, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/mcp/servers", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Servers []MCPServerInfo `json:"servers"`
+	}
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return nil, err
+	}
+	return out.Servers, nil
+}
+
+// ListMCPTools returns all tools from connected MCP servers.
+func (c *APIClient) ListMCPTools(ctx context.Context) ([]MCPToolInfo, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/mcp/tools", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Tools []MCPToolInfo `json:"tools"`
+	}
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return nil, err
+	}
+	return out.Tools, nil
+}

@@ -13,6 +13,7 @@ import (
 	"github.com/doeshing/nekoclaw/internal/app"
 	"github.com/doeshing/nekoclaw/internal/auth"
 	"github.com/doeshing/nekoclaw/internal/core"
+	"github.com/doeshing/nekoclaw/internal/mcp"
 	"github.com/doeshing/nekoclaw/internal/provider"
 	"github.com/doeshing/nekoclaw/internal/tooling"
 )
@@ -70,6 +71,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/sessions/rename", s.handleSessionRename)
 	mux.HandleFunc("/v1/sessions/transcript", s.handleSessionTranscript)
 	mux.HandleFunc("/v1/memory/search", s.handleMemorySearch)
+	mux.HandleFunc("/v1/mcp/servers", s.handleMCPServers)
+	mux.HandleFunc("/v1/mcp/tools", s.handleMCPTools)
 	return mux
 }
 
@@ -1235,4 +1238,32 @@ func chooseNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// ---------------------------------------------------------------------------
+// MCP
+// ---------------------------------------------------------------------------
+
+func (s *Server) handleMCPServers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	servers := s.svc.MCPServers()
+	if servers == nil {
+		servers = []mcp.ServerInfo{}
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"servers": servers})
+}
+
+func (s *Server) handleMCPTools(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	tools := s.svc.MCPToolDefinitions()
+	if tools == nil {
+		tools = []mcp.ToolInfo{}
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"tools": tools})
 }
