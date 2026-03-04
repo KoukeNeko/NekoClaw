@@ -103,16 +103,32 @@ func (s *Service) RenameSession(sessionID, title string) error {
 	return nil
 }
 
+// TranscriptMessage is a lightweight message for TUI display (no base64 image data).
+type TranscriptMessage struct {
+	Role       string   `json:"role"`
+	Content    string   `json:"content"`
+	ImageNames []string `json:"image_names,omitempty"`
+	CreatedAt  string   `json:"created_at"`
+}
+
 // GetSessionTranscript returns user and assistant messages for display in the TUI.
-// It skips system/tool messages and compaction entries since they aren't useful
-// in the chat viewport.
-func (s *Service) GetSessionTranscript(sessionID string) []core.Message {
+// Image base64 data is stripped; only file names are included.
+func (s *Service) GetSessionTranscript(sessionID string) []TranscriptMessage {
 	msgs := s.sessions.HistoryAsMessages(sessionID)
-	display := make([]core.Message, 0, len(msgs))
+	display := make([]TranscriptMessage, 0, len(msgs))
 	for _, m := range msgs {
 		switch m.Role {
 		case core.RoleUser, core.RoleAssistant:
-			display = append(display, m)
+			var imageNames []string
+			for _, img := range m.Images {
+				imageNames = append(imageNames, img.FileName)
+			}
+			display = append(display, TranscriptMessage{
+				Role:       string(m.Role),
+				Content:    m.Content,
+				ImageNames: imageNames,
+				CreatedAt:  m.CreatedAt.Format("2006-01-02T15:04:05.999999999Z07:00"),
+			})
 		}
 	}
 	return display
@@ -1825,6 +1841,7 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 			isDefaultModel: isDefaultModel || (isFallback && strings.EqualFold(candidateModel, "default")),
 			sessionID:      sessionID,
 			prompt:         prompt,
+			images:         req.Images,
 			surface:        surface,
 			enableTools:    req.EnableTools,
 			runID:          runID,
@@ -1866,6 +1883,7 @@ type attemptSingleProviderParams struct {
 	isDefaultModel bool
 	sessionID      string
 	prompt         string
+	images         []core.ImageData
 	surface        core.Surface
 	enableTools    bool
 	runID          string
@@ -1888,10 +1906,15 @@ func (s *Service) attemptSingleProvider(
 		return core.ChatResponse{}, err
 	}
 
-	hasUserMessage := strings.TrimSpace(params.prompt) != ""
+	hasUserMessage := strings.TrimSpace(params.prompt) != "" || len(params.images) > 0
 	userMessage := core.Message{}
 	if hasUserMessage {
-		userMessage = core.Message{Role: core.RoleUser, Content: params.prompt, CreatedAt: time.Now()}
+		userMessage = core.Message{
+			Role:      core.RoleUser,
+			Content:   params.prompt,
+			Images:    params.images,
+			CreatedAt: time.Now(),
+		}
 	}
 
 	// Try LLM-based compaction first; fall back to token-based sliding window.

@@ -15,9 +15,17 @@ const (
 	RoleTool      MessageRole = "tool"
 )
 
+// ImageData holds a base64-encoded image for multimodal messages.
+type ImageData struct {
+	MimeType string `json:"mime_type"`           // e.g. "image/png", "image/jpeg"
+	Data     string `json:"data"`                // base64-encoded image bytes
+	FileName string `json:"file_name,omitempty"` // original file name (display only)
+}
+
 type Message struct {
 	Role       MessageRole `json:"role"`
 	Content    string      `json:"content"`
+	Images     []ImageData `json:"images,omitempty"`
 	ToolName   string      `json:"tool_name,omitempty"`
 	ToolCallID string      `json:"tool_call_id,omitempty"`
 	CreatedAt  time.Time   `json:"created_at"`
@@ -87,6 +95,7 @@ type ChatRequest struct {
 	Provider      string                 `json:"provider"`
 	Model         string                 `json:"model"`
 	Message       string                 `json:"message"`
+	Images        []ImageData            `json:"images,omitempty"`
 	EnableTools   bool                   `json:"enable_tools,omitempty"`
 	RunID         string                 `json:"run_id,omitempty"`
 	ToolApprovals []ToolApprovalDecision `json:"tool_approvals,omitempty"`
@@ -187,6 +196,7 @@ type SessionEntry struct {
 	// type=message
 	Role       MessageRole `json:"role,omitempty"`
 	Content    string      `json:"content,omitempty"`
+	Images     []ImageData `json:"images,omitempty"`
 	ToolName   string      `json:"tool_name,omitempty"`
 	ToolCallID string      `json:"tool_call_id,omitempty"`
 
@@ -229,6 +239,13 @@ func NewMessageEntry(role MessageRole, content string) SessionEntry {
 	}
 }
 
+// NewImageMessageEntry creates a message entry with attached images.
+func NewImageMessageEntry(role MessageRole, content string, images []ImageData) SessionEntry {
+	e := NewMessageEntry(role, content)
+	e.Images = images
+	return e
+}
+
 func NewCompactionEntry(summary string, droppedCount, droppedTokens int, firstKeptID string) SessionEntry {
 	return SessionEntry{
 		Type:             EntryCompaction,
@@ -256,6 +273,7 @@ func (e SessionEntry) ToMessage() Message {
 	return Message{
 		Role:       e.Role,
 		Content:    e.Content,
+		Images:     e.Images,
 		ToolName:   e.ToolName,
 		ToolCallID: e.ToolCallID,
 		CreatedAt:  e.Timestamp,
@@ -274,6 +292,7 @@ func MessageToEntry(msg Message) SessionEntry {
 		Timestamp:  ts,
 		Role:       msg.Role,
 		Content:    msg.Content,
+		Images:     msg.Images,
 		ToolName:   msg.ToolName,
 		ToolCallID: msg.ToolCallID,
 	}

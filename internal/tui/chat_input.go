@@ -77,6 +77,7 @@ func NewChatInput(width, termHeight int) ChatInput {
 			{Name: "/help", Description: "Show available commands"},
 			{Name: "/new", Description: "Start new conversation"},
 			{Name: "/clear", Description: "Clear chat history"},
+			{Name: "/image", Description: "Attach image file"},
 			{Name: "/config", Description: "Open settings"},
 			{Name: "/model", Description: "Switch model"},
 			{Name: "/session", Description: "Switch session"},

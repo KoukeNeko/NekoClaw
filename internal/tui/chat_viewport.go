@@ -13,6 +13,7 @@ import (
 type ChatMessage struct {
 	Role      string // "user", "assistant", "system", "error", "thinking"
 	Content   string
+	Images    []string // file names of attached images (display only)
 	Timestamp time.Time
 
 	// Cache for rendered output; invalidated when width changes.
@@ -148,12 +149,21 @@ func (cv *ChatViewport) renderMessage(msg *ChatMessage) string {
 	}
 
 	content := stripTerminalControlSequences(msg.Content)
+
+	// Prepend image attachment labels for user messages
+	var imagePrefix string
+	if len(msg.Images) > 0 {
+		for _, name := range msg.Images {
+			imagePrefix += theme.HintStyle.Render("  📎 "+name) + "\n"
+		}
+	}
+
 	var rendered string
 	switch msg.Role {
 	case "assistant":
 		rendered = cv.renderMarkdown(content)
 	case "user":
-		rendered = theme.PromptStyle.Render("> ") + theme.UserStyle.Render(content)
+		rendered = imagePrefix + theme.PromptStyle.Render("> ") + theme.UserStyle.Render(content)
 	case "system":
 		rendered = theme.SystemStyle.Render("  " + content)
 	case "error":

@@ -56,13 +56,24 @@ type anthropicRequest struct {
 }
 
 type anthropicMessage struct {
-	Role    string               `json:"role"`
-	Content []anthropicTextBlock `json:"content"`
+	Role    string `json:"role"`
+	Content []any  `json:"content"`
 }
 
 type anthropicTextBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+}
+
+type anthropicImageBlock struct {
+	Type   string                   `json:"type"`
+	Source anthropicImageBlockSource `json:"source"`
+}
+
+type anthropicImageBlockSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 type anthropicResponse struct {
@@ -416,31 +427,49 @@ func splitAnthropicMessages(messages []core.Message) (string, []anthropicMessage
 	turns := make([]anthropicMessage, 0, len(messages))
 	for _, msg := range messages {
 		text := strings.TrimSpace(msg.Content)
-		if text == "" {
+		if text == "" && len(msg.Images) == 0 {
 			continue
 		}
 		switch msg.Role {
 		case core.RoleSystem:
-			systemParts = append(systemParts, text)
+			if text != "" {
+				systemParts = append(systemParts, text)
+			}
 		case core.RoleAssistant:
-			turns = append(turns, anthropicMessage{
-				Role: "assistant",
-				Content: []anthropicTextBlock{{
-					Type: "text",
-					Text: text,
-				}},
-			})
+			if text != "" {
+				turns = append(turns, anthropicMessage{
+					Role:    "assistant",
+					Content: []any{anthropicTextBlock{Type: "text", Text: text}},
+				})
+			}
 		default:
+			content := buildAnthropicUserContent(text, msg.Images)
 			turns = append(turns, anthropicMessage{
-				Role: "user",
-				Content: []anthropicTextBlock{{
-					Type: "text",
-					Text: text,
-				}},
+				Role:    "user",
+				Content: content,
 			})
 		}
 	}
 	return strings.Join(systemParts, "\n\n"), turns
+}
+
+// buildAnthropicUserContent creates a multimodal content array with images + text.
+func buildAnthropicUserContent(text string, images []core.ImageData) []any {
+	content := make([]any, 0, len(images)+1)
+	for _, img := range images {
+		content = append(content, anthropicImageBlock{
+			Type: "image",
+			Source: anthropicImageBlockSource{
+				Type:      "base64",
+				MediaType: img.MimeType,
+				Data:      img.Data,
+			},
+		})
+	}
+	if text != "" {
+		content = append(content, anthropicTextBlock{Type: "text", Text: text})
+	}
+	return content
 }
 
 func splitAnthropicToolMessages(messages []core.Message) (string, []anthropicToolMessage) {
@@ -502,15 +531,29 @@ func splitAnthropicToolMessages(messages []core.Message) (string, []anthropicToo
 				}},
 			})
 		default:
-			if text == "" {
+			if text == "" && len(msg.Images) == 0 {
 				continue
 			}
-			turns = append(turns, anthropicToolMessage{
-				Role: "user",
-				Content: []any{map[string]any{
+			var content []any
+			for _, img := range msg.Images {
+				content = append(content, map[string]any{
+					"type": "image",
+					"source": map[string]any{
+						"type":       "base64",
+						"media_type": img.MimeType,
+						"data":       img.Data,
+					},
+				})
+			}
+			if text != "" {
+				content = append(content, map[string]any{
 					"type": "text",
 					"text": text,
-				}},
+				})
+			}
+			turns = append(turns, anthropicToolMessage{
+				Role:    "user",
+				Content: content,
 			})
 		}
 	}

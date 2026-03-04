@@ -34,6 +34,9 @@ type ChatView struct {
 	activeProfile string
 	defaultModel  string
 
+	// Pending image attachments for next submit
+	pendingImages []core.ImageData
+
 	// Tool-approval flow (blocking)
 	approvalActive    bool
 	approvalRunID     string
@@ -313,10 +316,33 @@ func (cv *ChatView) handleSubmit(text string) tea.Cmd {
 		return cmd
 	}
 
+	// Auto-detect: if user typed a single image path, attach it automatically
+	trimmed := strings.TrimSpace(text)
+	if core.IsImagePath(trimmed) && len(cv.pendingImages) == 0 {
+		img, err := core.LoadImageFromPath(trimmed)
+		if err == nil {
+			cv.pendingImages = append(cv.pendingImages, img)
+			text = "" // image-only message
+		}
+	}
+
+	// Collect image file names for display
+	var imageNames []string
+	for _, img := range cv.pendingImages {
+		imageNames = append(imageNames, img.FileName)
+	}
+
+	// Build display content
+	displayText := text
+	if displayText == "" && len(imageNames) > 0 {
+		displayText = "(image)"
+	}
+
 	// Add user message to viewport
 	cv.viewport.AppendMessage(ChatMessage{
 		Role:      "user",
-		Content:   text,
+		Content:   displayText,
+		Images:    imageNames,
 		Timestamp: time.Now(),
 	})
 
@@ -336,8 +362,10 @@ func (cv *ChatView) handleSubmit(text string) tea.Cmd {
 		Provider:    cv.provider,
 		Model:       cv.modelID,
 		Message:     text,
+		Images:      cv.pendingImages,
 		EnableTools: providerToolEnabled(cv.provider),
 	}
+	cv.pendingImages = nil // clear after submit
 	return tea.Batch(
 		sendChatCmd(cv.client, req),
 		cv.spinner.Tick,
@@ -502,6 +530,7 @@ func (cv *ChatView) handleSlashCommand(text string) tea.Cmd {
 				"  /help      — Show this help\n" +
 				"  /new       — Start new conversation\n" +
 				"  /clear     — Clear chat history\n" +
+				"  /image     — Attach image file\n" +
 				"  /config    — Open settings\n" +
 				"  /model     — Switch model\n" +
 				"  /session   — Switch session\n" +
@@ -529,6 +558,34 @@ func (cv *ChatView) handleSlashCommand(text string) tea.Cmd {
 	case "/session":
 		cv.input.Blur()
 		return func() tea.Msg { return ToggleSettingsMsg{} }
+
+	case "/image":
+		// Use the original text (not lowered) to preserve file path case
+		rawArgs := strings.TrimSpace(text[len("/image"):])
+		if rawArgs == "" {
+			cv.viewport.AppendMessage(ChatMessage{
+				Role:      "system",
+				Content:   "Usage: /image <file path>",
+				Timestamp: time.Now(),
+			})
+			return nil
+		}
+		img, err := core.LoadImageFromPath(rawArgs)
+		if err != nil {
+			cv.viewport.AppendMessage(ChatMessage{
+				Role:      "error",
+				Content:   "Failed to load image: " + err.Error(),
+				Timestamp: time.Now(),
+			})
+			return nil
+		}
+		cv.pendingImages = append(cv.pendingImages, img)
+		cv.viewport.AppendMessage(ChatMessage{
+			Role:      "system",
+			Content:   "📎 Attached: " + img.FileName + " — type your message and press Enter to send",
+			Timestamp: time.Now(),
+		})
+		return nil
 
 	case "/memory":
 		if len(parts) > 1 && strings.TrimSpace(parts[1]) != "" {
@@ -559,6 +616,7 @@ func transcriptToChatMessages(msgs []client.TranscriptMessage) []ChatMessage {
 		out = append(out, ChatMessage{
 			Role:      m.Role,
 			Content:   m.Content,
+			Images:    m.ImageNames,
 			Timestamp: ts,
 		})
 	}

@@ -35,8 +35,8 @@ type OpenAIProvider struct {
 }
 
 type openAIResponsesRequest struct {
-	Model string                   `json:"model"`
-	Input []openAIResponsesMessage `json:"input"`
+	Model string `json:"model"`
+	Input []any  `json:"input"`
 }
 
 type openAIToolResponsesRequest struct {
@@ -51,9 +51,16 @@ type openAIToolResponsesRequest struct {
 	} `json:"tools,omitempty"`
 }
 
+// openAIResponsesMessage is used for simple text-only messages.
 type openAIResponsesMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+}
+
+// openAIMultimodalMessage is used when images are attached (content is an array).
+type openAIMultimodalMessage struct {
+	Role    string `json:"role"`
+	Content []any  `json:"content"`
 }
 
 type openAIResponsesResponse struct {
@@ -328,20 +335,39 @@ func (p *OpenAIProvider) GenerateToolTurn(ctx context.Context, req ToolTurnReque
 	}, nil
 }
 
-func toOpenAIInput(messages []core.Message) []openAIResponsesMessage {
-	out := make([]openAIResponsesMessage, 0, len(messages))
+func toOpenAIInput(messages []core.Message) []any {
+	out := make([]any, 0, len(messages))
 	for _, msg := range messages {
 		text := strings.TrimSpace(msg.Content)
-		if text == "" {
+		if text == "" && len(msg.Images) == 0 {
 			continue
 		}
 		role := mapOpenAIRole(msg.Role)
-		out = append(out, openAIResponsesMessage{
-			Role:    role,
-			Content: text,
-		})
+		if len(msg.Images) > 0 && role == "user" {
+			out = append(out, buildOpenAIMultimodalMessage(role, text, msg.Images))
+		} else {
+			out = append(out, openAIResponsesMessage{Role: role, Content: text})
+		}
 	}
 	return out
+}
+
+func buildOpenAIMultimodalMessage(role, text string, images []core.ImageData) openAIMultimodalMessage {
+	content := make([]any, 0, len(images)+1)
+	for _, img := range images {
+		dataURI := "data:" + img.MimeType + ";base64," + img.Data
+		content = append(content, map[string]any{
+			"type":      "input_image",
+			"image_url": dataURI,
+		})
+	}
+	if text != "" {
+		content = append(content, map[string]any{
+			"type": "input_text",
+			"text": text,
+		})
+	}
+	return openAIMultimodalMessage{Role: role, Content: content}
 }
 
 func toOpenAIToolInput(messages []core.Message) []any {
@@ -392,13 +418,18 @@ func toOpenAIToolInput(messages []core.Message) []any {
 				"content": text,
 			})
 		default:
-			if text == "" {
+			if text == "" && len(msg.Images) == 0 {
 				continue
 			}
-			out = append(out, map[string]any{
-				"role":    "user",
-				"content": text,
-			})
+			if len(msg.Images) > 0 {
+				mm := buildOpenAIMultimodalMessage("user", text, msg.Images)
+				out = append(out, mm)
+			} else {
+				out = append(out, map[string]any{
+					"role":    "user",
+					"content": text,
+				})
+			}
 		}
 	}
 	return out

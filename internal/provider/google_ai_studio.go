@@ -352,11 +352,25 @@ func toAIStudioContents(messages []core.Message) []map[string]any {
 		if msg.Role == core.RoleAssistant {
 			role = "model"
 		}
+		parts := make([]map[string]any, 0, len(msg.Images)+1)
+		for _, img := range msg.Images {
+			parts = append(parts, map[string]any{
+				"inline_data": map[string]any{
+					"mime_type": img.MimeType,
+					"data":      img.Data,
+				},
+			})
+		}
+		text := strings.TrimSpace(msg.Content)
+		if text != "" {
+			parts = append(parts, map[string]any{"text": text})
+		}
+		if len(parts) == 0 {
+			continue
+		}
 		out = append(out, map[string]any{
-			"role": role,
-			"parts": []map[string]any{
-				{"text": strings.TrimSpace(msg.Content)},
-			},
+			"role":  role,
+			"parts": parts,
 		})
 	}
 	return out

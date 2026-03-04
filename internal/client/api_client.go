@@ -967,9 +967,10 @@ func (c *APIClient) RenameSession(ctx context.Context, sessionID, title string) 
 
 // TranscriptMessage represents a single message returned by the transcript API.
 type TranscriptMessage struct {
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	CreatedAt string `json:"created_at"`
+	Role       string   `json:"role"`
+	Content    string   `json:"content"`
+	ImageNames []string `json:"image_names,omitempty"`
+	CreatedAt  string   `json:"created_at"`
 }
 
 // GetSessionTranscript fetches the user/assistant messages for a session.
