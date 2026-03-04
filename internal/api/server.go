@@ -73,6 +73,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/memory/search", s.handleMemorySearch)
 	mux.HandleFunc("/v1/mcp/servers", s.handleMCPServers)
 	mux.HandleFunc("/v1/mcp/tools", s.handleMCPTools)
+	mux.HandleFunc("/v1/mcp/builtin", s.handleMCPBuiltin)
+	mux.HandleFunc("/v1/mcp/builtin/toggle", s.handleMCPBuiltinToggle)
 	return mux
 }
 
@@ -1266,4 +1268,40 @@ func (s *Server) handleMCPTools(w http.ResponseWriter, r *http.Request) {
 		tools = []mcp.ToolInfo{}
 	}
 	respondJSON(w, http.StatusOK, map[string]any{"tools": tools})
+}
+
+func (s *Server) handleMCPBuiltin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	servers := s.svc.MCPBuiltinServers()
+	if servers == nil {
+		servers = []mcp.BuiltinServerInfo{}
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"servers": servers})
+}
+
+func (s *Server) handleMCPBuiltinToggle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		Name    string `json:"name"`
+		Enabled bool   `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		respondError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if err := s.svc.ToggleMCPBuiltin(r.Context(), strings.TrimSpace(req.Name), req.Enabled); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

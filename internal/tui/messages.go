@@ -266,3 +266,16 @@ type MCPServersMsg struct {
 	Tools   []client.MCPToolInfo
 	Err     error
 }
+
+// MCPBuiltinMsg carries builtin MCP server info for the settings tab.
+type MCPBuiltinMsg struct {
+	Servers []client.MCPBuiltinInfo
+	Err     error
+}
+
+// MCPBuiltinToggleMsg carries the result of toggling a builtin MCP server.
+type MCPBuiltinToggleMsg struct {
+	Name    string
+	Enabled bool
+	Err     error
+}

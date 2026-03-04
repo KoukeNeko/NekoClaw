@@ -36,6 +36,7 @@ type ServerConfig struct {
 	URL       string            `json:"url,omitempty"`
 	Headers   map[string]string `json:"headers,omitempty"`
 	Trust     TrustLevel        `json:"trust"`
+	Builtin   bool              `json:"-"` // set programmatically for builtin servers
 }
 
 // validNamePattern allows alphanumeric, hyphens, and single underscores.

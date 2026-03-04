@@ -412,3 +412,21 @@ func listMCPServersCmd(apiClient *client.APIClient) tea.Cmd {
 		return MCPServersMsg{Servers: servers, Tools: tools, Err: err}
 	}
 }
+
+func listMCPBuiltinCmd(apiClient *client.APIClient) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		servers, err := apiClient.ListMCPBuiltinServers(ctx)
+		return MCPBuiltinMsg{Servers: servers, Err: err}
+	}
+}
+
+func toggleMCPBuiltinCmd(apiClient *client.APIClient, name string, enabled bool) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err := apiClient.ToggleMCPBuiltin(ctx, strings.TrimSpace(name), enabled)
+		return MCPBuiltinToggleMsg{Name: strings.TrimSpace(name), Enabled: enabled, Err: err}
+	}
+}

@@ -141,6 +141,22 @@ func (s *Service) ReconnectMCPServer(ctx context.Context, serverName string) err
 	return s.mcpManager.Reconnect(ctx, serverName)
 }
 
+// MCPBuiltinServers returns all builtin MCP server definitions with their current state.
+func (s *Service) MCPBuiltinServers() []mcp.BuiltinServerInfo {
+	if s.mcpManager == nil {
+		return nil
+	}
+	return s.mcpManager.BuiltinServers()
+}
+
+// ToggleMCPBuiltin enables or disables a builtin MCP server.
+func (s *Service) ToggleMCPBuiltin(ctx context.Context, name string, enabled bool) error {
+	if s.mcpManager == nil {
+		return fmt.Errorf("mcp not configured")
+	}
+	return s.mcpManager.SetBuiltinEnabled(ctx, name, enabled)
+}
+
 // RenameSession sets a custom title for the given session.
 func (s *Service) RenameSession(sessionID, title string) error {
 	sessionID = strings.TrimSpace(sessionID)

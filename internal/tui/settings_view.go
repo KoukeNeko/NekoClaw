@@ -217,6 +217,12 @@ func (sv *SettingsView) Update(msg tea.Msg) tea.Cmd {
 		return sv.memory.HandleSearchResults(msg)
 	case MCPServersMsg:
 		return sv.mcp.HandleServers(msg)
+	case MCPBuiltinMsg:
+		return sv.mcp.HandleBuiltins(msg)
+	case MCPBuiltinToggleMsg:
+		cmd := sv.mcp.HandleBuiltinToggle(msg)
+		// Refresh full list after toggle to get accurate tool counts and statuses.
+		return tea.Batch(cmd, listMCPServersCmd(sv.apiClient), listMCPBuiltinCmd(sv.apiClient))
 	}
 
 	return nil
@@ -242,7 +248,10 @@ func (sv *SettingsView) enterSection() tea.Cmd {
 	case SectionUsage:
 		return nil // Usage is local state, no API call needed
 	case SectionMCP:
-		return listMCPServersCmd(sv.apiClient)
+		return tea.Batch(
+			listMCPServersCmd(sv.apiClient),
+			listMCPBuiltinCmd(sv.apiClient),
+		)
 	}
 	return nil
 }

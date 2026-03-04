@@ -1096,6 +1096,7 @@ type MCPServerInfo struct {
 	Status    string `json:"status"`
 	Error     string `json:"error,omitempty"`
 	ToolCount int    `json:"tool_count"`
+	Builtin   bool   `json:"builtin"`
 }
 
 // MCPToolInfo represents an MCP tool.
@@ -1133,4 +1134,52 @@ func (c *APIClient) ListMCPTools(ctx context.Context) ([]MCPToolInfo, error) {
 		return nil, err
 	}
 	return out.Tools, nil
+}
+
+// MCPBuiltinInfo represents a builtin MCP server's state.
+type MCPBuiltinInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Enabled     bool   `json:"enabled"`
+	Status      string `json:"status"`
+	Error       string `json:"error,omitempty"`
+	ToolCount   int    `json:"tool_count"`
+}
+
+// ListMCPBuiltinServers returns all builtin MCP server definitions and their state.
+func (c *APIClient) ListMCPBuiltinServers(ctx context.Context) ([]MCPBuiltinInfo, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/mcp/builtin", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Servers []MCPBuiltinInfo `json:"servers"`
+	}
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return nil, err
+	}
+	return out.Servers, nil
+}
+
+// ToggleMCPBuiltin enables or disables a builtin MCP server.
+func (c *APIClient) ToggleMCPBuiltin(ctx context.Context, name string, enabled bool) error {
+	payload, err := json.Marshal(map[string]any{
+		"name":    strings.TrimSpace(name),
+		"enabled": enabled,
+	})
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/mcp/builtin/toggle",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out map[string]any
+	return c.doAndDecodeJSON(httpReq, &out)
 }

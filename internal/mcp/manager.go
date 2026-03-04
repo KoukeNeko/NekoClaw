@@ -21,6 +21,7 @@ type ServerInfo struct {
 	Status    ConnectionStatus `json:"status"`
 	Error     string           `json:"error,omitempty"`
 	ToolCount int              `json:"tool_count"`
+	Builtin   bool             `json:"builtin"`
 }
 
 // ToolInfo exposes MCP tool metadata for API/TUI display.
@@ -32,34 +33,55 @@ type ToolInfo struct {
 
 // Manager coordinates all MCP server connections.
 type Manager struct {
-	configDir   string
-	connections map[string]*Connection
-	mu          sync.RWMutex
+	configDir    string
+	connections  map[string]*Connection
+	builtinState map[string]bool
+	mu           sync.RWMutex
 }
 
 // NewManager creates a Manager that loads config from configDir.
 func NewManager(configDir string) *Manager {
 	return &Manager{
-		configDir:   configDir,
-		connections: make(map[string]*Connection),
+		configDir:    configDir,
+		connections:  make(map[string]*Connection),
+		builtinState: make(map[string]bool),
 	}
 }
 
 // Start loads all configs and connects to all servers.
 // Individual server failures are logged but do not prevent others from starting.
 func (m *Manager) Start(ctx context.Context) error {
-	configs, errs := LoadConfigs(m.configDir)
+	// Load builtin state from disk.
+	state, err := loadBuiltinState(m.configDir)
+	if err != nil {
+		log.Printf("event=mcp_builtin_state_error error=%q", err)
+		state = map[string]bool{}
+	}
+	m.mu.Lock()
+	m.builtinState = state
+	m.mu.Unlock()
+
+	// Build combined config list: enabled builtins + user configs.
+	var allConfigs []ServerConfig
+	for _, def := range BuiltinDefs() {
+		if isBuiltinEnabled(state, def.Name) {
+			allConfigs = append(allConfigs, def.Config)
+		}
+	}
+
+	userConfigs, errs := LoadConfigs(m.configDir)
 	for _, err := range errs {
 		log.Printf("event=mcp_config_error error=%q", err)
 	}
+	allConfigs = append(allConfigs, userConfigs...)
 
-	if len(configs) == 0 {
+	if len(allConfigs) == 0 {
 		return nil
 	}
 
 	// Detect duplicate server names.
 	seen := map[string]bool{}
-	for _, cfg := range configs {
+	for _, cfg := range allConfigs {
 		name := strings.TrimSpace(cfg.Name)
 		if seen[name] {
 			log.Printf("event=mcp_duplicate_name name=%s", name)
@@ -112,6 +134,7 @@ func (m *Manager) Servers() []ServerInfo {
 			Trust:     conn.Config().Trust,
 			Status:    conn.Status(),
 			ToolCount: len(conn.Tools()),
+			Builtin:   conn.Config().Builtin,
 		}
 		if err := conn.LastError(); err != nil {
 			info.Error = err.Error()
@@ -232,6 +255,87 @@ func (m *Manager) Reconnect(ctx context.Context, serverName string) error {
 	}
 	_ = conn.Disconnect()
 	return conn.Connect(ctx)
+}
+
+// BuiltinServers returns status info for all builtin servers (enabled and disabled).
+func (m *Manager) BuiltinServers() []BuiltinServerInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	defs := BuiltinDefs()
+	infos := make([]BuiltinServerInfo, 0, len(defs))
+	for _, def := range defs {
+		enabled := isBuiltinEnabled(m.builtinState, def.Name)
+		info := BuiltinServerInfo{
+			Name:        def.Name,
+			Description: def.Description,
+			Enabled:     enabled,
+			Status:      StatusDisconnected,
+		}
+		if conn, ok := m.connections[def.Name]; ok {
+			info.Status = conn.Status()
+			info.ToolCount = len(conn.Tools())
+			if lastErr := conn.LastError(); lastErr != nil {
+				info.Error = lastErr.Error()
+			}
+		}
+		infos = append(infos, info)
+	}
+	return infos
+}
+
+// SetBuiltinEnabled toggles a builtin server on or off, persists the state,
+// and connects or disconnects accordingly.
+func (m *Manager) SetBuiltinEnabled(ctx context.Context, name string, enabled bool) error {
+	// Verify the name belongs to a registered builtin.
+	var def *BuiltinServerDef
+	for _, d := range BuiltinDefs() {
+		if d.Name == name {
+			def = &d
+			break
+		}
+	}
+	if def == nil {
+		return fmt.Errorf("unknown builtin server: %s", name)
+	}
+
+	m.mu.Lock()
+	m.builtinState[name] = enabled
+	stateCopy := make(map[string]bool, len(m.builtinState))
+	for k, v := range m.builtinState {
+		stateCopy[k] = v
+	}
+	m.mu.Unlock()
+
+	// Persist state to disk.
+	if err := saveBuiltinState(m.configDir, stateCopy); err != nil {
+		log.Printf("event=mcp_builtin_save_error error=%q", err)
+		return fmt.Errorf("save builtin state: %w", err)
+	}
+
+	if enabled {
+		conn := NewConnection(def.Config)
+		m.mu.Lock()
+		m.connections[name] = conn
+		m.mu.Unlock()
+		if err := conn.Connect(ctx); err != nil {
+			log.Printf("event=mcp_connect_error server=%s error=%q", name, err)
+			return err
+		}
+		log.Printf("event=mcp_builtin_enabled server=%s", name)
+	} else {
+		m.mu.Lock()
+		conn, ok := m.connections[name]
+		if ok {
+			delete(m.connections, name)
+		}
+		m.mu.Unlock()
+		if ok {
+			_ = conn.Disconnect()
+		}
+		log.Printf("event=mcp_builtin_disabled server=%s", name)
+	}
+	return nil
 }
 
 // marshalInputSchema converts a Tool's InputSchema to json.RawMessage.
