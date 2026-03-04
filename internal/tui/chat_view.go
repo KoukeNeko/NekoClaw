@@ -300,11 +300,19 @@ func (cv ChatView) View() string {
 	return sb.String()
 }
 
+// displayModel returns the model label, appending the resolved name when using "default".
+func (cv ChatView) displayModel() string {
+	if strings.EqualFold(cv.modelID, "default") && cv.defaultModel != "" {
+		return cv.modelID + " (" + cv.defaultModel + ")"
+	}
+	return cv.modelID
+}
+
 // renderHeader renders the centered provider/model header bar.
 func (cv ChatView) renderHeader() string {
 	providerLabel := theme.SubtleStyle.Render(cv.provider)
 	dot := theme.SubtleStyle.Render(" · ")
-	modelLabel := theme.HighlightStyle.Render(cv.modelID)
+	modelLabel := theme.HighlightStyle.Render(cv.displayModel())
 	chevron := theme.SubtleStyle.Render(" ▾")
 
 	label := providerLabel + dot + modelLabel + chevron
@@ -325,7 +333,7 @@ func (cv ChatView) renderHeader() string {
 // thinkingStatus builds a single-line status: ⠋ provider · model · 3.2s
 func (cv ChatView) thinkingStatus() string {
 	elapsed := time.Since(cv.thinkingStart).Truncate(100 * time.Millisecond)
-	return fmt.Sprintf("%s %s · %s · %s", cv.spinner.View(), cv.provider, cv.modelID, elapsed)
+	return fmt.Sprintf("%s %s · %s · %s", cv.spinner.View(), cv.provider, cv.displayModel(), elapsed)
 }
 
 func (cv *ChatView) handleSubmit(text string) tea.Cmd {
