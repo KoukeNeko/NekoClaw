@@ -11,6 +11,18 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// Clipboard
+// ---------------------------------------------------------------------------
+
+// checkClipboardImageCmd asynchronously checks the system clipboard for an image.
+func checkClipboardImageCmd() tea.Cmd {
+	return func() tea.Msg {
+		img, err := core.LoadImageFromClipboard()
+		return ClipboardImageMsg{Image: img, Err: err}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Chat
 // ---------------------------------------------------------------------------
 

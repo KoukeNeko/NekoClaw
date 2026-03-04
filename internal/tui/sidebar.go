@@ -312,10 +312,10 @@ func (s Sidebar) renderInspectorFooter(width int) string {
 
 // inspectorFooterHeight returns the number of lines the inspector footer occupies.
 func (s Sidebar) inspectorFooterHeight() int {
-	// INSPECTOR(1) + blank(1) + CONTEXT(1) + bar(1) + blank(1)
+	// INSPECTOR(1) + blank(1) + CONTEXT USAGE(1) + bar(1) + blank(1)
 	// + COST(1) + value(1) + blank(1) + MESSAGES(1) + value(1) + blank(1)
-	// + SHORTCUTS(1) + line(1) + line(1) + line(1) + line(1) = 15
-	return 15
+	// + SHORTCUTS(1) + Ctrl+N(1) + Ctrl+B(1) + Esc(1) + /help(1) = 16
+	return 16
 }
 
 // renderProgressBar renders a text-based progress bar (moved from inspector.go).

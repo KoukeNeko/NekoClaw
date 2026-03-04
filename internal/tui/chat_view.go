@@ -146,6 +146,11 @@ func (cv *ChatView) Update(msg tea.Msg) tea.Cmd {
 			return func() tea.Msg { return SessionChangedMsg{SessionID: newSession} }
 		}
 
+		// Paste image from clipboard (Ctrl+V)
+		if key.Matches(msg, chatKeys.PasteImage) && !cv.pending {
+			return checkClipboardImageCmd()
+		}
+
 		// Sidebar toggle (not during pending/approval flow)
 		if key.Matches(msg, chatKeys.ToggleSidebar) && !cv.pending {
 			return func() tea.Msg { return SidebarToggleFocusMsg{} }
@@ -180,6 +185,19 @@ func (cv *ChatView) Update(msg tea.Msg) tea.Cmd {
 
 	case StreamTickMsg:
 		// Legacy: ignored (streaming removed)
+		return nil
+
+	case ClipboardImageMsg:
+		if msg.Err != nil {
+			// No image in clipboard — silently ignore (text paste uses bracketed paste)
+			return nil
+		}
+		cv.pendingImages = append(cv.pendingImages, msg.Image)
+		cv.viewport.AppendMessage(ChatMessage{
+			Role:      "system",
+			Content:   "📎 Pasted: " + msg.Image.FileName + " — type your message and press Enter to send",
+			Timestamp: time.Now(),
+		})
 		return nil
 
 	case ClearChatMsg:
@@ -312,7 +330,7 @@ func (cv ChatView) thinkingStatus() string {
 
 func (cv *ChatView) handleSubmit(text string) tea.Cmd {
 	// Check for local commands first
-	if cmd := cv.handleSlashCommand(text); cmd != nil {
+	if cmd, handled := cv.handleSlashCommand(text); handled {
 		return cmd
 	}
 
@@ -426,11 +444,20 @@ func (cv *ChatView) handleChatResult(msg ChatResultMsg) tea.Cmd {
 		cv.activeProfile = strings.TrimSpace(msg.Response.AccountID)
 	}
 
-	// Show full response immediately
+	// Calculate response elapsed time
+	var elapsedMs int64
+	if !cv.thinkingStart.IsZero() {
+		elapsedMs = time.Since(cv.thinkingStart).Milliseconds()
+	}
+
+	// Show full response with token usage stats
 	cv.viewport.AppendMessage(ChatMessage{
-		Role:      "assistant",
-		Content:   msg.Response.Reply,
-		Timestamp: time.Now(),
+		Role:         "assistant",
+		Content:      msg.Response.Reply,
+		InputTokens:  msg.Response.Usage.InputTokens,
+		OutputTokens: msg.Response.Usage.OutputTokens,
+		ElapsedMs:    elapsedMs,
+		Timestamp:    time.Now(),
 	})
 
 	statusCmd := func() tea.Msg {
@@ -517,7 +544,7 @@ func providerToolEnabled(providerID string) bool {
 	}
 }
 
-func (cv *ChatView) handleSlashCommand(text string) tea.Cmd {
+func (cv *ChatView) handleSlashCommand(text string) (tea.Cmd, bool) {
 	lower := strings.ToLower(strings.TrimSpace(text))
 	parts := strings.SplitN(lower, " ", 2)
 	cmd := parts[0]
@@ -531,6 +558,7 @@ func (cv *ChatView) handleSlashCommand(text string) tea.Cmd {
 				"  /new       — Start new conversation\n" +
 				"  /clear     — Clear chat history\n" +
 				"  /image     — Attach image file\n" +
+				"  /paste     — Paste image from clipboard\n" +
 				"  /config    — Open settings\n" +
 				"  /model     — Switch model\n" +
 				"  /session   — Switch session\n" +
@@ -538,26 +566,26 @@ func (cv *ChatView) handleSlashCommand(text string) tea.Cmd {
 				"\n  Esc — Settings  ·  Shift+Enter — New line",
 			Timestamp: time.Now(),
 		})
-		return nil
+		return nil, true
 
 	case "/new":
 		newSession := fmt.Sprintf("chat-%s", time.Now().Format("0102-150405"))
-		return func() tea.Msg { return SessionChangedMsg{SessionID: newSession} }
+		return func() tea.Msg { return SessionChangedMsg{SessionID: newSession} }, true
 
 	case "/clear":
-		return func() tea.Msg { return ClearChatMsg{} }
+		return func() tea.Msg { return ClearChatMsg{} }, true
 
 	case "/config", "/settings":
 		cv.input.Blur()
-		return func() tea.Msg { return ToggleSettingsMsg{} }
+		return func() tea.Msg { return ToggleSettingsMsg{} }, true
 
 	case "/model":
 		cv.input.Blur()
-		return func() tea.Msg { return ToggleSettingsMsg{} }
+		return func() tea.Msg { return ToggleSettingsMsg{} }, true
 
 	case "/session":
 		cv.input.Blur()
-		return func() tea.Msg { return ToggleSettingsMsg{} }
+		return func() tea.Msg { return ToggleSettingsMsg{} }, true
 
 	case "/image":
 		// Use the original text (not lowered) to preserve file path case
@@ -568,7 +596,7 @@ func (cv *ChatView) handleSlashCommand(text string) tea.Cmd {
 				Content:   "Usage: /image <file path>",
 				Timestamp: time.Now(),
 			})
-			return nil
+			return nil, true
 		}
 		img, err := core.LoadImageFromPath(rawArgs)
 		if err != nil {
@@ -577,7 +605,7 @@ func (cv *ChatView) handleSlashCommand(text string) tea.Cmd {
 				Content:   "Failed to load image: " + err.Error(),
 				Timestamp: time.Now(),
 			})
-			return nil
+			return nil, true
 		}
 		cv.pendingImages = append(cv.pendingImages, img)
 		cv.viewport.AppendMessage(ChatMessage{
@@ -585,7 +613,25 @@ func (cv *ChatView) handleSlashCommand(text string) tea.Cmd {
 			Content:   "📎 Attached: " + img.FileName + " — type your message and press Enter to send",
 			Timestamp: time.Now(),
 		})
-		return nil
+		return nil, true
+
+	case "/paste":
+		img, err := core.LoadImageFromClipboard()
+		if err != nil {
+			cv.viewport.AppendMessage(ChatMessage{
+				Role:      "error",
+				Content:   "Clipboard: " + err.Error(),
+				Timestamp: time.Now(),
+			})
+			return nil, true
+		}
+		cv.pendingImages = append(cv.pendingImages, img)
+		cv.viewport.AppendMessage(ChatMessage{
+			Role:      "system",
+			Content:   "📎 Pasted: " + img.FileName + " — type your message and press Enter to send",
+			Timestamp: time.Now(),
+		})
+		return nil, true
 
 	case "/memory":
 		if len(parts) > 1 && strings.TrimSpace(parts[1]) != "" {
@@ -595,17 +641,17 @@ func (cv *ChatView) handleSlashCommand(text string) tea.Cmd {
 				Content:   "Searching memory: " + query,
 				Timestamp: time.Now(),
 			})
-			return searchMemoryCmd(cv.client, query, 10)
+			return searchMemoryCmd(cv.client, query, 10), true
 		}
 		cv.viewport.AppendMessage(ChatMessage{
 			Role:      "system",
 			Content:   "Usage: /memory <search query>",
 			Timestamp: time.Now(),
 		})
-		return nil
+		return nil, true
 	}
 
-	return nil // not a slash command, proceed with normal send
+	return nil, false // not a slash command, proceed with normal send
 }
 
 // transcriptToChatMessages converts API transcript messages to TUI ChatMessages.

@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/doeshing/nekoclaw/internal/client"
 	"github.com/doeshing/nekoclaw/internal/termclean"
+	"github.com/mattn/go-runewidth"
 )
 
 // ---------------------------------------------------------------------------
@@ -27,37 +28,58 @@ func fallback(value, fallbackValue string) string {
 	return strings.TrimSpace(value)
 }
 
-func clampLine(text string, max int) string {
+// clampLine truncates text to fit within maxWidth visual columns,
+// appending "…" if truncation is needed. Uses runewidth to correctly
+// handle CJK wide characters (2 columns per char).
+func clampLine(text string, maxWidth int) string {
 	text = sanitizeDisplayText(text)
-	if max <= 0 {
+	if maxWidth <= 0 {
 		return text
 	}
+	if runewidth.StringWidth(text) <= maxWidth {
+		return text
+	}
+	const ellipsis = "…"
+	ellipsisW := runewidth.StringWidth(ellipsis)
 	runes := []rune(text)
-	if len(runes) <= max {
-		return text
+	w := 0
+	for i, r := range runes {
+		rw := runewidth.RuneWidth(r)
+		if w+rw > maxWidth-ellipsisW {
+			return string(runes[:i]) + ellipsis
+		}
+		w += rw
 	}
-	if max <= 1 {
-		return string(runes[:max])
-	}
-	return string(runes[:max-1]) + "…"
+	return text
 }
 
-func wrapToWidth(text string, max int) []string {
-	if max <= 0 {
+// wrapToWidth splits text into lines that fit within maxWidth visual columns.
+func wrapToWidth(text string, maxWidth int) []string {
+	if maxWidth <= 0 {
 		return []string{text}
 	}
 	runes := []rune(text)
 	if len(runes) == 0 {
 		return []string{""}
 	}
-	out := make([]string, 0, (len(runes)/max)+1)
-	for len(runes) > 0 {
-		n := max
-		if n > len(runes) {
-			n = len(runes)
+	var out []string
+	w := 0
+	start := 0
+	for i, r := range runes {
+		rw := runewidth.RuneWidth(r)
+		if w+rw > maxWidth && i > start {
+			out = append(out, string(runes[start:i]))
+			start = i
+			w = rw
+		} else {
+			w += rw
 		}
-		out = append(out, string(runes[:n]))
-		runes = runes[n:]
+	}
+	if start < len(runes) {
+		out = append(out, string(runes[start:]))
+	}
+	if len(out) == 0 {
+		out = []string{""}
 	}
 	return out
 }
@@ -121,6 +143,20 @@ func fitToTerminalWidth(rendered string, width int) string {
 			continue
 		}
 		lines[idx] = maxWidthStyle.Render(line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// fitToTerminal clamps output to both width and height, preventing
+// overflow that pushes headers off-screen in alt-screen mode.
+func fitToTerminal(rendered string, width, height int) string {
+	rendered = fitToTerminalWidth(rendered, width)
+	if height <= 0 {
+		return rendered
+	}
+	lines := strings.Split(rendered, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
 	}
 	return strings.Join(lines, "\n")
 }

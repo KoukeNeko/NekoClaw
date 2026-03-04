@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -15,6 +16,11 @@ type ChatMessage struct {
 	Content   string
 	Images    []string // file names of attached images (display only)
 	Timestamp time.Time
+
+	// Token usage stats (populated for assistant messages)
+	InputTokens  int
+	OutputTokens int
+	ElapsedMs    int64 // response time in milliseconds
 
 	// Cache for rendered output; invalidated when width changes.
 	renderedCache string
@@ -162,6 +168,9 @@ func (cv *ChatViewport) renderMessage(msg *ChatMessage) string {
 	switch msg.Role {
 	case "assistant":
 		rendered = cv.renderMarkdown(content)
+		if stats := formatUsageStats(msg); stats != "" {
+			rendered += "\n" + theme.HintStyle.Render("  "+stats)
+		}
 	case "user":
 		rendered = imagePrefix + theme.PromptStyle.Render("> ") + theme.UserStyle.Render(content)
 	case "system":
@@ -188,6 +197,46 @@ func (cv *ChatViewport) renderMarkdown(content string) string {
 		return theme.AssistantStyle.Render(content)
 	}
 	return strings.TrimRight(rendered, "\n")
+}
+
+// formatUsageStats builds a concise stats line for assistant messages.
+// Example: "⏱ 2.3s · ↑1.2K ↓567 · 245 tok/s"
+func formatUsageStats(msg *ChatMessage) string {
+	hasTokens := msg.InputTokens > 0 || msg.OutputTokens > 0
+	hasElapsed := msg.ElapsedMs > 0
+	if !hasTokens && !hasElapsed {
+		return ""
+	}
+
+	var parts []string
+
+	// Elapsed time
+	if hasElapsed {
+		sec := float64(msg.ElapsedMs) / 1000.0
+		if sec >= 60 {
+			parts = append(parts, fmt.Sprintf("⏱ %.0fm%.0fs", sec/60, float64(int64(sec)%60)))
+		} else if sec >= 10 {
+			parts = append(parts, fmt.Sprintf("⏱ %.1fs", sec))
+		} else {
+			parts = append(parts, fmt.Sprintf("⏱ %.2fs", sec))
+		}
+	}
+
+	// Token counts: ↑input ↓output
+	if hasTokens {
+		parts = append(parts, fmt.Sprintf("↑%s ↓%s",
+			formatTokenCount(msg.InputTokens),
+			formatTokenCount(msg.OutputTokens),
+		))
+	}
+
+	// Throughput: tok/s (output tokens / elapsed seconds)
+	if hasTokens && hasElapsed && msg.OutputTokens > 0 && msg.ElapsedMs > 0 {
+		tokPerSec := float64(msg.OutputTokens) / (float64(msg.ElapsedMs) / 1000.0)
+		parts = append(parts, fmt.Sprintf("%.0f tok/s", tokPerSec))
+	}
+
+	return strings.Join(parts, " · ")
 }
 
 func (cv *ChatViewport) invalidateCache() {

@@ -78,6 +78,7 @@ func NewChatInput(width, termHeight int) ChatInput {
 			{Name: "/new", Description: "Start new conversation"},
 			{Name: "/clear", Description: "Clear chat history"},
 			{Name: "/image", Description: "Attach image file"},
+			{Name: "/paste", Description: "Paste image from clipboard"},
 			{Name: "/config", Description: "Open settings"},
 			{Name: "/model", Description: "Switch model"},
 			{Name: "/session", Description: "Switch session"},
@@ -257,7 +258,7 @@ func (ci ChatInput) View() string {
 	sb.WriteString("\n")
 
 	// Keybinding hint line
-	sb.WriteString(theme.HintStyle.Render("  Shift+Enter 換行 · Enter 送出 · Ctrl+N 新對話 · Esc 設定"))
+	sb.WriteString(theme.HintStyle.Render("  Shift+Enter 換行 · Enter 送出 · Ctrl+V 貼圖 · Ctrl+N 新對話 · Esc 設定"))
 
 	return sb.String()
 }

@@ -53,6 +53,12 @@ type StreamTickMsg struct{}
 // ClearChatMsg requests the chat view to clear its history.
 type ClearChatMsg struct{}
 
+// ClipboardImageMsg carries the result of an async clipboard image check.
+type ClipboardImageMsg struct {
+	Image core.ImageData
+	Err   error
+}
+
 // ---------------------------------------------------------------------------
 // Provider messages
 // ---------------------------------------------------------------------------

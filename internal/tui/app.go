@@ -233,8 +233,5 @@ func (m appModel) View() string {
 		rendered = m.settings.RenderOverlay(rendered, m.width, contentH)
 	}
 
-	if m.width > 0 {
-		return fitToTerminalWidth(rendered, m.width)
-	}
-	return rendered
+	return fitToTerminal(rendered, m.width, m.height)
 }
