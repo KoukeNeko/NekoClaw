@@ -421,6 +421,14 @@ type AIStudioModelsResult struct {
 	CachedUntil time.Time `json:"cached_until,omitempty"`
 }
 
+// ModelsResult is the generic response for listing models from any provider.
+type ModelsResult struct {
+	Provider  string   `json:"provider"`
+	ProfileID string   `json:"profile_id"`
+	Models    []string `json:"models"`
+	Source    string   `json:"source"`
+}
+
 type AnthropicAddTokenRequest struct {
 	SetupToken   string `json:"setup_token"`
 	DisplayName  string `json:"display_name,omitempty"`
@@ -1028,6 +1036,96 @@ func (s *Service) ListAIStudioModels(ctx context.Context, profileID string) (AIS
 		Source:      chooseFirstNonEmpty(source, "live"),
 		CachedUntil: cachedUntil,
 	}, nil
+}
+
+// ListModels returns available model IDs for any provider. If the provider
+// implements ModelCatalogProvider, real model data is fetched from its API.
+// Otherwise a hardcoded fallback list is returned.
+func (s *Service) ListModels(ctx context.Context, providerID, profileID string) (ModelsResult, error) {
+	providerID = strings.TrimSpace(providerID)
+	if providerID == "" {
+		return ModelsResult{}, fmt.Errorf("%w: provider is required", ErrProviderNotReady)
+	}
+
+	prov, pool, err := s.resolveProviderPool(providerID)
+	if err != nil {
+		// Provider not initialized — return fallback.
+		return ModelsResult{
+			Provider: providerID,
+			Models:   fallbackModels(providerID),
+			Source:   "fallback",
+		}, nil
+	}
+
+	catalogProvider, ok := prov.(provider.ModelCatalogProvider)
+	if !ok {
+		// Provider doesn't support dynamic model listing — return fallback.
+		return ModelsResult{
+			Provider: providerID,
+			Models:   fallbackModels(providerID),
+			Source:   "fallback",
+		}, nil
+	}
+
+	profileID = strings.TrimSpace(profileID)
+	var account core.Account
+	var found bool
+	if profileID != "" {
+		account, found = pool.GetAccount(profileID)
+		if !found {
+			return ModelsResult{}, fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		}
+	} else {
+		preferred := s.preferredProfile(providerID)
+		account, found = pool.Acquire(preferred)
+		if !found {
+			// No account available — return fallback.
+			return ModelsResult{
+				Provider: providerID,
+				Models:   fallbackModels(providerID),
+				Source:   "fallback",
+			}, nil
+		}
+		profileID = account.ID
+	}
+
+	models, err := catalogProvider.ListModels(ctx, account)
+	if err != nil {
+		log.Printf("event=list_models_error provider=%s error=%v", providerID, err)
+		// Return fallback on error so the TUI still shows something.
+		return ModelsResult{
+			Provider:  providerID,
+			ProfileID: profileID,
+			Models:    fallbackModels(providerID),
+			Source:    "fallback",
+		}, nil
+	}
+
+	return ModelsResult{
+		Provider:  providerID,
+		ProfileID: profileID,
+		Models:    models,
+		Source:    "live",
+	}, nil
+}
+
+// fallbackModels returns hardcoded model IDs for providers that either don't
+// support dynamic listing or when the API call fails.
+func fallbackModels(providerID string) []string {
+	switch providerID {
+	case "anthropic":
+		return []string{"claude-opus-4-6", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-3-5"}
+	case "openai":
+		return []string{"gpt-5.1-codex", "gpt-5", "gpt-4.1"}
+	case "openai-codex":
+		return []string{"gpt-5.3-codex", "gpt-5.1-codex"}
+	case "google-ai-studio":
+		return []string{"gemini-2.5-pro", "gemini-2.5-flash"}
+	case "google-gemini-cli":
+		return []string{"gemini-3-pro-preview", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-2.5-flash"}
+	default:
+		return nil
+	}
 }
 
 func (s *Service) AddAnthropicToken(_ context.Context, req AnthropicAddTokenRequest) (AnthropicAddCredentialResult, error) {

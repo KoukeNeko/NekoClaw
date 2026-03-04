@@ -45,6 +45,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/auth/ai-studio/profiles", s.handleAIStudioProfiles)
 	mux.HandleFunc("/v1/auth/ai-studio/use", s.handleAIStudioUse)
 	mux.HandleFunc("/v1/auth/ai-studio/delete", s.handleAIStudioDelete)
+	mux.HandleFunc("/v1/models", s.handleListModels)
 	mux.HandleFunc("/v1/ai-studio/models", s.handleAIStudioModels)
 	mux.HandleFunc("/v1/auth/anthropic/add-token", s.handleAnthropicAddToken)
 	mux.HandleFunc("/v1/auth/anthropic/add-api-key", s.handleAnthropicAddAPIKey)
@@ -458,6 +459,25 @@ func (s *Server) handleAIStudioDelete(w http.ResponseWriter, r *http.Request) {
 		"profile_id": strings.TrimSpace(req.ProfileID),
 		"provider":   "google-ai-studio",
 	})
+}
+
+func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	providerID := strings.TrimSpace(r.URL.Query().Get("provider"))
+	if providerID == "" {
+		respondError(w, http.StatusBadRequest, "provider query parameter is required")
+		return
+	}
+	profileID := strings.TrimSpace(r.URL.Query().Get("profile_id"))
+	result, err := s.svc.ListModels(r.Context(), providerID, profileID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleAIStudioModels(w http.ResponseWriter, r *http.Request) {

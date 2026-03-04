@@ -107,6 +107,14 @@ type AIStudioModelsResponse struct {
 	CachedUntil time.Time `json:"cached_until,omitempty"`
 }
 
+// ModelsResponse is the generic response for listing models from any provider.
+type ModelsResponse struct {
+	Provider  string   `json:"provider"`
+	ProfileID string   `json:"profile_id"`
+	Models    []string `json:"models"`
+	Source    string   `json:"source"`
+}
+
 type AnthropicAddTokenRequest struct {
 	SetupToken   string `json:"setup_token"`
 	DisplayName  string `json:"display_name,omitempty"`
@@ -906,6 +914,23 @@ func (c *APIClient) ListAIStudioModels(ctx context.Context, profileID string) (A
 	var out AIStudioModelsResponse
 	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
 		return AIStudioModelsResponse{}, err
+	}
+	return out, nil
+}
+
+// ListModels fetches available models for the given provider.
+func (c *APIClient) ListModels(ctx context.Context, providerID, profileID string) (ModelsResponse, error) {
+	u := c.baseURL + "/v1/models?provider=" + urlQueryEscape(strings.TrimSpace(providerID))
+	if profileID = strings.TrimSpace(profileID); profileID != "" {
+		u += "&profile_id=" + urlQueryEscape(profileID)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return ModelsResponse{}, err
+	}
+	var out ModelsResponse
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return ModelsResponse{}, err
 	}
 	return out, nil
 }

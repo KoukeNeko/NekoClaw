@@ -45,11 +45,19 @@ type GeminiInternalProvider struct {
 	contextWindow int
 	modelCacheMu  sync.Mutex
 	modelCache    map[string]geminiModelCacheEntry
+
+	listCacheMu sync.Mutex
+	listCache   map[string]geminiListCacheEntry
 }
 
 type geminiModelCacheEntry struct {
 	Model     string
 	Source    string
+	ExpiresAt time.Time
+}
+
+type geminiListCacheEntry struct {
+	Models    []string
 	ExpiresAt time.Time
 }
 
@@ -98,6 +106,7 @@ func NewGeminiInternalProvider(opts GeminiInternalOptions) *GeminiInternalProvid
 		generatePath:  generatePath,
 		contextWindow: contextWindow,
 		modelCache:    map[string]geminiModelCacheEntry{},
+		listCache:     map[string]geminiListCacheEntry{},
 	}
 }
 
@@ -151,6 +160,114 @@ func (p *GeminiInternalProvider) DiscoverPreferredModel(
 		p.storeModelCache(cacheKey, model, source)
 	}
 	return model, source, nil
+}
+
+// ---------------------------------------------------------------------------
+// ModelCatalogProvider — dynamic model listing
+// ---------------------------------------------------------------------------
+
+// ListModels returns all available model IDs by querying the fetchAvailableModels
+// and quota endpoints. Results are cached for 10 minutes.
+func (p *GeminiInternalProvider) ListModels(ctx context.Context, account core.Account) ([]string, error) {
+	token := strings.TrimSpace(account.Token)
+	if token == "" {
+		return nil, fmt.Errorf("missing account token")
+	}
+
+	cacheKey := strings.TrimSpace(account.ID)
+	if cacheKey != "" {
+		if cached, ok := p.loadListCache(cacheKey); ok {
+			return cached, nil
+		}
+	}
+
+	models := p.fetchAllModels(ctx, account)
+	if len(models) == 0 {
+		return nil, fmt.Errorf("no models available from gemini internal endpoints")
+	}
+
+	if cacheKey != "" {
+		p.storeListCache(cacheKey, models)
+	}
+	return models, nil
+}
+
+// fetchAllModels collects all available model IDs from fetchAvailableModels
+// and quota endpoints, returning a deduplicated sorted list.
+func (p *GeminiInternalProvider) fetchAllModels(ctx context.Context, account core.Account) []string {
+	seen := map[string]struct{}{}
+	var models []string
+
+	// Try fetchAvailableModels endpoint first.
+	endpointOrder := p.resolveEndpointOrder(account)
+	for _, endpoint := range endpointOrder {
+		payload, status, err := p.postJSON(
+			ctx,
+			strings.TrimRight(endpoint, "/")+"/v1internal:fetchAvailableModels",
+			account.Token,
+			map[string]any{},
+			nil,
+		)
+		if err != nil || status < 200 || status >= 300 {
+			continue
+		}
+		modelsRaw, ok := payload["models"].(map[string]any)
+		if !ok || len(modelsRaw) == 0 {
+			continue
+		}
+		for modelID := range modelsRaw {
+			trimmed := strings.TrimSpace(modelID)
+			if trimmed == "" {
+				continue
+			}
+			if _, exists := seen[trimmed]; !exists {
+				seen[trimmed] = struct{}{}
+				models = append(models, trimmed)
+			}
+		}
+		break // success — no need to try other endpoints
+	}
+
+	// Also try quota endpoint for additional models.
+	quota, err := p.RetrieveQuota(ctx, account.Token)
+	if err == nil {
+		for _, bucket := range quota.Buckets {
+			modelID := strings.TrimSpace(bucket.ModelID)
+			if modelID == "" {
+				continue
+			}
+			if _, exists := seen[modelID]; !exists {
+				seen[modelID] = struct{}{}
+				models = append(models, modelID)
+			}
+		}
+	}
+
+	sort.Strings(models)
+	return models
+}
+
+func (p *GeminiInternalProvider) loadListCache(cacheKey string) ([]string, bool) {
+	p.listCacheMu.Lock()
+	defer p.listCacheMu.Unlock()
+	entry, ok := p.listCache[cacheKey]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(entry.ExpiresAt) {
+		delete(p.listCache, cacheKey)
+		return nil, false
+	}
+	return entry.Models, true
+}
+
+func (p *GeminiInternalProvider) storeListCache(cacheKey string, models []string) {
+	p.listCacheMu.Lock()
+	defer p.listCacheMu.Unlock()
+	p.listCache[cacheKey] = geminiListCacheEntry{
+		Models:    models,
+		ExpiresAt: time.Now().Add(modelDiscoveryTTL),
+	}
 }
 
 func (p *GeminiInternalProvider) Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {

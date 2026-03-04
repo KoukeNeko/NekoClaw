@@ -169,9 +169,11 @@ func (sv *SettingsView) Update(msg tea.Msg) tea.Cmd {
 
 	// Forward API result messages to appropriate sections
 	case ProvidersMsg:
-		return sv.provider.HandleProviders(msg)
+		return sv.provider.HandleProviders(msg, sv.apiClient)
 	case AIStudioModelsMsg:
 		return sv.provider.HandleModels(msg)
+	case ModelsListMsg:
+		return sv.provider.HandleModelsList(msg)
 	case AuthStartMsg:
 		return sv.auth.HandleAuthStart(msg)
 	case AuthManualCompleteMsg:

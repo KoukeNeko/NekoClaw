@@ -60,6 +60,15 @@ func listAIStudioModelsCmd(apiClient *client.APIClient, profileID string) tea.Cm
 	}
 }
 
+func listModelsCmd(apiClient *client.APIClient, providerID, profileID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		resp, err := apiClient.ListModels(ctx, strings.TrimSpace(providerID), strings.TrimSpace(profileID))
+		return ModelsListMsg{Provider: providerID, Response: resp, Err: err}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Auth — Gemini OAuth
 // ---------------------------------------------------------------------------

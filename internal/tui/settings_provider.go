@@ -18,6 +18,7 @@ type ProviderSection struct {
 	currentProvider string
 	currentModel    string
 	loaded          bool
+	modelsLoading   bool
 }
 
 func NewProviderSection(provider, model string) ProviderSection {
@@ -30,7 +31,7 @@ func NewProviderSection(provider, model string) ProviderSection {
 func (ps *ProviderSection) SetProvider(p string) { ps.currentProvider = p }
 func (ps *ProviderSection) SetModel(m string)    { ps.currentModel = m }
 
-func (ps *ProviderSection) HandleProviders(msg ProvidersMsg) tea.Cmd {
+func (ps *ProviderSection) HandleProviders(msg ProvidersMsg, apiClient *client.APIClient) tea.Cmd {
 	if msg.Err != nil {
 		ps.providers = []string{"mock", "google-gemini-cli", "google-ai-studio", "anthropic", "openai", "openai-codex"}
 	} else {
@@ -44,13 +45,18 @@ func (ps *ProviderSection) HandleProviders(msg ProvidersMsg) tea.Cmd {
 			break
 		}
 	}
-	// Load models for current provider
+	// Show hardcoded fallback immediately, then fetch dynamic list.
 	ps.models = modelOptionsForProvider(ps.currentProvider, ps.currentModel)
 	for i, m := range ps.models {
 		if m == ps.currentModel {
 			ps.modelIdx = i
 			break
 		}
+	}
+	// Trigger async model fetch for the current provider.
+	if ps.currentProvider != "" && ps.currentProvider != "mock" {
+		ps.modelsLoading = true
+		return listModelsCmd(apiClient, ps.currentProvider, "")
 	}
 	return nil
 }
@@ -67,6 +73,35 @@ func (ps *ProviderSection) HandleModels(msg AIStudioModelsMsg) tea.Cmd {
 			ps.models = appendUnique(ps.models, ps.currentModel)
 		}
 	}
+	for i, m := range ps.models {
+		if m == ps.currentModel {
+			ps.modelIdx = i
+			break
+		}
+	}
+	return nil
+}
+
+// HandleModelsList processes the generic models list response.
+func (ps *ProviderSection) HandleModelsList(msg ModelsListMsg) tea.Cmd {
+	ps.modelsLoading = false
+	// Only apply if the response matches the currently selected provider.
+	if msg.Provider != ps.currentProvider {
+		return nil
+	}
+	if msg.Err != nil {
+		// Keep existing fallback list on error.
+		return nil
+	}
+	ps.models = []string{"default"}
+	for _, m := range msg.Response.Models {
+		ps.models = appendUnique(ps.models, strings.TrimSpace(m))
+	}
+	if ps.currentModel != "" {
+		ps.models = appendUnique(ps.models, ps.currentModel)
+	}
+	// Restore model cursor position.
+	ps.modelIdx = 0
 	for i, m := range ps.models {
 		if m == ps.currentModel {
 			ps.modelIdx = i
@@ -110,15 +145,21 @@ func (ps *ProviderSection) Update(msg tea.KeyMsg, apiClient *client.APIClient, c
 		if ps.focusField == 0 && ps.providerIdx < len(ps.providers) {
 			selected := ps.providers[ps.providerIdx]
 			ps.currentProvider = selected
-			// Reset model list to provider-specific defaults (don't carry old model).
+			// Show hardcoded fallback immediately.
 			ps.models = modelOptionsForProvider(selected, "")
 			ps.modelIdx = 0
 			defaultModel := ps.models[0] // always "default"
 			ps.currentModel = defaultModel
-			return tea.Batch(
+			cmds := []tea.Cmd{
 				func() tea.Msg { return ProviderChangedMsg{Provider: selected} },
 				func() tea.Msg { return ModelChangedMsg{ModelID: defaultModel} },
-			)
+			}
+			// Trigger async model fetch for the new provider.
+			if selected != "mock" {
+				ps.modelsLoading = true
+				cmds = append(cmds, listModelsCmd(apiClient, selected, ""))
+			}
+			return tea.Batch(cmds...)
 		}
 		if ps.focusField == 1 && ps.modelIdx < len(ps.models) {
 			selected := ps.models[ps.modelIdx]
@@ -172,8 +213,11 @@ func (ps ProviderSection) View(width int) string {
 
 	// Model list
 	modelHeader := "Models"
+	if ps.modelsLoading {
+		modelHeader += " (載入中...)"
+	}
 	if ps.focusField == 1 {
-		modelHeader = "› Models"
+		modelHeader = "› " + modelHeader
 	}
 	lines = append(lines, theme.SectionStyle.Render(modelHeader))
 

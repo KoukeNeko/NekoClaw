@@ -78,6 +78,13 @@ type AIStudioModelsMsg struct {
 	Err      error
 }
 
+// ModelsListMsg carries the list of available models for any provider.
+type ModelsListMsg struct {
+	Provider string
+	Response client.ModelsResponse
+	Err      error
+}
+
 // ---------------------------------------------------------------------------
 // Auth messages
 // ---------------------------------------------------------------------------

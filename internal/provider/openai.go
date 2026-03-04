@@ -3,11 +3,15 @@ package provider
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doeshing/nekoclaw/internal/core"
@@ -16,6 +20,7 @@ import (
 const (
 	defaultOpenAIBaseURL       = "https://api.openai.com/v1"
 	defaultOpenAIContextWindow = 200_000
+	openAIModelCacheTTL        = 10 * time.Minute
 )
 
 type OpenAIOptions struct {
@@ -32,6 +37,14 @@ type OpenAIProvider struct {
 	contextWindow int
 	defaultModel  string
 	client        *http.Client
+
+	modelCacheMu sync.Mutex
+	modelCache   map[string]openAIModelCacheEntry
+}
+
+type openAIModelCacheEntry struct {
+	Models    []string
+	ExpiresAt time.Time
 }
 
 type openAIResponsesRequest struct {
@@ -122,6 +135,7 @@ func NewOpenAIProvider(opts OpenAIOptions) *OpenAIProvider {
 		contextWindow: contextWindow,
 		defaultModel:  defaultModel,
 		client:        client,
+		modelCache:    map[string]openAIModelCacheEntry{},
 	}
 }
 
@@ -353,6 +367,117 @@ func (p *OpenAIProvider) GenerateToolTurn(ctx context.Context, req ToolTurnReque
 		StopReason: stopReason,
 		ToolCalls:  calls,
 	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// ModelCatalogProvider — dynamic model listing
+// ---------------------------------------------------------------------------
+
+// ListModels fetches the available model list from the OpenAI API, with
+// a 10-minute per-account in-memory cache.
+func (p *OpenAIProvider) ListModels(ctx context.Context, account core.Account) ([]string, error) {
+	secret := strings.TrimSpace(account.Token)
+	if secret == "" {
+		return nil, fmt.Errorf("missing openai credential")
+	}
+
+	cacheKey := openAICacheKey(account)
+	if cacheKey != "" {
+		if cached, ok := p.loadModelCache(cacheKey); ok {
+			return cached, nil
+		}
+	}
+
+	models, err := p.fetchModels(ctx, secret)
+	if err != nil {
+		return nil, err
+	}
+
+	if cacheKey != "" {
+		p.storeModelCache(cacheKey, models)
+	}
+	return models, nil
+}
+
+// openAIModelsResponse represents the OpenAI GET /v1/models response.
+type openAIModelsResponse struct {
+	Data []struct {
+		ID     string `json:"id"`
+		Object string `json:"object"`
+	} `json:"data"`
+}
+
+// fetchModels calls OpenAI's GET /v1/models endpoint and returns model IDs.
+func (p *OpenAIProvider) fetchModels(ctx context.Context, secret string) ([]string, error) {
+	targetURL := strings.TrimRight(p.baseURL, "/") + "/models"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build openai models request: %w", err)
+	}
+
+	httpReq.Header.Set("Authorization", "Bearer "+secret)
+	httpReq.Header.Set("User-Agent", "nekoclaw/1.0")
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("openai models request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("openai models API returned %d: %s", resp.StatusCode, summarizeForError(body, 280))
+	}
+
+	var parsed openAIModelsResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("decode openai models response: %w", err)
+	}
+
+	models := make([]string, 0, len(parsed.Data))
+	for _, m := range parsed.Data {
+		id := strings.TrimSpace(m.ID)
+		if id != "" {
+			models = append(models, id)
+		}
+	}
+	sort.Strings(models)
+	return models, nil
+}
+
+func (p *OpenAIProvider) loadModelCache(cacheKey string) ([]string, bool) {
+	p.modelCacheMu.Lock()
+	defer p.modelCacheMu.Unlock()
+	entry, ok := p.modelCache[cacheKey]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(entry.ExpiresAt) {
+		delete(p.modelCache, cacheKey)
+		return nil, false
+	}
+	return entry.Models, true
+}
+
+func (p *OpenAIProvider) storeModelCache(cacheKey string, models []string) {
+	p.modelCacheMu.Lock()
+	defer p.modelCacheMu.Unlock()
+	p.modelCache[cacheKey] = openAIModelCacheEntry{
+		Models:    models,
+		ExpiresAt: time.Now().Add(openAIModelCacheTTL),
+	}
+}
+
+func openAICacheKey(account core.Account) string {
+	if id := strings.TrimSpace(account.ID); id != "" {
+		return id
+	}
+	token := strings.TrimSpace(account.Token)
+	if token == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(token))
+	return "token:" + hex.EncodeToString(sum[:8])
 }
 
 func toOpenAIInput(messages []core.Message) []any {

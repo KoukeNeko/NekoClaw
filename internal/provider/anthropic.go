@@ -3,11 +3,16 @@ package provider
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doeshing/nekoclaw/internal/core"
@@ -17,6 +22,7 @@ const (
 	defaultAnthropicBaseURL       = "https://api.anthropic.com"
 	defaultAnthropicContextWindow = 200_000
 	defaultAnthropicMaxTokens     = 4096
+	anthropicModelCacheTTL        = 10 * time.Minute
 
 	AnthropicSetupTokenPrefix    = "sk-ant-oat01-"
 	AnthropicSetupTokenMinLength = 80
@@ -46,6 +52,14 @@ type AnthropicProvider struct {
 	contextWindow int
 	maxTokens     int
 	client        *http.Client
+
+	modelCacheMu sync.Mutex
+	modelCache   map[string]anthropicModelCacheEntry
+}
+
+type anthropicModelCacheEntry struct {
+	Models    []string
+	ExpiresAt time.Time
 }
 
 type anthropicRequest struct {
@@ -148,6 +162,7 @@ func NewAnthropicProvider(opts AnthropicOptions) *AnthropicProvider {
 		contextWindow: contextWindow,
 		maxTokens:     maxTokens,
 		client:        client,
+		modelCache:    map[string]anthropicModelCacheEntry{},
 	}
 }
 
@@ -208,8 +223,13 @@ func (p *AnthropicProvider) Generate(ctx context.Context, req GenerateRequest) (
 		Messages:  turns,
 	}
 	if req.Generation != nil {
-		payload.Temperature = req.Generation.Temperature
-		payload.TopP = req.Generation.TopP
+		// Anthropic forbids sending both temperature and top_p simultaneously.
+		// Prefer temperature when both are provided.
+		if req.Generation.Temperature != nil {
+			payload.Temperature = req.Generation.Temperature
+		} else {
+			payload.TopP = req.Generation.TopP
+		}
 	}
 	raw, _ := json.Marshal(payload)
 
@@ -239,6 +259,8 @@ func (p *AnthropicProvider) Generate(ctx context.Context, req GenerateRequest) (
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		message := summarizeAnthropicError(body)
+		log.Printf("event=anthropic_api_error status=%d model=%s message=%q body=%s",
+			resp.StatusCode, modelID, message, summarizeForError(body, 500))
 		if authType == core.AccountToken && looksLikeAnthropicInvalidBearer(body, message) {
 			message = "Invalid bearer token. Your Claude setup-token may have expired. Please run 'claude setup-token' again to get a new one."
 		}
@@ -311,8 +333,12 @@ func (p *AnthropicProvider) GenerateToolTurn(ctx context.Context, req ToolTurnRe
 		Tools:     tools,
 	}
 	if req.Generation != nil {
-		payload.Temperature = req.Generation.Temperature
-		payload.TopP = req.Generation.TopP
+		// Anthropic forbids sending both temperature and top_p simultaneously.
+		if req.Generation.Temperature != nil {
+			payload.Temperature = req.Generation.Temperature
+		} else {
+			payload.TopP = req.Generation.TopP
+		}
 	}
 	raw, _ := json.Marshal(payload)
 	targetURL := strings.TrimRight(p.baseURL, "/") + "/v1/messages"
@@ -338,6 +364,8 @@ func (p *AnthropicProvider) GenerateToolTurn(ctx context.Context, req ToolTurnRe
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		message := summarizeAnthropicError(body)
+		log.Printf("event=anthropic_api_error status=%d model=%s message=%q body=%s",
+			resp.StatusCode, modelID, message, summarizeForError(body, 500))
 		if authType == core.AccountToken && looksLikeAnthropicInvalidBearer(body, message) {
 			message = "Invalid bearer token. Your Claude setup-token may have expired. Please run 'claude setup-token' again to get a new one."
 		}
@@ -391,6 +419,118 @@ func (p *AnthropicProvider) GenerateToolTurn(ctx context.Context, req ToolTurnRe
 		StopReason: strings.TrimSpace(decoded.StopReason),
 		ToolCalls:  calls,
 	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// ModelCatalogProvider — dynamic model listing
+// ---------------------------------------------------------------------------
+
+// ListModels fetches the available model list from the Anthropic API, with
+// a 10-minute per-account in-memory cache.
+func (p *AnthropicProvider) ListModels(ctx context.Context, account core.Account) ([]string, error) {
+	secret := strings.TrimSpace(account.Token)
+	if secret == "" {
+		return nil, fmt.Errorf("missing anthropic credential")
+	}
+
+	cacheKey := anthropicCacheKey(account)
+	if cacheKey != "" {
+		if cached, ok := p.loadModelCache(cacheKey); ok {
+			return cached, nil
+		}
+	}
+
+	models, err := p.fetchModels(ctx, secret, account)
+	if err != nil {
+		return nil, err
+	}
+
+	if cacheKey != "" {
+		p.storeModelCache(cacheKey, models)
+	}
+	return models, nil
+}
+
+// anthropicModelsResponse represents the Anthropic GET /v1/models response.
+type anthropicModelsResponse struct {
+	Data []struct {
+		ID   string `json:"id"`
+		Type string `json:"type"`
+	} `json:"data"`
+	HasMore bool `json:"has_more"`
+}
+
+// fetchModels calls Anthropic's GET /v1/models endpoint and returns model IDs.
+func (p *AnthropicProvider) fetchModels(ctx context.Context, secret string, account core.Account) ([]string, error) {
+	targetURL := strings.TrimRight(p.baseURL, "/") + "/v1/models?limit=100"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build anthropic models request: %w", err)
+	}
+
+	authType := resolveAnthropicCredentialType(account, secret)
+	setAnthropicHeaders(httpReq, secret, authType)
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic models request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("anthropic models API returned %d: %s", resp.StatusCode, summarizeForError(body, 280))
+	}
+
+	var parsed anthropicModelsResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("decode anthropic models response: %w", err)
+	}
+
+	models := make([]string, 0, len(parsed.Data))
+	for _, m := range parsed.Data {
+		id := strings.TrimSpace(m.ID)
+		if id != "" {
+			models = append(models, id)
+		}
+	}
+	sort.Strings(models)
+	return models, nil
+}
+
+func (p *AnthropicProvider) loadModelCache(cacheKey string) ([]string, bool) {
+	p.modelCacheMu.Lock()
+	defer p.modelCacheMu.Unlock()
+	entry, ok := p.modelCache[cacheKey]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(entry.ExpiresAt) {
+		delete(p.modelCache, cacheKey)
+		return nil, false
+	}
+	return entry.Models, true
+}
+
+func (p *AnthropicProvider) storeModelCache(cacheKey string, models []string) {
+	p.modelCacheMu.Lock()
+	defer p.modelCacheMu.Unlock()
+	p.modelCache[cacheKey] = anthropicModelCacheEntry{
+		Models:    models,
+		ExpiresAt: time.Now().Add(anthropicModelCacheTTL),
+	}
+}
+
+func anthropicCacheKey(account core.Account) string {
+	if id := strings.TrimSpace(account.ID); id != "" {
+		return id
+	}
+	token := strings.TrimSpace(account.Token)
+	if token == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(token))
+	return "token:" + hex.EncodeToString(sum[:8])
 }
 
 func ValidateAnthropicSetupToken(raw string) error {
