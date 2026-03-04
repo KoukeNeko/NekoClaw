@@ -43,9 +43,12 @@ type ChatView struct {
 	width, height int
 }
 
+// headerHeight is the number of lines the chat header occupies (label + separator).
+const headerHeight = 2
+
 func NewChatView(apiClient *client.APIClient, provider, modelID, sessionID string, width, height int) ChatView {
 	input := NewChatInput(width, height)
-	contentH := height - input.InputHeight()
+	contentH := height - input.InputHeight() - headerHeight
 	if contentH < 3 {
 		contentH = 3
 	}
@@ -87,7 +90,7 @@ func (cv *ChatView) SetSize(width, height int) {
 
 	cv.input.SetSize(width, height)
 	inputH := cv.input.InputHeight()
-	viewportH := height - inputH
+	viewportH := height - inputH - headerHeight
 	if viewportH < 3 {
 		viewportH = 3
 	}
@@ -231,6 +234,10 @@ func (cv *ChatView) Update(msg tea.Msg) tea.Cmd {
 func (cv ChatView) View() string {
 	var sb strings.Builder
 
+	// Header: provider · model ▾
+	sb.WriteString(cv.renderHeader())
+	sb.WriteString("\n")
+
 	// Viewport (includes thinking pseudo-message when pending)
 	sb.WriteString(cv.viewport.View())
 	sb.WriteString("\n")
@@ -238,6 +245,28 @@ func (cv ChatView) View() string {
 	// Input (includes separator, textarea, and hints)
 	sb.WriteString(cv.input.View())
 	return sb.String()
+}
+
+// renderHeader renders the centered provider/model header bar.
+func (cv ChatView) renderHeader() string {
+	providerLabel := theme.SubtleStyle.Render(cv.provider)
+	dot := theme.SubtleStyle.Render(" · ")
+	modelLabel := theme.HighlightStyle.Render(cv.modelID)
+	chevron := theme.SubtleStyle.Render(" ▾")
+
+	label := providerLabel + dot + modelLabel + chevron
+	labelWidth := lipgloss.Width(label)
+
+	// Center within the chat pane
+	padding := (cv.width - labelWidth) / 2
+	if padding < 0 {
+		padding = 0
+	}
+
+	header := strings.Repeat(" ", padding) + label
+	separator := theme.SystemStyle.Render(strings.Repeat("─", cv.width))
+
+	return header + "\n" + separator
 }
 
 func (cv *ChatView) handleSubmit(text string) tea.Cmd {

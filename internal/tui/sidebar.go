@@ -288,12 +288,6 @@ func (s Sidebar) renderInspectorFooter(width int) string {
 
 	sb.WriteString(theme.SectionStyle.Render("INSPECTOR") + "\n\n")
 
-	sb.WriteString(theme.SubtleStyle.Render("PROVIDER") + "\n")
-	sb.WriteString(theme.NormalStyle.Render(clampLine(s.provider, width)) + "\n\n")
-
-	sb.WriteString(theme.SubtleStyle.Render("MODEL") + "\n")
-	sb.WriteString(theme.NormalStyle.Render(clampLine(s.model, width)) + "\n\n")
-
 	sb.WriteString(theme.SubtleStyle.Render("CONTEXT USAGE") + "\n")
 	sb.WriteString(renderProgressBar(s.contextPercent, width) + "\n\n")
 
@@ -313,11 +307,10 @@ func (s Sidebar) renderInspectorFooter(width int) string {
 
 // inspectorFooterHeight returns the number of lines the inspector footer occupies.
 func (s Sidebar) inspectorFooterHeight() int {
-	// INSPECTOR(1) + blank(1) + PROVIDER(1) + value(1) + blank(1)
-	// + MODEL(1) + value(1) + blank(1) + CONTEXT(1) + bar(1) + blank(1)
+	// INSPECTOR(1) + blank(1) + CONTEXT(1) + bar(1) + blank(1)
 	// + COST(1) + value(1) + blank(1) + MESSAGES(1) + value(1) + blank(1)
-	// + SHORTCUTS(1) + line(1) + line(1) + line(1) = 20
-	return 20
+	// + SHORTCUTS(1) + line(1) + line(1) + line(1) = 14
+	return 14
 }
 
 // renderProgressBar renders a text-based progress bar (moved from inspector.go).
