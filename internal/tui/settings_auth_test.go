@@ -56,3 +56,29 @@ func TestAuthViewStripsTerminalControlSequences(t *testing.T) {
 		t.Fatalf("view should not contain ANSI sequence: %q", view)
 	}
 }
+
+func TestHandleOpenAICodexBrowserCancelJobNotFoundClearsState(t *testing.T) {
+	as := NewAuthSection()
+	as.openAIBrowserJobID = "job-openai-1"
+	as.openAIBrowserJobStatus = "running"
+	as.openAIBrowserJobEvents = []client.OpenAICodexBrowserJobEvent{{At: time.Now(), Message: "running"}}
+
+	_ = as.HandleOpenAICodexBrowserCancel(OpenAICodexBrowserCancelMsg{
+		JobID: "job-openai-1",
+		Err: &client.APIError{
+			StatusCode: 404,
+			Code:       "job_not_found",
+			Message:    "not found",
+		},
+	})
+
+	if as.openAIBrowserJobID != "" {
+		t.Fatalf("expected openai browser job id cleared, got %q", as.openAIBrowserJobID)
+	}
+	if as.openAIBrowserJobStatus != "" {
+		t.Fatalf("expected openai browser job status cleared, got %q", as.openAIBrowserJobStatus)
+	}
+	if len(as.openAIBrowserJobEvents) != 0 {
+		t.Fatalf("expected openai browser events cleared, got %d", len(as.openAIBrowserJobEvents))
+	}
+}

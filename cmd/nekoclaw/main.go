@@ -208,12 +208,15 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		// Run periodic housekeeping (retention cleanup, session rotation) in the background.
 		go runHousekeepingLoop(lifecycle)
 	}
+	workspaceRoot, _ := os.Getwd()
 
 	svc := app.NewService(app.ServiceOptions{
-		SessionStore: sessionStore,
-		Lifecycle:    lifecycle,
-		MemoryDir:    memoryDir,
-		SearchIndex:  searchIndex,
+		SessionStore:  sessionStore,
+		Lifecycle:     lifecycle,
+		MemoryDir:     memoryDir,
+		SearchIndex:   searchIndex,
+		WorkspaceRoot: workspaceRoot,
+		ToolRunTTL:    envOrDuration("NEKOCLAW_TOOL_RUN_TTL", 10*time.Minute),
 	})
 
 	mockProvider := provider.NewMockProvider()
@@ -235,6 +238,18 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		BaseURL: envOr("ANTHROPIC_BASE_URL", ""),
 	})
 	svc.RegisterProvider(anthropicProvider)
+	openAIProvider := provider.NewOpenAIProvider(provider.OpenAIOptions{
+		ProviderID:   "openai",
+		BaseURL:      envOr("OPENAI_BASE_URL", ""),
+		DefaultModel: "gpt-5.1-codex",
+	})
+	svc.RegisterProvider(openAIProvider)
+	openAICodexProvider := provider.NewOpenAIProvider(provider.OpenAIOptions{
+		ProviderID:   "openai-codex",
+		BaseURL:      envOr("OPENAI_CODEX_BASE_URL", envOr("OPENAI_BASE_URL", "")),
+		DefaultModel: "gpt-5.3-codex",
+	})
+	svc.RegisterProvider(openAICodexProvider)
 
 	accounts, err := loadAccounts(opts.AccountsPath)
 	if err != nil {
@@ -243,6 +258,8 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	accounts = append(accounts, loadGeminiAccountsFromEnv()...)
 	accounts = append(accounts, loadAIStudioAccountsFromEnv()...)
 	accounts = append(accounts, loadAnthropicAccountsFromEnv()...)
+	accounts = append(accounts, loadOpenAIAccountsFromEnv()...)
+	accounts = append(accounts, loadOpenAICodexAccountsFromEnv()...)
 
 	byProvider := map[string][]core.Account{}
 	for _, account := range accounts {
@@ -269,6 +286,12 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	if svc.Pool("anthropic") == nil {
 		svc.RegisterPool(core.NewAccountPool("anthropic", nil, nil, core.DefaultCooldownConfig()))
 	}
+	if svc.Pool("openai") == nil {
+		svc.RegisterPool(core.NewAccountPool("openai", nil, nil, core.DefaultCooldownConfig()))
+	}
+	if svc.Pool("openai-codex") == nil {
+		svc.RegisterPool(core.NewAccountPool("openai-codex", nil, nil, core.DefaultCooldownConfig()))
+	}
 
 	// When all google-gemini-cli accounts are exhausted, try google-ai-studio.
 	// Reverse fallback is not registered because gemini-cli requires OAuth + project discovery.
@@ -287,6 +310,9 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	svc.SetAnthropicLoginManager(auth.NewAnthropicLoginManager(auth.AnthropicLoginManagerOptions{
 		JobTTL: envOrDuration("NEKOCLAW_ANTHROPIC_BROWSER_LOGIN_TTL", 10*time.Minute),
 	}))
+	svc.SetOpenAICodexLoginManager(auth.NewOpenAICodexLoginManager(auth.OpenAICodexLoginManagerOptions{
+		JobTTL: envOrDuration("NEKOCLAW_OPENAI_CODEX_BROWSER_LOGIN_TTL", 10*time.Minute),
+	}))
 
 	if err := hydrateGeminiProfiles(svc, authStore); err != nil {
 		return nil, fmt.Errorf("hydrate gemini profiles: %w", err)
@@ -296,6 +322,12 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	}
 	if err := hydrateAnthropicProfiles(svc, authStore); err != nil {
 		return nil, fmt.Errorf("hydrate anthropic profiles: %w", err)
+	}
+	if err := hydrateOpenAIProfiles(svc, authStore); err != nil {
+		return nil, fmt.Errorf("hydrate openai profiles: %w", err)
+	}
+	if err := hydrateOpenAICodexProfiles(svc, authStore); err != nil {
+		return nil, fmt.Errorf("hydrate openai-codex profiles: %w", err)
 	}
 
 	return svc, nil
@@ -440,6 +472,96 @@ func hydrateAnthropicProfiles(svc *app.Service, store *auth.Store) error {
 		pool.SetCredential(profile.ProfileID, account)
 		log.Printf(
 			"event=profile_hydrated provider=anthropic profile_id=%s type=%s key_hint=%s",
+			profile.ProfileID,
+			accountType,
+			strings.TrimSpace(profile.KeyHint),
+		)
+	}
+	return nil
+}
+
+func hydrateOpenAIProfiles(svc *app.Service, store *auth.Store) error {
+	if svc == nil || store == nil {
+		return nil
+	}
+	pool := svc.Pool("openai")
+	if pool == nil {
+		return nil
+	}
+
+	profiles, err := store.ListProfiles("openai")
+	if err != nil {
+		return err
+	}
+	for _, profile := range profiles {
+		if strings.TrimSpace(profile.ProfileID) == "" {
+			continue
+		}
+		credential, err := store.LoadCredential(profile.Provider, profile.ProfileID)
+		if err != nil {
+			continue
+		}
+		account := core.Account{
+			ID:       profile.ProfileID,
+			Provider: "openai",
+			Type:     core.AccountAPIKey,
+			Token:    credential.AccessToken,
+			Metadata: core.Metadata{
+				"display_name": strings.TrimSpace(profile.DisplayName),
+				"key_hint":     strings.TrimSpace(profile.KeyHint),
+				"endpoint":     strings.TrimSpace(profile.Endpoint),
+			},
+		}
+		pool.SetCredential(profile.ProfileID, account)
+		log.Printf(
+			"event=profile_hydrated provider=openai profile_id=%s key_hint=%s",
+			profile.ProfileID,
+			strings.TrimSpace(profile.KeyHint),
+		)
+	}
+	return nil
+}
+
+func hydrateOpenAICodexProfiles(svc *app.Service, store *auth.Store) error {
+	if svc == nil || store == nil {
+		return nil
+	}
+	pool := svc.Pool("openai-codex")
+	if pool == nil {
+		return nil
+	}
+
+	profiles, err := store.ListProfiles("openai-codex")
+	if err != nil {
+		return err
+	}
+	for _, profile := range profiles {
+		if strings.TrimSpace(profile.ProfileID) == "" {
+			continue
+		}
+		credential, err := store.LoadCredential(profile.Provider, profile.ProfileID)
+		if err != nil {
+			continue
+		}
+		accountType := core.AccountOAuth
+		if strings.TrimSpace(profile.Type) == string(core.AccountToken) {
+			accountType = core.AccountToken
+		}
+		account := core.Account{
+			ID:       profile.ProfileID,
+			Provider: "openai-codex",
+			Type:     accountType,
+			Token:    credential.AccessToken,
+			Metadata: core.Metadata{
+				"display_name": strings.TrimSpace(profile.DisplayName),
+				"key_hint":     strings.TrimSpace(profile.KeyHint),
+				"endpoint":     strings.TrimSpace(profile.Endpoint),
+				"email":        strings.TrimSpace(profile.Email),
+			},
+		}
+		pool.SetCredential(profile.ProfileID, account)
+		log.Printf(
+			"event=profile_hydrated provider=openai-codex profile_id=%s type=%s key_hint=%s",
 			profile.ProfileID,
 			accountType,
 			strings.TrimSpace(profile.KeyHint),
@@ -597,6 +719,60 @@ func loadAnthropicAccountsFromEnv() []core.Account {
 	return accounts
 }
 
+func loadOpenAIAccountsFromEnv() []core.Account {
+	keys := collectOpenAIAPIKeysFromEnv()
+	if len(keys) == 0 {
+		return nil
+	}
+	accounts := make([]core.Account, 0, len(keys))
+	for idx, key := range keys {
+		hint := maskAPIKeyHint(key)
+		suffix := strings.TrimPrefix(hint, "****")
+		if suffix == "" {
+			suffix = fmt.Sprintf("%d", idx+1)
+		}
+		profileID := fmt.Sprintf("openai:env_%s_%d", suffix, idx+1)
+		accounts = append(accounts, core.Account{
+			ID:       profileID,
+			Provider: "openai",
+			Type:     core.AccountAPIKey,
+			Token:    key,
+			Metadata: core.Metadata{
+				"display_name": fmt.Sprintf("openai key %d", idx+1),
+				"key_hint":     hint,
+			},
+		})
+	}
+	return accounts
+}
+
+func loadOpenAICodexAccountsFromEnv() []core.Account {
+	tokens := collectOpenAICodexTokensFromEnv()
+	if len(tokens) == 0 {
+		return nil
+	}
+	accounts := make([]core.Account, 0, len(tokens))
+	for idx, token := range tokens {
+		hint := maskAPIKeyHint(token)
+		suffix := strings.TrimPrefix(hint, "****")
+		if suffix == "" {
+			suffix = fmt.Sprintf("%d", idx+1)
+		}
+		profileID := fmt.Sprintf("openai-codex:env_%s_%d", suffix, idx+1)
+		accounts = append(accounts, core.Account{
+			ID:       profileID,
+			Provider: "openai-codex",
+			Type:     core.AccountOAuth,
+			Token:    token,
+			Metadata: core.Metadata{
+				"display_name": fmt.Sprintf("openai codex oauth %d", idx+1),
+				"key_hint":     hint,
+			},
+		})
+	}
+	return accounts
+}
+
 func collectAIStudioKeysFromEnv() []string {
 	values := make([]string, 0, 8)
 	appendValue := func(v string) {
@@ -731,6 +907,112 @@ func collectAnthropicAPIKeysFromEnv() []string {
 			continue
 		}
 		if strings.HasPrefix(name, "ANTHROPIC_API_KEY_") {
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			prefixedValues = append(prefixedValues, prefixed{name: name, value: value})
+		}
+	}
+	sort.SliceStable(prefixedValues, func(i, j int) bool {
+		return prefixedValues[i].name < prefixedValues[j].name
+	})
+	for _, item := range prefixedValues {
+		appendValue(item.value)
+	}
+
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func collectOpenAIAPIKeysFromEnv() []string {
+	values := make([]string, 0, 8)
+	appendValue := func(v string) {
+		if t := strings.TrimSpace(v); t != "" {
+			values = append(values, t)
+		}
+	}
+
+	for _, key := range []string{"OPENAI_API_KEY"} {
+		appendValue(os.Getenv(key))
+	}
+	for _, key := range []string{"OPENAI_API_KEYS"} {
+		for _, value := range splitCSV(os.Getenv(key)) {
+			appendValue(value)
+		}
+	}
+
+	type prefixed struct {
+		name  string
+		value string
+	}
+	prefixedValues := make([]prefixed, 0, 8)
+	for _, envEntry := range os.Environ() {
+		name, value, found := strings.Cut(envEntry, "=")
+		if !found {
+			continue
+		}
+		if strings.HasPrefix(name, "OPENAI_API_KEY_") {
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
+			prefixedValues = append(prefixedValues, prefixed{name: name, value: value})
+		}
+	}
+	sort.SliceStable(prefixedValues, func(i, j int) bool {
+		return prefixedValues[i].name < prefixedValues[j].name
+	})
+	for _, item := range prefixedValues {
+		appendValue(item.value)
+	}
+
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func collectOpenAICodexTokensFromEnv() []string {
+	values := make([]string, 0, 8)
+	appendValue := func(v string) {
+		if t := strings.TrimSpace(v); t != "" {
+			values = append(values, t)
+		}
+	}
+
+	for _, key := range []string{"OPENAI_OAUTH_TOKEN", "OPENAI_CODEX_OAUTH_TOKEN"} {
+		appendValue(os.Getenv(key))
+	}
+	for _, key := range []string{"OPENAI_OAUTH_TOKENS", "OPENAI_CODEX_OAUTH_TOKENS"} {
+		for _, value := range splitCSV(os.Getenv(key)) {
+			appendValue(value)
+		}
+	}
+
+	type prefixed struct {
+		name  string
+		value string
+	}
+	prefixedValues := make([]prefixed, 0, 8)
+	for _, envEntry := range os.Environ() {
+		name, value, found := strings.Cut(envEntry, "=")
+		if !found {
+			continue
+		}
+		if strings.HasPrefix(name, "OPENAI_OAUTH_TOKEN_") || strings.HasPrefix(name, "OPENAI_CODEX_OAUTH_TOKEN_") {
 			if strings.TrimSpace(value) == "" {
 				continue
 			}

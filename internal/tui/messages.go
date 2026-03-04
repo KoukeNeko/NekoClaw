@@ -162,6 +162,49 @@ type AnthropicBrowserCancelMsg struct {
 }
 
 // ---------------------------------------------------------------------------
+// OpenAI messages
+// ---------------------------------------------------------------------------
+
+// OpenAIAddMsg carries the result of adding an OpenAI credential.
+type OpenAIAddMsg struct {
+	Response client.OpenAIAddCredentialResponse
+	Err      error
+}
+
+// OpenAIProfilesMsg carries the list of OpenAI/OpenAI-Codex profiles.
+type OpenAIProfilesMsg struct {
+	Provider string
+	Profiles []client.OpenAIProfile
+	Err      error
+}
+
+// OpenAIProfileActionMsg carries the result of OpenAI profile actions.
+type OpenAIProfileActionMsg struct {
+	Provider  string
+	ProfileID string
+	Deleted   bool
+	Err       error
+}
+
+// OpenAICodexBrowserStartMsg carries the result of starting OpenAI Codex browser login.
+type OpenAICodexBrowserStartMsg struct {
+	Response client.OpenAICodexBrowserStartResponse
+	Err      error
+}
+
+// OpenAICodexBrowserJobMsg carries the polled state for OpenAI Codex browser login.
+type OpenAICodexBrowserJobMsg struct {
+	Response client.OpenAICodexBrowserJobResponse
+	Err      error
+}
+
+// OpenAICodexBrowserCancelMsg carries the result of cancelling OpenAI Codex browser login.
+type OpenAICodexBrowserCancelMsg struct {
+	JobID string
+	Err   error
+}
+
+// ---------------------------------------------------------------------------
 // Session messages
 // ---------------------------------------------------------------------------
 

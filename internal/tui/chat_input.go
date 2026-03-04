@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -8,6 +9,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+var terminalProbeResponsePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`^\]1[01];rgb:[0-9a-fA-F]{1,4}/[0-9a-fA-F]{1,4}/[0-9a-fA-F]{1,4}$`),
+	regexp.MustCompile(`^\[\d+;\d+R$`),
+}
 
 // SlashCommand defines a local slash command available in chat.
 type SlashCommand struct {
@@ -129,6 +135,13 @@ func (ci *ChatInput) Reset() {
 func (ci *ChatInput) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if msg.Type == tea.KeyRunes {
+			raw := strings.TrimSpace(string(msg.Runes))
+			if isTerminalProbeResponse(raw) {
+				return nil
+			}
+		}
+
 		// Handle slash command suggestion navigation
 		if ci.showSuggestions {
 			switch {
@@ -178,10 +191,42 @@ func (ci *ChatInput) Update(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	ci.textarea, cmd = ci.textarea.Update(msg)
 
+	// Clean out any leaking terminal probe responses from the accumulated text
+	val := ci.textarea.Value()
+	if strings.Contains(val, "]11;rgb:") || strings.Contains(val, "]10;rgb:") {
+		// Pattern matches e.g. ]11;rgb:158e/193a/1e75\ (with or without trailing \)
+		reOSC := regexp.MustCompile(`\]1[01];rgb:[0-9a-fA-F]{1,4}/[0-9a-fA-F]{1,4}/[0-9a-fA-F]{1,4}\\?`)
+		val = reOSC.ReplaceAllString(val, "")
+	}
+	if strings.Contains(val, "R") && strings.Contains(val, "[") {
+		reCursor := regexp.MustCompile(`\[\d+;\d+R`)
+		val = reCursor.ReplaceAllString(val, "")
+	}
+	if val != ci.textarea.Value() {
+		ci.textarea.SetValue(val)
+	}
+
 	// Update slash suggestions
 	ci.updateSuggestions()
 
 	return cmd
+}
+
+func isTerminalProbeResponse(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	for _, pattern := range terminalProbeResponsePatterns {
+		if pattern.MatchString(text) {
+			return true
+		}
+	}
+	if strings.Contains(text, "rgb:") &&
+		(strings.HasPrefix(text, "]10;") || strings.HasPrefix(text, "]11;")) {
+		return true
+	}
+	return false
 }
 
 func (ci ChatInput) View() string {

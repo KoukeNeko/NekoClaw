@@ -18,17 +18,20 @@ import (
 	"github.com/doeshing/nekoclaw/internal/core"
 	"github.com/doeshing/nekoclaw/internal/memory"
 	"github.com/doeshing/nekoclaw/internal/provider"
+	"github.com/doeshing/nekoclaw/internal/tooling"
 )
 
 var ErrProviderNotFound = errors.New("provider not found")
 var ErrNoAvailableAccount = errors.New("no available account")
 var ErrGeminiMissingProject = errors.New("gemini project is required")
 var ErrInvalidAPIKey = errors.New("invalid api key")
+var ErrInvalidOAuthToken = errors.New("invalid oauth token")
 var ErrInvalidSetupToken = errors.New("invalid setup token")
 var ErrKeyValidationFailed = errors.New("key validation failed")
 var ErrProfileNotFound = errors.New("profile not found")
 var ErrProfileInUse = errors.New("profile in use")
 var ErrProviderNotReady = errors.New("provider not ready")
+var ErrToolsNotSupported = errors.New("tools not supported by provider")
 
 type Service struct {
 	mu                sync.RWMutex
@@ -38,18 +41,22 @@ type Service struct {
 	lifecycle         *core.SessionLifecycle
 	oauthManager      *auth.GeminiOAuthManager
 	anthropicLoginMgr *auth.AnthropicLoginManager
+	openAICodexLogin  *auth.OpenAICodexLoginManager
 	authStore         *auth.Store
 	memoryDir         string
 	searchIndex       *memory.SearchIndex
 	preferredProfiles map[string]string
 	fallbacks         map[string][]string // primary provider -> fallback provider IDs
+	toolRuntime       *tooling.Runtime
 }
 
 type ServiceOptions struct {
-	SessionStore *core.SessionStore
-	Lifecycle    *core.SessionLifecycle
-	MemoryDir    string
-	SearchIndex  *memory.SearchIndex
+	SessionStore  *core.SessionStore
+	Lifecycle     *core.SessionLifecycle
+	MemoryDir     string
+	SearchIndex   *memory.SearchIndex
+	WorkspaceRoot string
+	ToolRunTTL    time.Duration
 }
 
 func NewService(opts ServiceOptions) *Service {
@@ -57,7 +64,7 @@ func NewService(opts ServiceOptions) *Service {
 	if sessions == nil {
 		sessions = core.NewSessionStore()
 	}
-	return &Service{
+	svc := &Service{
 		providers:         map[string]provider.Provider{},
 		pools:             map[string]*core.AccountPool{},
 		sessions:          sessions,
@@ -67,6 +74,10 @@ func NewService(opts ServiceOptions) *Service {
 		preferredProfiles: map[string]string{},
 		fallbacks:         map[string][]string{},
 	}
+	policy := tooling.DefaultPolicy(opts.WorkspaceRoot)
+	executor := tooling.NewRuntimeExecutor(serviceToolBackend{svc: svc}, policy)
+	svc.toolRuntime = tooling.NewRuntime(executor, tooling.NewApprovalStore(opts.ToolRunTTL))
+	return svc
 }
 
 func (s *Service) ListSessions() []core.SessionMetadata {
@@ -115,6 +126,12 @@ func (s *Service) SetAnthropicLoginManager(manager *auth.AnthropicLoginManager) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.anthropicLoginMgr = manager
+}
+
+func (s *Service) SetOpenAICodexLoginManager(manager *auth.OpenAICodexLoginManager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.openAICodexLogin = manager
 }
 
 func (s *Service) Providers() []string {
@@ -295,6 +312,90 @@ type AnthropicBrowserManualCompleteRequest struct {
 }
 
 type AnthropicProfileStatus struct {
+	ProfileID      string    `json:"profile_id"`
+	Provider       string    `json:"provider"`
+	Type           string    `json:"type"`
+	DisplayName    string    `json:"display_name,omitempty"`
+	KeyHint        string    `json:"key_hint,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	Available      bool      `json:"available"`
+	CooldownUntil  time.Time `json:"cooldown_until,omitempty"`
+	DisabledUntil  time.Time `json:"disabled_until,omitempty"`
+	DisabledReason string    `json:"disabled_reason,omitempty"`
+	Preferred      bool      `json:"preferred"`
+}
+
+type OpenAIAddKeyRequest struct {
+	APIKey       string `json:"api_key"`
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+}
+
+type OpenAICodexAddTokenRequest struct {
+	Token        string `json:"token"`
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+}
+
+type OpenAIAddCredentialResult struct {
+	ProfileID   string `json:"profile_id"`
+	Provider    string `json:"provider"`
+	Type        string `json:"type"`
+	DisplayName string `json:"display_name"`
+	KeyHint     string `json:"key_hint"`
+	Preferred   bool   `json:"preferred"`
+	Available   bool   `json:"available"`
+}
+
+type OpenAICodexBrowserStartRequest struct {
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+	Mode         string `json:"mode,omitempty"` // auto|local|remote
+}
+
+type OpenAICodexBrowserStartResult struct {
+	JobID      string    `json:"job_id"`
+	Provider   string    `json:"provider"`
+	Mode       string    `json:"mode"`
+	Status     string    `json:"status"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	Message    string    `json:"message,omitempty"`
+	ManualHint string    `json:"manual_hint,omitempty"`
+}
+
+type OpenAICodexBrowserJobEvent struct {
+	At      time.Time `json:"at"`
+	Message string    `json:"message"`
+}
+
+type OpenAICodexBrowserJobResult struct {
+	JobID        string                       `json:"job_id"`
+	Provider     string                       `json:"provider"`
+	Mode         string                       `json:"mode"`
+	Status       string                       `json:"status"`
+	Events       []OpenAICodexBrowserJobEvent `json:"events,omitempty"`
+	ProfileID    string                       `json:"profile_id,omitempty"`
+	KeyHint      string                       `json:"key_hint,omitempty"`
+	ExpiresAt    time.Time                    `json:"expires_at"`
+	Message      string                       `json:"message,omitempty"`
+	ManualHint   string                       `json:"manual_hint,omitempty"`
+	ErrorCode    string                       `json:"error_code,omitempty"`
+	ErrorMessage string                       `json:"error_message,omitempty"`
+}
+
+type OpenAICodexBrowserManualCompleteRequest struct {
+	JobID        string `json:"job_id"`
+	Token        string `json:"token"`
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+}
+
+type OpenAIProfileStatus struct {
 	ProfileID      string    `json:"profile_id"`
 	Provider       string    `json:"provider"`
 	Type           string    `json:"type"`
@@ -903,6 +1004,173 @@ func (s *Service) DeleteAnthropicProfile(profileID string) error {
 	return nil
 }
 
+func (s *Service) AddOpenAIKey(_ context.Context, req OpenAIAddKeyRequest) (OpenAIAddCredentialResult, error) {
+	apiKey := strings.TrimSpace(req.APIKey)
+	if apiKey == "" {
+		return OpenAIAddCredentialResult{}, fmt.Errorf("%w: api_key is required", ErrInvalidAPIKey)
+	}
+	return s.addOpenAICredential(commonOpenAIAddRequest{
+		providerID:   "openai",
+		secret:       apiKey,
+		accountType:  core.AccountAPIKey,
+		displayName:  req.DisplayName,
+		profileID:    req.ProfileID,
+		setPreferred: req.SetPreferred,
+	})
+}
+
+func (s *Service) AddOpenAICodexToken(_ context.Context, req OpenAICodexAddTokenRequest) (OpenAIAddCredentialResult, error) {
+	token := strings.TrimSpace(req.Token)
+	if token == "" {
+		return OpenAIAddCredentialResult{}, fmt.Errorf("%w: token is required", ErrInvalidOAuthToken)
+	}
+	return s.addOpenAICredential(commonOpenAIAddRequest{
+		providerID:   "openai-codex",
+		secret:       token,
+		accountType:  core.AccountOAuth,
+		displayName:  req.DisplayName,
+		profileID:    req.ProfileID,
+		setPreferred: req.SetPreferred,
+	})
+}
+
+func (s *Service) ListOpenAIProfiles(providerID string) ([]OpenAIProfileStatus, error) {
+	providerID = strings.TrimSpace(providerID)
+	if providerID != "openai" && providerID != "openai-codex" {
+		return nil, fmt.Errorf("%w: unsupported provider %q", ErrProviderNotFound, providerID)
+	}
+	store := s.authStoreSafe()
+	if store == nil {
+		return nil, fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	profiles, err := store.ListProfiles(providerID)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.RLock()
+	preferred := s.preferredProfiles[providerID]
+	pool := s.pools[providerID]
+	s.mu.RUnlock()
+
+	snapByID := map[string]core.AccountSnapshot{}
+	if pool != nil {
+		for _, snap := range pool.Snapshot() {
+			snapByID[snap.ID] = snap
+		}
+	}
+	now := time.Now()
+	result := make([]OpenAIProfileStatus, 0, len(profiles))
+	for _, profile := range profiles {
+		status := OpenAIProfileStatus{
+			ProfileID:   profile.ProfileID,
+			Provider:    profile.Provider,
+			Type:        profile.Type,
+			DisplayName: strings.TrimSpace(profile.DisplayName),
+			KeyHint:     strings.TrimSpace(profile.KeyHint),
+			CreatedAt:   profile.CreatedAt,
+			UpdatedAt:   profile.UpdatedAt,
+			Preferred:   profile.ProfileID == preferred,
+		}
+		if snap, ok := snapByID[profile.ProfileID]; ok {
+			if status.DisplayName == "" {
+				status.DisplayName = strings.TrimSpace(snap.Metadata["display_name"])
+			}
+			if status.KeyHint == "" {
+				status.KeyHint = strings.TrimSpace(snap.Metadata["key_hint"])
+			}
+			if snap.Usage != nil {
+				status.CooldownUntil = snap.Usage.CooldownUntil
+				status.DisabledUntil = snap.Usage.DisabledUntil
+				status.DisabledReason = string(snap.Usage.DisabledReason)
+				status.Available = (snap.Usage.CooldownUntil.IsZero() || now.After(snap.Usage.CooldownUntil)) &&
+					(snap.Usage.DisabledUntil.IsZero() || now.After(snap.Usage.DisabledUntil))
+			} else {
+				status.Available = true
+			}
+		} else {
+			status.CooldownUntil = profile.CooldownUntil
+			status.DisabledUntil = profile.DisabledUntil
+			status.DisabledReason = profile.DisabledReason
+			status.Available = (profile.CooldownUntil.IsZero() || now.After(profile.CooldownUntil)) &&
+				(profile.DisabledUntil.IsZero() || now.After(profile.DisabledUntil))
+		}
+		result = append(result, status)
+	}
+	return result, nil
+}
+
+func (s *Service) UseOpenAIProfile(providerID, profileID string) error {
+	providerID = strings.TrimSpace(providerID)
+	profileID = strings.TrimSpace(profileID)
+	if providerID != "openai" && providerID != "openai-codex" {
+		return fmt.Errorf("%w: unsupported provider %q", ErrProviderNotFound, providerID)
+	}
+	if profileID == "" {
+		return fmt.Errorf("profile_id is required")
+	}
+	store := s.authStoreSafe()
+	if store == nil {
+		return fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	if _, err := store.GetProfile(providerID, profileID); err != nil {
+		if errors.Is(err, auth.ErrProfileNotFound) {
+			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		}
+		return err
+	}
+
+	s.mu.Lock()
+	pool := s.pools[providerID]
+	s.preferredProfiles[providerID] = profileID
+	s.mu.Unlock()
+	if pool != nil {
+		if ok := pool.SetPreferred(profileID); !ok {
+			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		}
+	}
+	log.Printf("event=openai_profile_use provider=%s profile_id=%s", providerID, profileID)
+	return nil
+}
+
+func (s *Service) DeleteOpenAIProfile(providerID, profileID string) error {
+	providerID = strings.TrimSpace(providerID)
+	profileID = strings.TrimSpace(profileID)
+	if providerID != "openai" && providerID != "openai-codex" {
+		return fmt.Errorf("%w: unsupported provider %q", ErrProviderNotFound, providerID)
+	}
+	if profileID == "" {
+		return fmt.Errorf("profile_id is required")
+	}
+	store := s.authStoreSafe()
+	if store == nil {
+		return fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	if _, err := store.GetProfile(providerID, profileID); err != nil {
+		if errors.Is(err, auth.ErrProfileNotFound) {
+			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		}
+		return err
+	}
+
+	_ = store.DeleteCredential(providerID, profileID)
+	if err := store.DeleteProfile(providerID, profileID); err != nil && !errors.Is(err, auth.ErrProfileNotFound) {
+		return err
+	}
+
+	s.mu.Lock()
+	if s.preferredProfiles[providerID] == profileID {
+		delete(s.preferredProfiles, providerID)
+	}
+	pool := s.pools[providerID]
+	s.mu.Unlock()
+	if pool != nil {
+		pool.RemoveAccount(profileID)
+	}
+	log.Printf("event=openai_profile_delete provider=%s profile_id=%s", providerID, profileID)
+	return nil
+}
+
 func (s *Service) StartAnthropicBrowserLogin(
 	ctx context.Context,
 	req AnthropicBrowserStartRequest,
@@ -1087,12 +1355,300 @@ func (s *Service) CancelAnthropicBrowserLogin(
 	return result, nil
 }
 
+func (s *Service) StartOpenAICodexBrowserLogin(
+	ctx context.Context,
+	req OpenAICodexBrowserStartRequest,
+) (OpenAICodexBrowserStartResult, error) {
+	manager := s.openAICodexLoginManagerSafe()
+	if manager == nil {
+		return OpenAICodexBrowserStartResult{}, fmt.Errorf("%w: openai codex login manager not configured", ErrProviderNotReady)
+	}
+	if _, _, err := s.resolveProviderPool("openai-codex"); err != nil {
+		return OpenAICodexBrowserStartResult{}, fmt.Errorf("%w: %v", ErrProviderNotReady, err)
+	}
+
+	snapshot, err := manager.Start(ctx, auth.OpenAICodexLoginStartRequest{
+		DisplayName:  strings.TrimSpace(req.DisplayName),
+		ProfileID:    strings.TrimSpace(req.ProfileID),
+		SetPreferred: req.SetPreferred,
+		Mode:         strings.TrimSpace(req.Mode),
+		OnToken: func(_ context.Context, token, displayName, profileID string, setPreferred bool) (auth.OpenAICodexPersistResult, error) {
+			added, addErr := s.addOpenAICredential(commonOpenAIAddRequest{
+				providerID:   "openai-codex",
+				secret:       token,
+				accountType:  core.AccountOAuth,
+				displayName:  displayName,
+				profileID:    profileID,
+				setPreferred: setPreferred,
+			})
+			if addErr != nil {
+				return auth.OpenAICodexPersistResult{}, addErr
+			}
+			return auth.OpenAICodexPersistResult{
+				ProfileID:   added.ProfileID,
+				DisplayName: added.DisplayName,
+				KeyHint:     added.KeyHint,
+				Preferred:   added.Preferred,
+			}, nil
+		},
+	})
+	if err != nil {
+		return OpenAICodexBrowserStartResult{}, err
+	}
+	log.Printf(
+		"event=openai_codex_browser_login_start provider=openai-codex job_id=%s mode=%s status=%s",
+		snapshot.JobID,
+		snapshot.Mode,
+		snapshot.Status,
+	)
+	return OpenAICodexBrowserStartResult{
+		JobID:      snapshot.JobID,
+		Provider:   snapshot.Provider,
+		Mode:       snapshot.Mode,
+		Status:     snapshot.Status,
+		ExpiresAt:  snapshot.ExpiresAt,
+		Message:    snapshot.Message,
+		ManualHint: snapshot.ManualHint,
+	}, nil
+}
+
+func (s *Service) GetOpenAICodexBrowserLoginJob(
+	_ context.Context,
+	jobID string,
+) (OpenAICodexBrowserJobResult, error) {
+	manager := s.openAICodexLoginManagerSafe()
+	if manager == nil {
+		return OpenAICodexBrowserJobResult{}, fmt.Errorf("%w: openai codex login manager not configured", ErrProviderNotReady)
+	}
+	snapshot, err := manager.Get(strings.TrimSpace(jobID))
+	if err != nil {
+		return OpenAICodexBrowserJobResult{}, err
+	}
+	events := make([]OpenAICodexBrowserJobEvent, 0, len(snapshot.Events))
+	for _, event := range snapshot.Events {
+		events = append(events, OpenAICodexBrowserJobEvent{
+			At:      event.At,
+			Message: event.Message,
+		})
+	}
+	if snapshot.Status == string(auth.OpenAICodexLoginStatusCompleted) {
+		log.Printf(
+			"event=openai_codex_browser_login_complete provider=openai-codex job_id=%s profile_id=%s",
+			snapshot.JobID,
+			snapshot.ProfileID,
+		)
+	}
+	if snapshot.Status == string(auth.OpenAICodexLoginStatusFailed) {
+		log.Printf(
+			"event=openai_codex_browser_login_failed provider=openai-codex job_id=%s failure_reason=%s",
+			snapshot.JobID,
+			snapshot.ErrorCode,
+		)
+	}
+	return OpenAICodexBrowserJobResult{
+		JobID:        snapshot.JobID,
+		Provider:     snapshot.Provider,
+		Mode:         snapshot.Mode,
+		Status:       snapshot.Status,
+		Events:       events,
+		ProfileID:    snapshot.ProfileID,
+		KeyHint:      snapshot.KeyHint,
+		ExpiresAt:    snapshot.ExpiresAt,
+		Message:      snapshot.Message,
+		ManualHint:   snapshot.ManualHint,
+		ErrorCode:    snapshot.ErrorCode,
+		ErrorMessage: snapshot.ErrorMessage,
+	}, nil
+}
+
+func (s *Service) CompleteOpenAICodexBrowserLoginManual(
+	ctx context.Context,
+	req OpenAICodexBrowserManualCompleteRequest,
+) (OpenAIAddCredentialResult, error) {
+	manager := s.openAICodexLoginManagerSafe()
+	if manager == nil {
+		return OpenAIAddCredentialResult{}, fmt.Errorf("%w: openai codex login manager not configured", ErrProviderNotReady)
+	}
+	snapshot, err := manager.CompleteManual(ctx, auth.OpenAICodexLoginManualCompleteRequest{
+		JobID:        strings.TrimSpace(req.JobID),
+		Token:        strings.TrimSpace(req.Token),
+		DisplayName:  strings.TrimSpace(req.DisplayName),
+		ProfileID:    strings.TrimSpace(req.ProfileID),
+		SetPreferred: req.SetPreferred,
+		OnToken: func(_ context.Context, token, displayName, profileID string, setPreferred bool) (auth.OpenAICodexPersistResult, error) {
+			added, addErr := s.addOpenAICredential(commonOpenAIAddRequest{
+				providerID:   "openai-codex",
+				secret:       token,
+				accountType:  core.AccountOAuth,
+				displayName:  displayName,
+				profileID:    profileID,
+				setPreferred: setPreferred,
+			})
+			if addErr != nil {
+				return auth.OpenAICodexPersistResult{}, addErr
+			}
+			return auth.OpenAICodexPersistResult{
+				ProfileID:   added.ProfileID,
+				DisplayName: added.DisplayName,
+				KeyHint:     added.KeyHint,
+				Preferred:   added.Preferred,
+			}, nil
+		},
+	})
+	if err != nil {
+		return OpenAIAddCredentialResult{}, err
+	}
+
+	displayName := strings.TrimSpace(req.DisplayName)
+	if store := s.authStoreSafe(); store != nil && strings.TrimSpace(snapshot.ProfileID) != "" {
+		if profile, getErr := store.GetProfile("openai-codex", snapshot.ProfileID); getErr == nil {
+			if displayName == "" {
+				displayName = strings.TrimSpace(profile.DisplayName)
+			}
+		}
+	}
+	if displayName == "" {
+		displayName = chooseFirstNonEmpty(snapshot.ProfileID, "OpenAI Codex OAuth token")
+	}
+	preferred := s.preferredProfile("openai-codex") == strings.TrimSpace(snapshot.ProfileID)
+	return OpenAIAddCredentialResult{
+		ProfileID:   snapshot.ProfileID,
+		Provider:    "openai-codex",
+		Type:        string(core.AccountOAuth),
+		DisplayName: displayName,
+		KeyHint:     snapshot.KeyHint,
+		Preferred:   preferred,
+		Available:   true,
+	}, nil
+}
+
+func (s *Service) CancelOpenAICodexBrowserLogin(
+	_ context.Context,
+	jobID string,
+) (auth.OpenAICodexLoginCancelResult, error) {
+	manager := s.openAICodexLoginManagerSafe()
+	if manager == nil {
+		return auth.OpenAICodexLoginCancelResult{}, fmt.Errorf("%w: openai codex login manager not configured", ErrProviderNotReady)
+	}
+	result, err := manager.Cancel(strings.TrimSpace(jobID))
+	if err != nil {
+		return auth.OpenAICodexLoginCancelResult{}, err
+	}
+	log.Printf(
+		"event=openai_codex_browser_login_cancelled provider=openai-codex job_id=%s status=%s",
+		result.JobID,
+		result.Status,
+	)
+	return result, nil
+}
+
 type commonAnthropicAddRequest struct {
 	secret       string
 	accountType  core.AccountType
 	displayName  string
 	profileID    string
 	setPreferred bool
+}
+
+type commonOpenAIAddRequest struct {
+	providerID   string
+	secret       string
+	accountType  core.AccountType
+	displayName  string
+	profileID    string
+	setPreferred bool
+}
+
+func (s *Service) addOpenAICredential(req commonOpenAIAddRequest) (OpenAIAddCredentialResult, error) {
+	store := s.authStoreSafe()
+	if store == nil {
+		return OpenAIAddCredentialResult{}, fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	providerID := strings.TrimSpace(req.providerID)
+	if providerID != "openai" && providerID != "openai-codex" {
+		return OpenAIAddCredentialResult{}, fmt.Errorf("%w: unsupported provider %q", ErrProviderNotFound, providerID)
+	}
+	prov, pool, err := s.resolveProviderPool(providerID)
+	if err != nil {
+		return OpenAIAddCredentialResult{}, fmt.Errorf("%w: %v", ErrProviderNotReady, err)
+	}
+
+	secret := strings.TrimSpace(req.secret)
+	accountType := req.accountType
+	displayName := strings.TrimSpace(req.displayName)
+	profileID := strings.TrimSpace(req.profileID)
+	if profileID == "" {
+		profileID = deriveOpenAIProfileID(providerID, accountType, displayName, secret)
+	}
+	keyHint := maskAPIKeyForHint(secret)
+	if displayName == "" {
+		if providerID == "openai-codex" {
+			displayName = "OpenAI Codex OAuth " + keyHint
+		} else {
+			displayName = "OpenAI API key " + keyHint
+		}
+	}
+
+	if err := store.SaveCredential(providerID, profileID, auth.Credential{
+		AccessToken: secret,
+	}); err != nil {
+		return OpenAIAddCredentialResult{}, err
+	}
+	meta := auth.ProfileMetadata{
+		ProfileID:   profileID,
+		Provider:    providerID,
+		Type:        string(accountType),
+		DisplayName: displayName,
+		KeyHint:     keyHint,
+		Endpoint:    pEndpoint(prov),
+	}
+	if err := store.UpsertProfile(meta); err != nil {
+		_ = store.DeleteCredential(providerID, profileID)
+		return OpenAIAddCredentialResult{}, err
+	}
+
+	pool.SetCredential(profileID, core.Account{
+		ID:       profileID,
+		Provider: providerID,
+		Type:     accountType,
+		Token:    secret,
+		Metadata: core.Metadata{
+			"display_name": displayName,
+			"key_hint":     keyHint,
+		},
+	})
+
+	preferred := req.setPreferred
+	if !preferred {
+		snapshots := pool.Snapshot()
+		preferred = len(snapshots) == 1
+	}
+	if preferred {
+		s.mu.Lock()
+		s.preferredProfiles[providerID] = profileID
+		s.mu.Unlock()
+		_ = pool.SetPreferred(profileID)
+	}
+
+	s.syncProfileState(providerID, profileID)
+	log.Printf(
+		"event=openai_profile_add provider=%s profile_id=%s type=%s key_hint=%s preferred=%t",
+		providerID,
+		profileID,
+		accountType,
+		keyHint,
+		preferred,
+	)
+
+	return OpenAIAddCredentialResult{
+		ProfileID:   profileID,
+		Provider:    providerID,
+		Type:        string(accountType),
+		DisplayName: displayName,
+		KeyHint:     keyHint,
+		Preferred:   preferred,
+		Available:   true,
+	}, nil
 }
 
 func (s *Service) addAnthropicCredential(req commonAnthropicAddRequest) (AnthropicAddCredentialResult, error) {
@@ -1198,6 +1754,11 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 	if sessionID == "" {
 		sessionID = "main"
 	}
+	surface := req.Surface
+	if surface == "" {
+		surface = core.SurfaceTUI
+	}
+	runID := strings.TrimSpace(req.RunID)
 
 	// Check session lifecycle before processing.
 	if s.lifecycle != nil && s.lifecycle.ShouldReset(sessionID) {
@@ -1206,14 +1767,16 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 	}
 
 	prompt := strings.TrimSpace(req.Message)
-	if prompt == "" {
+	if prompt == "" && runID == "" {
 		return core.ChatResponse{}, fmt.Errorf("message is required")
 	}
 
 	// Build provider chain: primary first, then registered fallbacks.
 	s.mu.RLock()
 	chain := []string{providerID}
-	chain = append(chain, s.fallbacks[providerID]...)
+	if runID == "" {
+		chain = append(chain, s.fallbacks[providerID]...)
+	}
 	s.mu.RUnlock()
 
 	var lastErr error
@@ -1232,6 +1795,10 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 			isDefaultModel: isDefaultModel || (isFallback && strings.EqualFold(candidateModel, "default")),
 			sessionID:      sessionID,
 			prompt:         prompt,
+			surface:        surface,
+			enableTools:    req.EnableTools,
+			runID:          runID,
+			toolApprovals:  req.ToolApprovals,
 		})
 		if err == nil {
 			if isFallback {
@@ -1269,6 +1836,10 @@ type attemptSingleProviderParams struct {
 	isDefaultModel bool
 	sessionID      string
 	prompt         string
+	surface        core.Surface
+	enableTools    bool
+	runID          string
+	toolApprovals  []core.ToolApprovalDecision
 }
 
 // attemptSingleProvider tries all accounts in one provider's pool.
@@ -1287,7 +1858,11 @@ func (s *Service) attemptSingleProvider(
 		return core.ChatResponse{}, err
 	}
 
-	userMessage := core.Message{Role: core.RoleUser, Content: params.prompt, CreatedAt: time.Now()}
+	hasUserMessage := strings.TrimSpace(params.prompt) != ""
+	userMessage := core.Message{}
+	if hasUserMessage {
+		userMessage = core.Message{Role: core.RoleUser, Content: params.prompt, CreatedAt: time.Now()}
+	}
 
 	// Try LLM-based compaction first; fall back to token-based sliding window.
 	var compressedMessages []core.Message
@@ -1318,7 +1893,9 @@ func (s *Service) attemptSingleProvider(
 		if compactErr == nil && result.DroppedCount > 0 {
 			s.sessions.Append(sessionID, result.CompactionEntry)
 			compressedMessages = entriesToMessages(result.KeptEntries)
-			compressedMessages = append(compressedMessages, userMessage)
+			if hasUserMessage {
+				compressedMessages = append(compressedMessages, userMessage)
+			}
 			compressionMeta = core.CompressionMeta{
 				OriginalTokens:   compaction.EstimateEntriesTokens(entries),
 				CompressedTokens: compaction.EstimateEntriesTokens(result.KeptEntries) + result.SummaryTokens,
@@ -1334,7 +1911,10 @@ func (s *Service) attemptSingleProvider(
 	// Fallback: token-based sliding window compression.
 	if compressedMessages == nil {
 		history := s.sessions.HistoryAsMessages(sessionID)
-		baseMessages := append(history, userMessage)
+		baseMessages := append([]core.Message(nil), history...)
+		if hasUserMessage {
+			baseMessages = append(baseMessages, userMessage)
+		}
 		policy := contextwindow.DefaultPolicy(contextWindow)
 		policy = s.adjustCompressionPolicy(providerID, modelID, policy)
 		compressedMessages, compressionMeta, compressed = contextwindow.Compress(baseMessages, policy)
@@ -1364,6 +1944,10 @@ func (s *Service) attemptSingleProvider(
 	for attempt := 0; attempt < attemptLimit; attempt++ {
 		account, ok := pool.Acquire(preferredProfile)
 		if !ok {
+			if inferred := s.inferOpenAIMissingAPIKey(providerID, pool); inferred != nil {
+				lastErr = inferred
+				break
+			}
 			reason := pool.ResolveUnavailableReason()
 			if lastErr == nil {
 				if inferred := s.inferGeminiMissingProjectFromPool(providerID, reason, pool); inferred != nil {
@@ -1414,6 +1998,75 @@ func (s *Service) attemptSingleProvider(
 			}
 		}
 
+		if params.enableTools {
+			toolProv, ok := prov.(provider.ToolCallingProvider)
+			if !ok || !toolProv.ToolCapabilities().SupportsTools {
+				return core.ChatResponse{}, fmt.Errorf("%w: provider=%s", ErrToolsNotSupported, providerID)
+			}
+			runResult, runErr := s.toolRuntime.Run(ctx, tooling.RunRequest{
+				SessionID:    sessionID,
+				Surface:      params.surface,
+				ProviderID:   providerID,
+				ModelID:      attemptModelID,
+				Account:      account,
+				ToolProvider: toolProv,
+				Messages:     compressedMessages,
+				UserMessage:  userMessage,
+				EnableTools:  true,
+				RunID:        params.runID,
+				Approvals:    params.toolApprovals,
+				Compressed:   compressed,
+				Compression:  compressionMeta,
+			})
+			if runErr == nil {
+				if !runResult.Pending && len(runResult.SessionMessages) > 0 {
+					s.sessions.AppendMessage(sessionID, runResult.SessionMessages...)
+					if s.searchIndex != nil {
+						newEntries := make([]core.SessionEntry, 0, len(runResult.SessionMessages))
+						for _, msg := range runResult.SessionMessages {
+							newEntries = append(newEntries, core.MessageToEntry(msg))
+						}
+						go func(entries []core.SessionEntry) {
+							if idxErr := s.searchIndex.Index(sessionID, entries); idxErr != nil {
+								log.Printf("event=search_index_error session_id=%s error=%q", sessionID, idxErr)
+							}
+						}(newEntries)
+					}
+				}
+				pool.MarkUsed(account.ID)
+				s.syncProfileState(providerID, account.ID)
+				resp := runResult.Response
+				if strings.TrimSpace(resp.SessionID) == "" {
+					resp.SessionID = sessionID
+				}
+				if strings.TrimSpace(resp.Provider) == "" {
+					resp.Provider = providerID
+				}
+				if strings.TrimSpace(resp.Model) == "" {
+					resp.Model = attemptModelID
+				}
+				if strings.TrimSpace(resp.AccountID) == "" {
+					resp.AccountID = account.ID
+				}
+				if resp.Status == "" {
+					resp.Status = core.ChatStatusCompleted
+				}
+				return resp, nil
+			}
+			reason := deriveFailureReason(runErr)
+			pool.MarkFailure(account.ID, reason)
+			logFailureEvent(providerID, account.ID, reason, pool)
+			s.syncProfileState(providerID, account.ID)
+			lastErr = runErr
+			if !core.IsRetriable(reason) {
+				break
+			}
+			if preferredProfile == account.ID {
+				preferredProfile = ""
+			}
+			continue
+		}
+
 		resp, err := prov.Generate(ctx, provider.GenerateRequest{
 			Model:    attemptModelID,
 			Messages: compressedMessages,
@@ -1421,18 +2074,23 @@ func (s *Service) attemptSingleProvider(
 		})
 		if err == nil {
 			assistant := core.Message{Role: core.RoleAssistant, Content: resp.Text, CreatedAt: time.Now()}
-			s.sessions.AppendMessage(sessionID, userMessage, assistant)
+			if hasUserMessage {
+				s.sessions.AppendMessage(sessionID, userMessage, assistant)
+			} else {
+				s.sessions.AppendMessage(sessionID, assistant)
+			}
 			// Async index for memory search.
 			if s.searchIndex != nil {
-				newEntries := []core.SessionEntry{
-					core.MessageToEntry(userMessage),
-					core.MessageToEntry(assistant),
+				newEntries := make([]core.SessionEntry, 0, 2)
+				if hasUserMessage {
+					newEntries = append(newEntries, core.MessageToEntry(userMessage))
 				}
-				go func() {
-					if idxErr := s.searchIndex.Index(sessionID, newEntries); idxErr != nil {
+				newEntries = append(newEntries, core.MessageToEntry(assistant))
+				go func(entries []core.SessionEntry) {
+					if idxErr := s.searchIndex.Index(sessionID, entries); idxErr != nil {
 						log.Printf("event=search_index_error session_id=%s error=%q", sessionID, idxErr)
 					}
-				}()
+				}(newEntries)
 			}
 			if providerID == "google-gemini-cli" {
 				if endpoint := strings.TrimSpace(resp.Endpoint); endpoint != "" {
@@ -1466,6 +2124,7 @@ func (s *Service) attemptSingleProvider(
 				Compression: compressionMeta,
 				AccountID:   account.ID,
 				Usage:       resp.Usage,
+				Status:      core.ChatStatusCompleted,
 			}, nil
 		}
 
@@ -1647,6 +2306,12 @@ func (s *Service) anthropicLoginManagerSafe() *auth.AnthropicLoginManager {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.anthropicLoginMgr
+}
+
+func (s *Service) openAICodexLoginManagerSafe() *auth.OpenAICodexLoginManager {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.openAICodexLogin
 }
 
 func (s *Service) authStoreSafe() *auth.Store {
@@ -1905,7 +2570,11 @@ func fallbackDefaultModel(providerID string) string {
 	case "google-ai-studio":
 		return "gemini-2.5-pro"
 	case "anthropic":
-		return "claude-sonnet-4-6"
+		return "claude-sonnet-4-5"
+	case "openai":
+		return "gpt-5.1-codex"
+	case "openai-codex":
+		return "gpt-5.3-codex"
 	default:
 		return "default"
 	}
@@ -1958,6 +2627,31 @@ func (s *Service) inferGeminiMissingProjectFromPool(
 		)
 	}
 	return nil
+}
+
+func (s *Service) inferOpenAIMissingAPIKey(providerID string, pool *core.AccountPool) error {
+	if providerID != "openai" {
+		return nil
+	}
+	if pool == nil {
+		return nil
+	}
+	primarySnapshots := pool.Snapshot()
+	if len(primarySnapshots) > 0 {
+		return nil
+	}
+	s.mu.RLock()
+	codexPool := s.pools["openai-codex"]
+	s.mu.RUnlock()
+	if codexPool == nil {
+		return nil
+	}
+	if len(codexPool.Snapshot()) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		`No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.3-codex (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.1-codex.`,
+	)
 }
 
 func resolveGoogleCloudProject() string {
@@ -2027,6 +2721,37 @@ func deriveAnthropicProfileID(accountType core.AccountType, displayName, secret 
 	return "anthropic:" + base + "_" + suffix
 }
 
+func deriveOpenAIProfileID(providerID string, accountType core.AccountType, displayName, secret string) string {
+	base := strings.TrimSpace(strings.ToLower(displayName))
+	if base == "" {
+		switch providerID {
+		case "openai-codex":
+			base = "oauth"
+		default:
+			base = "api_key"
+		}
+		if accountType == core.AccountOAuth && providerID == "openai" {
+			base = "oauth"
+		}
+	}
+	base = sanitizeProfileSlug(base)
+
+	suffix := strings.TrimSpace(secret)
+	if len(suffix) > 6 {
+		suffix = suffix[len(suffix)-6:]
+	}
+	suffix = sanitizeProfileSlug(strings.ToLower(suffix))
+	if suffix == "" {
+		suffix = fmt.Sprintf("%d", time.Now().Unix())
+	}
+
+	prefix := "openai"
+	if strings.TrimSpace(providerID) == "openai-codex" {
+		prefix = "openai-codex"
+	}
+	return prefix + ":" + base + "_" + suffix
+}
+
 func sanitizeProfileSlug(raw string) string {
 	replacer := strings.NewReplacer(
 		" ", "_",
@@ -2094,4 +2819,49 @@ func logFailureEvent(providerID, profileID string, reason core.FailureReason, po
 		)
 		return
 	}
+}
+
+type serviceToolBackend struct {
+	svc *Service
+}
+
+func (b serviceToolBackend) ListSessions() []core.SessionMetadata {
+	if b.svc == nil {
+		return nil
+	}
+	return b.svc.ListSessions()
+}
+
+func (b serviceToolBackend) SearchMemory(query string, limit int) ([]tooling.MemoryResult, error) {
+	if b.svc == nil {
+		return nil, fmt.Errorf("service not available")
+	}
+	results, err := b.svc.SearchMemory(query, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]tooling.MemoryResult, 0, len(results))
+	for _, item := range results {
+		out = append(out, tooling.MemoryResult{
+			SessionID: item.SessionID,
+			Snippet:   item.Content,
+			Score:     item.Score,
+			Role:      item.Role,
+		})
+	}
+	return out, nil
+}
+
+func (b serviceToolBackend) Providers() []string {
+	if b.svc == nil {
+		return nil
+	}
+	return b.svc.Providers()
+}
+
+func (b serviceToolBackend) Accounts(providerID string) []core.AccountSnapshot {
+	if b.svc == nil {
+		return nil
+	}
+	return b.svc.Accounts(providerID)
 }

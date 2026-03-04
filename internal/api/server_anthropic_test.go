@@ -53,7 +53,7 @@ func TestAnthropicCredentialCRUDAndChatFlow(t *testing.T) {
 	if chatResp.Code != http.StatusOK {
 		t.Fatalf("unexpected chat status: %d body=%s", chatResp.Code, chatResp.Body.String())
 	}
-	if !strings.Contains(chatResp.Body.String(), `"model":"claude-sonnet-4-6"`) {
+	if !strings.Contains(chatResp.Body.String(), `"model":"claude-sonnet-4-5"`) {
 		t.Fatalf("chat should resolve anthropic default model: %s", chatResp.Body.String())
 	}
 

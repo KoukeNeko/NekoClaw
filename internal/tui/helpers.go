@@ -176,8 +176,26 @@ func formatChatError(err error) string {
 		return msg
 	case apiErr.Code == "missing_project":
 		return "Gemini 缺少 Project ID，請重新 OAuth 或設定環境變數 GOOGLE_CLOUD_PROJECT。"
+	case apiErr.Code == "model_not_found":
+		return "模型不可用或不存在，請改選其他模型。"
+	case apiErr.Code == "auth", apiErr.Code == "auth_permanent":
+		detail := strings.TrimSpace(apiErr.Message)
+		if detail == "" {
+			return "驗證失敗，請重新登入或更換憑證。"
+		}
+		return "驗證失敗，請重新登入或更換憑證。(" + detail + ")"
+	case apiErr.Code == "billing":
+		return "帳號配額或帳單狀態異常，請確認帳戶設定。"
+	case apiErr.Code == "rate_limit":
+		return "請求過於頻繁，請稍後再試。"
+	case apiErr.Code == "format":
+		return "請求格式被 provider 拒絕，請檢查模型與輸入內容。"
 	case apiErr.StatusCode == http.StatusBadGateway:
-		return "API 連線失敗，請確認網路或 provider 狀態。"
+		msg := strings.TrimSpace(apiErr.Message)
+		if msg == "" {
+			return "API 連線失敗，請確認網路或 provider 狀態。"
+		}
+		return "Provider 回應異常：" + msg
 	case apiErr.StatusCode == http.StatusServiceUnavailable:
 		return "服務暫時不可用，請稍後再試。"
 	default:
@@ -254,6 +272,20 @@ func sortedAnthropicProfiles(in []client.AnthropicProfile) []client.AnthropicPro
 	return profiles
 }
 
+func sortedOpenAIProfiles(in []client.OpenAIProfile) []client.OpenAIProfile {
+	profiles := append([]client.OpenAIProfile(nil), in...)
+	sort.SliceStable(profiles, func(i, j int) bool {
+		if profiles[i].Preferred != profiles[j].Preferred {
+			return profiles[i].Preferred
+		}
+		if profiles[i].Provider != profiles[j].Provider {
+			return profiles[i].Provider < profiles[j].Provider
+		}
+		return profiles[i].ProfileID < profiles[j].ProfileID
+	})
+	return profiles
+}
+
 func formatProfileLine(profile client.GeminiAuthProfile) string {
 	state := "available"
 	if !profile.Available {
@@ -292,7 +324,11 @@ func modelOptionsForProvider(providerID, current string) []string {
 	case "google-ai-studio":
 		models = []string{"default", "gemini-2.5-pro", "gemini-2.5-flash"}
 	case "anthropic":
-		models = []string{"default", "claude-sonnet-4-6", "claude-opus-4-6", "claude-sonnet-4-5", "claude-haiku-3-5"}
+		models = []string{"default", "claude-sonnet-4-5", "claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-3-5"}
+	case "openai":
+		models = []string{"default", "gpt-5.1-codex", "gpt-5", "gpt-4.1"}
+	case "openai-codex":
+		models = []string{"default", "gpt-5.3-codex", "gpt-5.1-codex"}
 	case "mock":
 		models = []string{"default"}
 	}

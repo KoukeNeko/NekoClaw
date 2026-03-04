@@ -102,6 +102,14 @@ func (sv *SettingsView) Init() tea.Cmd {
 func (sv *SettingsView) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		activeInput := sv.sectionHasActiveInput()
+
+		// If current section is in an input flow, Esc should first cancel that flow.
+		// This keeps users inside Settings instead of immediately closing the overlay.
+		if activeInput && key.Matches(msg, settingsKeys.Back) {
+			return sv.delegateToSection(msg)
+		}
+
 		// Close overlay (don't call Hide here — let app.go handle toggle)
 		if key.Matches(msg, settingsKeys.Back) {
 			return func() tea.Msg { return ToggleSettingsMsg{} }
@@ -109,7 +117,7 @@ func (sv *SettingsView) Update(msg tea.Msg) tea.Cmd {
 
 		// Section switching: ←→ (primary) and Tab/Shift+Tab (secondary)
 		// Only intercept Left/Right when section has no active text input
-		if !sv.sectionHasActiveInput() {
+		if !activeInput {
 			if key.Matches(msg, settingsKeys.Right) || key.Matches(msg, settingsKeys.Tab) {
 				sv.activeSection = (sv.activeSection + 1) % SettingsSection(len(sectionNames))
 				sv.initialized = false
@@ -176,6 +184,18 @@ func (sv *SettingsView) Update(msg tea.Msg) tea.Cmd {
 		return sv.auth.HandleAnthropicBrowserJob(msg, sv.apiClient)
 	case AnthropicBrowserCancelMsg:
 		return sv.auth.HandleAnthropicBrowserCancel(msg)
+	case OpenAIAddMsg:
+		return sv.auth.HandleOpenAIAdd(msg)
+	case OpenAIProfilesMsg:
+		return sv.auth.HandleOpenAIProfiles(msg)
+	case OpenAIProfileActionMsg:
+		return sv.auth.HandleOpenAIAction(msg)
+	case OpenAICodexBrowserStartMsg:
+		return sv.auth.HandleOpenAICodexBrowserStart(msg, sv.apiClient)
+	case OpenAICodexBrowserJobMsg:
+		return sv.auth.HandleOpenAICodexBrowserJob(msg, sv.apiClient)
+	case OpenAICodexBrowserCancelMsg:
+		return sv.auth.HandleOpenAICodexBrowserCancel(msg)
 	case SessionsListMsg:
 		return sv.session.HandleSessionsList(msg)
 	case SessionDeleteMsg:
@@ -197,6 +217,8 @@ func (sv *SettingsView) enterSection() tea.Cmd {
 			listGeminiProfilesCmd(sv.apiClient),
 			listAIStudioProfilesCmd(sv.apiClient),
 			listAnthropicProfilesCmd(sv.apiClient),
+			listOpenAIProfilesCmd(sv.apiClient, "openai"),
+			listOpenAIProfilesCmd(sv.apiClient, "openai-codex"),
 		)
 	case SectionSessions:
 		return listSessionsCmd(sv.apiClient)

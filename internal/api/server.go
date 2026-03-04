@@ -14,6 +14,7 @@ import (
 	"github.com/doeshing/nekoclaw/internal/auth"
 	"github.com/doeshing/nekoclaw/internal/core"
 	"github.com/doeshing/nekoclaw/internal/provider"
+	"github.com/doeshing/nekoclaw/internal/tooling"
 )
 
 type Server struct {
@@ -52,6 +53,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/auth/anthropic/browser/manual/complete", s.handleAnthropicBrowserManualComplete)
 	mux.HandleFunc("/v1/auth/anthropic/browser/cancel", s.handleAnthropicBrowserCancel)
 	mux.HandleFunc("/v1/auth/anthropic/browser/jobs/", s.handleAnthropicBrowserJob)
+	mux.HandleFunc("/v1/auth/openai/add-key", s.handleOpenAIAddKey)
+	mux.HandleFunc("/v1/auth/openai-codex/add-token", s.handleOpenAICodexAddToken)
+	mux.HandleFunc("/v1/auth/openai-codex/browser/start", s.handleOpenAICodexBrowserStart)
+	mux.HandleFunc("/v1/auth/openai-codex/browser/manual/complete", s.handleOpenAICodexBrowserManualComplete)
+	mux.HandleFunc("/v1/auth/openai-codex/browser/cancel", s.handleOpenAICodexBrowserCancel)
+	mux.HandleFunc("/v1/auth/openai-codex/browser/jobs/", s.handleOpenAICodexBrowserJob)
+	mux.HandleFunc("/v1/auth/openai/profiles", s.handleOpenAIProfiles)
+	mux.HandleFunc("/v1/auth/openai-codex/profiles", s.handleOpenAICodexProfiles)
+	mux.HandleFunc("/v1/auth/openai/use", s.handleOpenAIUse)
+	mux.HandleFunc("/v1/auth/openai-codex/use", s.handleOpenAICodexUse)
+	mux.HandleFunc("/v1/auth/openai/delete", s.handleOpenAIDelete)
+	mux.HandleFunc("/v1/auth/openai-codex/delete", s.handleOpenAICodexDelete)
 	mux.HandleFunc("/v1/sessions", s.handleSessions)
 	mux.HandleFunc("/v1/sessions/delete", s.handleSessionDelete)
 	mux.HandleFunc("/v1/memory/search", s.handleMemorySearch)
@@ -152,20 +165,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := s.svc.HandleChat(r.Context(), req)
 	if err != nil {
-		if errors.Is(err, app.ErrGeminiMissingProject) {
-			respondErrorDetail(
-				w,
-				http.StatusBadRequest,
-				"missing_project",
-				err.Error(),
-			)
-			return
-		}
-		status := http.StatusBadGateway
-		if errors.Is(err, app.ErrNoAvailableAccount) {
-			status = http.StatusConflict
-		}
-		respondError(w, status, err.Error())
+		respondChatError(w, err)
 		return
 	}
 	respondJSON(w, http.StatusOK, resp)
@@ -635,6 +635,236 @@ func (s *Server) handleAnthropicBrowserCancel(w http.ResponseWriter, r *http.Req
 	})
 }
 
+func (s *Server) handleOpenAIAddKey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req app.OpenAIAddKeyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	result, err := s.svc.AddOpenAIKey(r.Context(), req)
+	if err != nil {
+		respondOpenAIError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleOpenAICodexAddToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req app.OpenAICodexAddTokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	result, err := s.svc.AddOpenAICodexToken(r.Context(), req)
+	if err != nil {
+		respondOpenAIError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleOpenAICodexBrowserStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req app.OpenAICodexBrowserStartRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	result, err := s.svc.StartOpenAICodexBrowserLogin(r.Context(), req)
+	if err != nil {
+		respondOpenAICodexBrowserError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleOpenAICodexBrowserJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	path := strings.TrimSpace(r.URL.Path)
+	prefix := "/v1/auth/openai-codex/browser/jobs/"
+	if !strings.HasPrefix(path, prefix) {
+		respondError(w, http.StatusNotFound, "not found")
+		return
+	}
+	jobID := strings.TrimSpace(strings.TrimPrefix(path, prefix))
+	if jobID == "" {
+		respondError(w, http.StatusBadRequest, "job_id is required")
+		return
+	}
+	result, err := s.svc.GetOpenAICodexBrowserLoginJob(r.Context(), jobID)
+	if err != nil {
+		respondOpenAICodexBrowserError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleOpenAICodexBrowserManualComplete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req app.OpenAICodexBrowserManualCompleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	result, err := s.svc.CompleteOpenAICodexBrowserLoginManual(r.Context(), req)
+	if err != nil {
+		respondOpenAICodexBrowserError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleOpenAICodexBrowserCancel(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	result, err := s.svc.CancelOpenAICodexBrowserLogin(r.Context(), req.JobID)
+	if err != nil {
+		respondOpenAICodexBrowserError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"ok":     true,
+		"job_id": result.JobID,
+		"status": result.Status,
+	})
+}
+
+func (s *Server) handleOpenAIProfiles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	profiles, err := s.svc.ListOpenAIProfiles("openai")
+	if err != nil {
+		respondOpenAIError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"profiles": profiles})
+}
+
+func (s *Server) handleOpenAICodexProfiles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	profiles, err := s.svc.ListOpenAIProfiles("openai-codex")
+	if err != nil {
+		respondOpenAIError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"profiles": profiles})
+}
+
+func (s *Server) handleOpenAIUse(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req useProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if err := s.svc.UseOpenAIProfile("openai", req.ProfileID); err != nil {
+		respondOpenAIError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"profile_id": strings.TrimSpace(req.ProfileID),
+		"provider":   "openai",
+	})
+}
+
+func (s *Server) handleOpenAICodexUse(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req useProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if err := s.svc.UseOpenAIProfile("openai-codex", req.ProfileID); err != nil {
+		respondOpenAIError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"profile_id": strings.TrimSpace(req.ProfileID),
+		"provider":   "openai-codex",
+	})
+}
+
+func (s *Server) handleOpenAIDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req useProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if err := s.svc.DeleteOpenAIProfile("openai", req.ProfileID); err != nil {
+		respondOpenAIError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"profile_id": strings.TrimSpace(req.ProfileID),
+		"provider":   "openai",
+	})
+}
+
+func (s *Server) handleOpenAICodexDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req useProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if err := s.svc.DeleteOpenAIProfile("openai-codex", req.ProfileID); err != nil {
+		respondOpenAIError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"profile_id": strings.TrimSpace(req.ProfileID),
+		"provider":   "openai-codex",
+	})
+}
+
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -751,6 +981,29 @@ func respondAnthropicError(w http.ResponseWriter, err error) {
 	}
 }
 
+func respondOpenAIError(w http.ResponseWriter, err error) {
+	if err == nil {
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	switch {
+	case errors.Is(err, app.ErrInvalidAPIKey):
+		respondErrorDetail(w, http.StatusBadRequest, "invalid_api_key", err.Error())
+	case errors.Is(err, app.ErrInvalidOAuthToken):
+		respondErrorDetail(w, http.StatusBadRequest, "invalid_oauth_token", err.Error())
+	case errors.Is(err, app.ErrProfileNotFound):
+		respondErrorDetail(w, http.StatusNotFound, "profile_not_found", err.Error())
+	case errors.Is(err, app.ErrProfileInUse):
+		respondErrorDetail(w, http.StatusConflict, "profile_in_use", err.Error())
+	case errors.Is(err, app.ErrProviderNotReady):
+		respondErrorDetail(w, http.StatusServiceUnavailable, "provider_not_ready", err.Error())
+	case errors.Is(err, app.ErrNoAvailableAccount):
+		respondErrorDetail(w, http.StatusConflict, "provider_not_ready", err.Error())
+	default:
+		respondError(w, http.StatusBadGateway, err.Error())
+	}
+}
+
 func respondAnthropicBrowserError(w http.ResponseWriter, err error) {
 	if err == nil {
 		respondError(w, http.StatusInternalServerError, "internal error")
@@ -778,6 +1031,98 @@ func respondAnthropicBrowserError(w http.ResponseWriter, err error) {
 	default:
 		respondAnthropicError(w, err)
 	}
+}
+
+func respondOpenAICodexBrowserError(w http.ResponseWriter, err error) {
+	if err == nil {
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	switch {
+	case errors.Is(err, auth.ErrOpenAICodexInvalidToken):
+		respondErrorDetail(w, http.StatusBadRequest, "invalid_oauth_token", err.Error())
+	case errors.Is(err, auth.ErrOpenAICodexCLINotFound):
+		respondErrorDetail(w, http.StatusServiceUnavailable, "cli_not_found", err.Error())
+	case errors.Is(err, auth.ErrOpenAICodexPTYUnavailable):
+		respondErrorDetail(w, http.StatusServiceUnavailable, "pty_unavailable", err.Error())
+	case errors.Is(err, auth.ErrOpenAICodexTokenNotDetected):
+		respondErrorDetail(w, http.StatusBadRequest, "token_not_detected", err.Error())
+	case errors.Is(err, auth.ErrOpenAICodexLoginManualRequired):
+		respondErrorDetail(w, http.StatusBadRequest, "manual_required", err.Error())
+	case errors.Is(err, auth.ErrOpenAICodexLoginJobNotFound):
+		respondErrorDetail(w, http.StatusNotFound, "job_not_found", err.Error())
+	case errors.Is(err, auth.ErrOpenAICodexLoginJobExpired):
+		respondErrorDetail(w, http.StatusGone, "job_expired", err.Error())
+	case errors.Is(err, auth.ErrOpenAICodexLoginJobCancelled):
+		respondErrorDetail(w, http.StatusConflict, "job_cancelled", err.Error())
+	case errors.Is(err, auth.ErrOpenAICodexLoginJobCompleted):
+		respondErrorDetail(w, http.StatusConflict, "job_completed", err.Error())
+	default:
+		respondOpenAIError(w, err)
+	}
+}
+
+func respondChatError(w http.ResponseWriter, err error) {
+	if err == nil {
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	switch {
+	case errors.Is(err, app.ErrGeminiMissingProject):
+		respondErrorDetail(w, http.StatusBadRequest, "missing_project", err.Error())
+		return
+	case errors.Is(err, app.ErrToolsNotSupported):
+		respondErrorDetail(w, http.StatusBadRequest, "tools_not_supported", err.Error())
+		return
+	case errors.Is(err, tooling.ErrRunNotFound):
+		respondErrorDetail(w, http.StatusConflict, "run_not_found", err.Error())
+		return
+	case errors.Is(err, tooling.ErrRunExpired):
+		respondErrorDetail(w, http.StatusConflict, "run_expired", err.Error())
+		return
+	case errors.Is(err, app.ErrNoAvailableAccount):
+		respondError(w, http.StatusConflict, err.Error())
+		return
+	}
+
+	var failureErr *provider.FailureError
+	if errors.As(err, &failureErr) {
+		code := strings.TrimSpace(string(failureErr.Reason))
+		if code == "" {
+			code = "unknown"
+		}
+		respondErrorDetail(w, mapChatFailureStatus(failureErr), code, failureErr.Message)
+		return
+	}
+
+	respondError(w, http.StatusBadGateway, err.Error())
+}
+
+func mapChatFailureStatus(failureErr *provider.FailureError) int {
+	if failureErr == nil {
+		return http.StatusBadGateway
+	}
+	switch failureErr.Reason {
+	case core.FailureFormat:
+		return http.StatusBadRequest
+	case core.FailureModelNotFound:
+		return http.StatusNotFound
+	case core.FailureRateLimit:
+		return http.StatusTooManyRequests
+	case core.FailureTimeout:
+		return http.StatusGatewayTimeout
+	case core.FailureBilling:
+		return http.StatusForbidden
+	case core.FailureAuth, core.FailureAuthPermanent:
+		if failureErr.Status == http.StatusForbidden {
+			return http.StatusForbidden
+		}
+		return http.StatusUnauthorized
+	}
+	if failureErr.Status >= http.StatusBadRequest && failureErr.Status <= http.StatusNetworkAuthenticationRequired {
+		return failureErr.Status
+	}
+	return http.StatusBadGateway
 }
 
 func (s *Server) resolveGeminiProviderAndAccount(providerID, accountID string) (*provider.GeminiInternalProvider, core.Account, error) {

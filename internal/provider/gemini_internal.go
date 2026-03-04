@@ -113,6 +113,18 @@ func (p *GeminiInternalProvider) Endpoints() []string {
 	return append([]string(nil), p.endpoints...)
 }
 
+func (p *GeminiInternalProvider) ToolCapabilities() ToolCapabilities {
+	return ToolCapabilities{SupportsTools: false}
+}
+
+func (p *GeminiInternalProvider) GenerateToolTurn(_ context.Context, _ ToolTurnRequest) (ToolTurnResponse, error) {
+	return ToolTurnResponse{}, &FailureError{
+		Reason:   core.FailureFormat,
+		Message:  "provider google-gemini-cli does not support tool calling",
+		Endpoint: strings.Join(p.endpoints, ","),
+	}
+}
+
 func (p *GeminiInternalProvider) DiscoverPreferredModel(
 	ctx context.Context,
 	account core.Account,

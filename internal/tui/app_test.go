@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/doeshing/nekoclaw/internal/client"
+	"github.com/doeshing/nekoclaw/internal/core"
 )
 
 func TestAppModelInit(t *testing.T) {
@@ -376,6 +377,52 @@ func TestHelperWrapToWidth(t *testing.T) {
 	}
 }
 
+func TestChatViewApprovalRequiredMode(t *testing.T) {
+	cv := NewChatView(client.New("http://127.0.0.1:1"), "anthropic", "default", "main", 80, 24)
+	cmd := cv.handleChatResult(ChatResultMsg{
+		Response: core.ChatResponse{
+			SessionID: "main",
+			Status:    core.ChatStatusApprovalRequired,
+			RunID:     "run-1",
+			PendingApprovals: []core.PendingToolApproval{
+				{
+					ApprovalID: "a1",
+					ToolName:   "file_write",
+					RiskLevel:  "mutating",
+				},
+			},
+		},
+	})
+	if cmd != nil {
+		t.Fatalf("expected nil cmd entering approval mode")
+	}
+	if !cv.approvalActive {
+		t.Fatalf("expected approval mode active")
+	}
+	if cv.approvalRunID != "run-1" {
+		t.Fatalf("unexpected run id: %s", cv.approvalRunID)
+	}
+}
+
+func TestChatViewApprovalDecisionSendsResume(t *testing.T) {
+	cv := NewChatView(client.New("http://127.0.0.1:1"), "anthropic", "default", "main", 80, 24)
+	cv.approvalActive = true
+	cv.approvalRunID = "run-1"
+	cv.approvalItems = []core.PendingToolApproval{
+		{ApprovalID: "a1", ToolName: "file_write"},
+	}
+	cmd := cv.handleApprovalDecision("allow")
+	if cmd == nil {
+		t.Fatalf("expected resume command")
+	}
+	if cv.approvalActive {
+		t.Fatalf("expected approval mode to end after final decision")
+	}
+	if !cv.pending {
+		t.Fatalf("expected chat view to enter pending state")
+	}
+}
+
 func TestHelperFormatTimeAgo(t *testing.T) {
 	if formatTimeAgo(time.Now()) != "剛剛" {
 		t.Fatal("expected '剛剛' for recent time")
@@ -462,6 +509,40 @@ func TestSettingsViewSectionNav(t *testing.T) {
 	}
 }
 
+func TestSettingsViewEscCancelsAuthFlowBeforeClosing(t *testing.T) {
+	sv := NewSettingsView(nil, "mock", "default", "main", 80, 24)
+	sv.visible = true
+	sv.activeSection = SectionAuth
+	sv.auth.flow = authFlowAddOpenAICodexToken
+
+	cmd := sv.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		t.Fatal("expected Esc to be handled by auth flow without closing settings")
+	}
+	if sv.auth.flow != authFlowNone {
+		t.Fatalf("expected auth flow to be cancelled, got %v", sv.auth.flow)
+	}
+	if !sv.visible {
+		t.Fatal("expected settings overlay to remain visible after cancelling auth flow")
+	}
+}
+
+func TestSettingsViewEscClosesWhenNoActiveInput(t *testing.T) {
+	sv := NewSettingsView(nil, "mock", "default", "main", 80, 24)
+	sv.visible = true
+	sv.activeSection = SectionAuth
+	sv.auth.flow = authFlowNone
+
+	cmd := sv.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("expected Esc to emit toggle command when no active input")
+	}
+	msg := cmd()
+	if _, ok := msg.(ToggleSettingsMsg); !ok {
+		t.Fatalf("expected ToggleSettingsMsg, got %T", msg)
+	}
+}
+
 func TestChatViewportRemoveLastMessage(t *testing.T) {
 	cv := NewChatViewport(80, 20)
 	cv.AppendMessage(ChatMessage{Role: "user", Content: "Hello", Timestamp: time.Now()})
@@ -519,6 +600,26 @@ func TestChatInputInputHeight(t *testing.T) {
 	// Minimum: textarea(3) + separator(1) + hint(1) = 5
 	if h < 5 {
 		t.Fatalf("expected input height >= 5, got %d", h)
+	}
+}
+
+func TestChatInputIgnoresTerminalProbeResponse(t *testing.T) {
+	ci := NewChatInput(80, 24)
+	_ = ci.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("]11;rgb:158e/193a/1e75")})
+	if got := ci.Value(); got != "" {
+		t.Fatalf("expected probe response to be ignored, got %q", got)
+	}
+	_ = ci.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[1;1R")})
+	if got := ci.Value(); got != "" {
+		t.Fatalf("expected cursor response to be ignored, got %q", got)
+	}
+}
+
+func TestChatInputKeepsNormalInput(t *testing.T) {
+	ci := NewChatInput(80, 24)
+	_ = ci.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hello")})
+	if got := ci.Value(); got != "hello" {
+		t.Fatalf("expected normal input kept, got %q", got)
 	}
 }
 

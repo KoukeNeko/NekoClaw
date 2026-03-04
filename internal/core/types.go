@@ -16,10 +16,11 @@ const (
 )
 
 type Message struct {
-	Role      MessageRole `json:"role"`
-	Content   string      `json:"content"`
-	ToolName  string      `json:"tool_name,omitempty"`
-	CreatedAt time.Time   `json:"created_at"`
+	Role       MessageRole `json:"role"`
+	Content    string      `json:"content"`
+	ToolName   string      `json:"tool_name,omitempty"`
+	ToolCallID string      `json:"tool_call_id,omitempty"`
+	CreatedAt  time.Time   `json:"created_at"`
 }
 
 type Surface string
@@ -48,23 +49,62 @@ type Account struct {
 
 type Metadata map[string]string
 
+type ToolApprovalDecision struct {
+	ApprovalID string `json:"approval_id"`
+	Decision   string `json:"decision"` // allow | deny
+}
+
+type ChatStatus string
+
+const (
+	ChatStatusCompleted        ChatStatus = "completed"
+	ChatStatusApprovalRequired ChatStatus = "approval_required"
+)
+
+type PendingToolApproval struct {
+	ApprovalID       string `json:"approval_id"`
+	ToolCallID       string `json:"tool_call_id,omitempty"`
+	ToolName         string `json:"tool_name"`
+	ArgumentsPreview string `json:"arguments_preview,omitempty"`
+	RiskLevel        string `json:"risk_level,omitempty"`
+	Reason           string `json:"reason,omitempty"`
+}
+
+type ToolEvent struct {
+	At            time.Time `json:"at"`
+	ToolCallID    string    `json:"tool_call_id,omitempty"`
+	ToolName      string    `json:"tool_name,omitempty"`
+	Phase         string    `json:"phase,omitempty"` // requested | approved | denied | executed | failed
+	Mutating      bool      `json:"mutating,omitempty"`
+	Decision      string    `json:"decision,omitempty"`
+	OutputPreview string    `json:"output_preview,omitempty"`
+	Error         string    `json:"error,omitempty"`
+}
+
 type ChatRequest struct {
-	SessionID string  `json:"session_id"`
-	Surface   Surface `json:"surface"`
-	Provider  string  `json:"provider"`
-	Model     string  `json:"model"`
-	Message   string  `json:"message"`
+	SessionID     string                 `json:"session_id"`
+	Surface       Surface                `json:"surface"`
+	Provider      string                 `json:"provider"`
+	Model         string                 `json:"model"`
+	Message       string                 `json:"message"`
+	EnableTools   bool                   `json:"enable_tools,omitempty"`
+	RunID         string                 `json:"run_id,omitempty"`
+	ToolApprovals []ToolApprovalDecision `json:"tool_approvals,omitempty"`
 }
 
 type ChatResponse struct {
-	SessionID   string          `json:"session_id"`
-	Provider    string          `json:"provider"`
-	Model       string          `json:"model"`
-	Reply       string          `json:"reply"`
-	Compressed  bool            `json:"compressed"`
-	Compression CompressionMeta `json:"compression"`
-	AccountID   string          `json:"account_id,omitempty"`
-	Usage       UsageInfo       `json:"usage"`
+	SessionID        string                `json:"session_id"`
+	Provider         string                `json:"provider"`
+	Model            string                `json:"model"`
+	Reply            string                `json:"reply"`
+	Compressed       bool                  `json:"compressed"`
+	Compression      CompressionMeta       `json:"compression"`
+	AccountID        string                `json:"account_id,omitempty"`
+	Usage            UsageInfo             `json:"usage"`
+	Status           ChatStatus            `json:"status,omitempty"`
+	RunID            string                `json:"run_id,omitempty"`
+	PendingApprovals []PendingToolApproval `json:"pending_approvals,omitempty"`
+	ToolEvents       []ToolEvent           `json:"tool_events,omitempty"`
 }
 
 // UsageInfo holds token usage from a single API call.
@@ -133,10 +173,10 @@ const sessionVersion = 3
 // SessionEntry is the universal JSONL line format. Fields are populated
 // based on the Type discriminator; unused fields are omitted via omitempty.
 type SessionEntry struct {
-	Type      EntryType   `json:"type"`
-	ID        string      `json:"id"`
-	ParentID  string      `json:"parentId,omitempty"`
-	Timestamp time.Time   `json:"timestamp"`
+	Type      EntryType `json:"type"`
+	ID        string    `json:"id"`
+	ParentID  string    `json:"parentId,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
 
 	// type=session
 	Version  int    `json:"version,omitempty"`
@@ -144,9 +184,10 @@ type SessionEntry struct {
 	Provider string `json:"provider,omitempty"`
 
 	// type=message
-	Role     MessageRole `json:"role,omitempty"`
-	Content  string      `json:"content,omitempty"`
-	ToolName string      `json:"tool_name,omitempty"`
+	Role       MessageRole `json:"role,omitempty"`
+	Content    string      `json:"content,omitempty"`
+	ToolName   string      `json:"tool_name,omitempty"`
+	ToolCallID string      `json:"tool_call_id,omitempty"`
 
 	// type=compaction
 	Summary          string `json:"summary,omitempty"`
@@ -212,10 +253,11 @@ func NewModelChangeEntry(from, to string) SessionEntry {
 // ToMessage converts a message-type entry back to a Message for the chat pipeline.
 func (e SessionEntry) ToMessage() Message {
 	return Message{
-		Role:      e.Role,
-		Content:   e.Content,
-		ToolName:  e.ToolName,
-		CreatedAt: e.Timestamp,
+		Role:       e.Role,
+		Content:    e.Content,
+		ToolName:   e.ToolName,
+		ToolCallID: e.ToolCallID,
+		CreatedAt:  e.Timestamp,
 	}
 }
 
@@ -226,11 +268,12 @@ func MessageToEntry(msg Message) SessionEntry {
 		ts = time.Now()
 	}
 	return SessionEntry{
-		Type:      EntryMessage,
-		ID:        NewEntryID(),
-		Timestamp: ts,
-		Role:      msg.Role,
-		Content:   msg.Content,
-		ToolName:  msg.ToolName,
+		Type:       EntryMessage,
+		ID:         NewEntryID(),
+		Timestamp:  ts,
+		Role:       msg.Role,
+		Content:    msg.Content,
+		ToolName:   msg.ToolName,
+		ToolCallID: msg.ToolCallID,
 	}
 }

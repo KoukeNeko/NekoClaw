@@ -208,6 +208,147 @@ func TestHydrateAnthropicProfilesLoadsCredentials(t *testing.T) {
 	}
 }
 
+func TestLoadOpenAIAccountsFromEnv_MergesAndDedupes(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-openai-a")
+	t.Setenv("OPENAI_API_KEYS", "sk-openai-b,sk-openai-c,sk-openai-a")
+	t.Setenv("OPENAI_API_KEY_TEAM", "sk-openai-d")
+
+	accounts := loadOpenAIAccountsFromEnv()
+	if len(accounts) != 4 {
+		t.Fatalf("unexpected accounts length: %d", len(accounts))
+	}
+	seenTokens := map[string]struct{}{}
+	for _, account := range accounts {
+		if account.Provider != "openai" {
+			t.Fatalf("unexpected provider: %s", account.Provider)
+		}
+		if account.Type != core.AccountAPIKey {
+			t.Fatalf("unexpected account type: %s", account.Type)
+		}
+		seenTokens[account.Token] = struct{}{}
+	}
+	keys := make([]string, 0, len(seenTokens))
+	for key := range seenTokens {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	want := []string{"sk-openai-a", "sk-openai-b", "sk-openai-c", "sk-openai-d"}
+	if strings.Join(keys, ",") != strings.Join(want, ",") {
+		t.Fatalf("unexpected key set: got=%v want=%v", keys, want)
+	}
+}
+
+func TestLoadOpenAICodexAccountsFromEnv_MergesAndDedupes(t *testing.T) {
+	t.Setenv("OPENAI_OAUTH_TOKEN", "oauth-a")
+	t.Setenv("OPENAI_CODEX_OAUTH_TOKEN", "oauth-b")
+	t.Setenv("OPENAI_OAUTH_TOKENS", "oauth-c,oauth-a")
+	t.Setenv("OPENAI_CODEX_OAUTH_TOKENS", "oauth-d,oauth-b")
+	t.Setenv("OPENAI_OAUTH_TOKEN_TEAM", "oauth-e")
+
+	accounts := loadOpenAICodexAccountsFromEnv()
+	if len(accounts) != 5 {
+		t.Fatalf("unexpected accounts length: %d", len(accounts))
+	}
+	seenTokens := map[string]struct{}{}
+	for _, account := range accounts {
+		if account.Provider != "openai-codex" {
+			t.Fatalf("unexpected provider: %s", account.Provider)
+		}
+		if account.Type != core.AccountOAuth {
+			t.Fatalf("unexpected account type: %s", account.Type)
+		}
+		seenTokens[account.Token] = struct{}{}
+	}
+	keys := make([]string, 0, len(seenTokens))
+	for key := range seenTokens {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	want := []string{"oauth-a", "oauth-b", "oauth-c", "oauth-d", "oauth-e"}
+	if strings.Join(keys, ",") != strings.Join(want, ",") {
+		t.Fatalf("unexpected key set: got=%v want=%v", keys, want)
+	}
+}
+
+func TestHydrateOpenAIProfilesLoadsCredentials(t *testing.T) {
+	svc := app.NewService(app.ServiceOptions{})
+	svc.RegisterPool(core.NewAccountPool("openai", nil, nil, core.DefaultCooldownConfig()))
+	store := mustNewAuthStore(t)
+
+	if err := store.SaveCredential("openai", "openai:default", auth.Credential{
+		AccessToken: "sk-openai-main",
+	}); err != nil {
+		t.Fatalf("save credential: %v", err)
+	}
+	if err := store.UpsertProfile(auth.ProfileMetadata{
+		ProfileID:   "openai:default",
+		Provider:    "openai",
+		Type:        string(core.AccountAPIKey),
+		DisplayName: "openai-main",
+		KeyHint:     "****-main",
+	}); err != nil {
+		t.Fatalf("upsert profile: %v", err)
+	}
+
+	if err := hydrateOpenAIProfiles(svc, store); err != nil {
+		t.Fatalf("hydrate openai profiles: %v", err)
+	}
+	pool := svc.Pool("openai")
+	if pool == nil {
+		t.Fatalf("missing openai pool")
+	}
+	account, ok := pool.GetAccount("openai:default")
+	if !ok {
+		t.Fatalf("expected openai profile loaded")
+	}
+	if account.Type != core.AccountAPIKey {
+		t.Fatalf("unexpected account type: %s", account.Type)
+	}
+	if account.Token != "sk-openai-main" {
+		t.Fatalf("unexpected token: %q", account.Token)
+	}
+}
+
+func TestHydrateOpenAICodexProfilesLoadsCredentials(t *testing.T) {
+	svc := app.NewService(app.ServiceOptions{})
+	svc.RegisterPool(core.NewAccountPool("openai-codex", nil, nil, core.DefaultCooldownConfig()))
+	store := mustNewAuthStore(t)
+
+	if err := store.SaveCredential("openai-codex", "openai-codex:user_example_com", auth.Credential{
+		AccessToken: "oauth-token-main",
+	}); err != nil {
+		t.Fatalf("save credential: %v", err)
+	}
+	if err := store.UpsertProfile(auth.ProfileMetadata{
+		ProfileID:   "openai-codex:user_example_com",
+		Provider:    "openai-codex",
+		Type:        string(core.AccountOAuth),
+		DisplayName: "codex-main",
+		KeyHint:     "****-main",
+		Email:       "user@example.com",
+	}); err != nil {
+		t.Fatalf("upsert profile: %v", err)
+	}
+
+	if err := hydrateOpenAICodexProfiles(svc, store); err != nil {
+		t.Fatalf("hydrate openai-codex profiles: %v", err)
+	}
+	pool := svc.Pool("openai-codex")
+	if pool == nil {
+		t.Fatalf("missing openai-codex pool")
+	}
+	account, ok := pool.GetAccount("openai-codex:user_example_com")
+	if !ok {
+		t.Fatalf("expected openai-codex profile loaded")
+	}
+	if account.Type != core.AccountOAuth {
+		t.Fatalf("unexpected account type: %s", account.Type)
+	}
+	if account.Token != "oauth-token-main" {
+		t.Fatalf("unexpected token: %q", account.Token)
+	}
+}
+
 func TestResolveDefaultLogFilePath_AuthDirParentRoot(t *testing.T) {
 	got := resolveDefaultLogFilePath("/tmp/custom/auth")
 	want := filepath.Join("/tmp/custom", "logs", "nekoclaw.log")

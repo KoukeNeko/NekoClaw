@@ -122,6 +122,38 @@ Env credential loading (optional):
 - `ANTHROPIC_API_KEY_*`
 - `ANTHROPIC_BASE_URL` (default `https://api.anthropic.com`)
 
+## OpenAI / OpenAI Codex Providers
+
+The project now includes:
+
+- `openai` (API key path)
+- `openai-codex` (OAuth token path)
+
+OpenClaw-aligned runtime behavior:
+
+- separate providers and default models:
+  - `openai` -> `gpt-5.1-codex`
+  - `openai-codex` -> `gpt-5.3-codex`
+- `openai` and `openai-codex` credentials are not mixed.
+- if `provider=openai` has no API key but `openai-codex` OAuth exists, chat returns a clear guardrail error (use `openai-codex/...` or set `OPENAI_API_KEY`).
+
+Env credential loading (optional):
+
+- OpenAI API key:
+  - `OPENAI_API_KEY`
+  - `OPENAI_API_KEYS` (CSV)
+  - `OPENAI_API_KEY_*`
+- OpenAI Codex OAuth token:
+  - `OPENAI_OAUTH_TOKEN`
+  - `OPENAI_OAUTH_TOKENS` (CSV)
+  - `OPENAI_OAUTH_TOKEN_*`
+  - `OPENAI_CODEX_OAUTH_TOKEN`
+  - `OPENAI_CODEX_OAUTH_TOKENS` (CSV)
+  - `OPENAI_CODEX_OAUTH_TOKEN_*`
+- Base URL:
+  - `OPENAI_BASE_URL` (default `https://api.openai.com/v1`)
+  - `OPENAI_CODEX_BASE_URL` (optional override for `openai-codex`)
+
 ## Accounts File (optional)
 
 Create `accounts.json` in repo root:
@@ -138,6 +170,18 @@ Create `accounts.json` in repo root:
         "project_id": "my-project",
         "endpoint": "https://cloudcode-pa.googleapis.com"
       }
+    },
+    {
+      "id": "openai-main",
+      "provider": "openai",
+      "type": "api_key",
+      "token": "<openai-api-key>"
+    },
+    {
+      "id": "openai-codex-main",
+      "provider": "openai-codex",
+      "type": "oauth",
+      "token": "<openai-codex-oauth-token>"
     }
   ]
 }

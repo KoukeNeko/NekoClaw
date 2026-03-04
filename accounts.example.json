@@ -21,6 +21,18 @@
       "provider": "anthropic",
       "type": "token",
       "token": "<claude-setup-token>"
+    },
+    {
+      "id": "openai-main",
+      "provider": "openai",
+      "type": "api_key",
+      "token": "<openai-api-key>"
+    },
+    {
+      "id": "openai-codex-main",
+      "provider": "openai-codex",
+      "type": "oauth",
+      "token": "<openai-codex-oauth-token>"
     }
   ]
 }

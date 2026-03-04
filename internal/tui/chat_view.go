@@ -33,6 +33,13 @@ type ChatView struct {
 	activeProfile string
 	defaultModel  string
 
+	// Tool-approval flow (blocking)
+	approvalActive    bool
+	approvalRunID     string
+	approvalItems     []core.PendingToolApproval
+	approvalCursor    int
+	approvalDecisions []core.ToolApprovalDecision
+
 	width, height int
 }
 
@@ -108,13 +115,30 @@ func (cv *ChatView) Update(msg tea.Msg) tea.Cmd {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// Sidebar toggle (not during pending)
+		if cv.approvalActive {
+			if key.Matches(msg, chatKeys.Submit) {
+				return cv.handleApprovalDecision("allow")
+			}
+			if key.Matches(msg, chatKeys.OpenSettings) {
+				return cv.handleApprovalDecision("deny")
+			}
+			// Keep scroll behavior during approval mode.
+			if key.Matches(msg, chatKeys.PageUp) || key.Matches(msg, chatKeys.PageDown) ||
+				key.Matches(msg, chatKeys.GoToTop) || key.Matches(msg, chatKeys.GoToBottom) ||
+				key.Matches(msg, chatKeys.ScrollUp) || key.Matches(msg, chatKeys.ScrollDown) {
+				_, cmd := cv.viewport.Update(msg)
+				return cmd
+			}
+			return nil
+		}
+
+		// Sidebar toggle (not during pending/approval flow)
 		if key.Matches(msg, chatKeys.ToggleSidebar) && !cv.pending {
 			return func() tea.Msg { return SidebarToggleFocusMsg{} }
 		}
 
-		// Settings shortcut (not during pending)
-		if key.Matches(msg, chatKeys.OpenSettings) && !cv.pending {
+		// Settings shortcut (always available)
+		if key.Matches(msg, chatKeys.OpenSettings) {
 			cv.input.Blur()
 			return func() tea.Msg { return ToggleSettingsMsg{} }
 		}
@@ -132,7 +156,7 @@ func (cv *ChatView) Update(msg tea.Msg) tea.Cmd {
 		cmds = append(cmds, cmd)
 
 	case SubmitMsg:
-		if cv.pending {
+		if cv.pending || cv.approvalActive {
 			return nil // block submit during pending
 		}
 		return cv.handleSubmit(msg.Text)
@@ -239,11 +263,12 @@ func (cv *ChatView) handleSubmit(text string) tea.Cmd {
 	})
 
 	req := core.ChatRequest{
-		SessionID: cv.sessionID,
-		Surface:   core.SurfaceTUI,
-		Provider:  cv.provider,
-		Model:     cv.modelID,
-		Message:   text,
+		SessionID:   cv.sessionID,
+		Surface:     core.SurfaceTUI,
+		Provider:    cv.provider,
+		Model:       cv.modelID,
+		Message:     text,
+		EnableTools: providerToolEnabled(cv.provider),
 	}
 	return tea.Batch(
 		sendChatCmd(cv.client, req),
@@ -253,6 +278,10 @@ func (cv *ChatView) handleSubmit(text string) tea.Cmd {
 
 func (cv *ChatView) handleChatResult(msg ChatResultMsg) tea.Cmd {
 	cv.pending = false
+
+	if msg.Response.SessionID != cv.sessionID {
+		return nil
+	}
 
 	// Remove the thinking pseudo-message
 	if cv.thinkingActive {
@@ -267,6 +296,30 @@ func (cv *ChatView) handleChatResult(msg ChatResultMsg) tea.Cmd {
 			Timestamp: time.Now(),
 		})
 		return cv.input.Focus()
+	}
+
+	if msg.Response.Status == core.ChatStatusApprovalRequired {
+		cv.approvalActive = true
+		cv.approvalRunID = strings.TrimSpace(msg.Response.RunID)
+		cv.approvalItems = append([]core.PendingToolApproval(nil), msg.Response.PendingApprovals...)
+		cv.approvalCursor = 0
+		cv.approvalDecisions = nil
+		if len(cv.approvalItems) == 0 {
+			cv.approvalActive = false
+			cv.viewport.AppendMessage(ChatMessage{
+				Role:      "error",
+				Content:   "Tool approval requested but no pending approvals were provided.",
+				Timestamp: time.Now(),
+			})
+			return cv.input.Focus()
+		}
+		cv.input.Blur()
+		cv.viewport.AppendMessage(ChatMessage{
+			Role:      "system",
+			Content:   cv.renderApprovalPrompt(),
+			Timestamp: time.Now(),
+		})
+		return nil
 	}
 
 	// Track profile and model info
@@ -288,6 +341,83 @@ func (cv *ChatView) handleChatResult(msg ChatResultMsg) tea.Cmd {
 		return StatusUpdateMsg{MessageCount: cv.viewport.MessageCount()}
 	}
 	return tea.Batch(cv.input.Focus(), statusCmd)
+}
+
+func (cv *ChatView) handleApprovalDecision(decision string) tea.Cmd {
+	if !cv.approvalActive || cv.approvalCursor >= len(cv.approvalItems) {
+		return nil
+	}
+	current := cv.approvalItems[cv.approvalCursor]
+	decision = strings.ToLower(strings.TrimSpace(decision))
+	if decision != "allow" && decision != "deny" {
+		decision = "deny"
+	}
+	cv.approvalDecisions = append(cv.approvalDecisions, core.ToolApprovalDecision{
+		ApprovalID: current.ApprovalID,
+		Decision:   decision,
+	})
+	cv.approvalCursor++
+	if cv.approvalCursor < len(cv.approvalItems) {
+		cv.viewport.AppendMessage(ChatMessage{
+			Role:      "system",
+			Content:   cv.renderApprovalPrompt(),
+			Timestamp: time.Now(),
+		})
+		return nil
+	}
+
+	req := core.ChatRequest{
+		SessionID:     cv.sessionID,
+		Surface:       core.SurfaceTUI,
+		Provider:      cv.provider,
+		Model:         cv.modelID,
+		EnableTools:   providerToolEnabled(cv.provider),
+		RunID:         cv.approvalRunID,
+		ToolApprovals: append([]core.ToolApprovalDecision(nil), cv.approvalDecisions...),
+	}
+	cv.approvalActive = false
+	cv.approvalRunID = ""
+	cv.approvalItems = nil
+	cv.approvalCursor = 0
+	cv.approvalDecisions = nil
+
+	cv.pending = true
+	cv.thinkingActive = true
+	cv.viewport.AppendMessage(ChatMessage{
+		Role:      "thinking",
+		Content:   cv.spinner.View() + " applying approvals...",
+		Timestamp: time.Now(),
+	})
+	return tea.Batch(sendChatCmd(cv.client, req), cv.spinner.Tick)
+}
+
+func (cv *ChatView) renderApprovalPrompt() string {
+	if cv.approvalCursor >= len(cv.approvalItems) {
+		return "No pending approval."
+	}
+	item := cv.approvalItems[cv.approvalCursor]
+	total := len(cv.approvalItems)
+	index := cv.approvalCursor + 1
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Tool approval [%d/%d]\n", index, total))
+	b.WriteString(fmt.Sprintf("- Tool: %s\n", strings.TrimSpace(item.ToolName)))
+	if preview := strings.TrimSpace(item.ArgumentsPreview); preview != "" {
+		b.WriteString(fmt.Sprintf("- Args: %s\n", preview))
+	}
+	if risk := strings.TrimSpace(item.RiskLevel); risk != "" {
+		b.WriteString(fmt.Sprintf("- Risk: %s\n", risk))
+	}
+	b.WriteString("Enter = allow · Esc = deny")
+	return b.String()
+}
+
+func providerToolEnabled(providerID string) bool {
+	switch strings.TrimSpace(providerID) {
+	case "anthropic", "openai", "openai-codex":
+		return true
+	default:
+		return false
+	}
 }
 
 func (cv *ChatView) handleSlashCommand(text string) tea.Cmd {

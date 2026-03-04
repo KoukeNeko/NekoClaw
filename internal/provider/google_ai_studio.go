@@ -98,6 +98,18 @@ func (p *GoogleAIStudioProvider) BaseURL() string {
 	return p.baseURL
 }
 
+func (p *GoogleAIStudioProvider) ToolCapabilities() ToolCapabilities {
+	return ToolCapabilities{SupportsTools: false}
+}
+
+func (p *GoogleAIStudioProvider) GenerateToolTurn(_ context.Context, _ ToolTurnRequest) (ToolTurnResponse, error) {
+	return ToolTurnResponse{}, &FailureError{
+		Reason:   core.FailureFormat,
+		Message:  "provider google-ai-studio does not support tool calling",
+		Endpoint: p.baseURL,
+	}
+}
+
 func (p *GoogleAIStudioProvider) Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
 	apiKey := strings.TrimSpace(req.Account.Token)
 	if apiKey == "" {

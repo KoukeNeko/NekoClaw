@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -129,5 +130,54 @@ func TestValidateAnthropicSetupToken(t *testing.T) {
 	good := AnthropicSetupTokenPrefix + strings.Repeat("a", AnthropicSetupTokenMinLength)
 	if err := ValidateAnthropicSetupToken(good); err != nil {
 		t.Fatalf("expected valid setup token: %v", err)
+	}
+}
+
+func TestAnthropicGenerateToolTurnParsesToolUse(t *testing.T) {
+	setupToken := AnthropicSetupTokenPrefix + strings.Repeat("a", AnthropicSetupTokenMinLength)
+	var gotTools int
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			var payload map[string]any
+			if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode request body: %v", err)
+			}
+			if tools, ok := payload["tools"].([]any); ok {
+				gotTools = len(tools)
+			}
+			return newHTTPResponse(http.StatusOK, `{
+				"content":[
+					{"type":"tool_use","id":"toolu_123","name":"providers_list","input":{}}
+				],
+				"stop_reason":"tool_use",
+				"usage":{"input_tokens":10,"output_tokens":4}
+			}`), nil
+		}),
+	}
+	p := NewAnthropicProvider(AnthropicOptions{HTTPClient: client})
+	resp, err := p.GenerateToolTurn(context.Background(), ToolTurnRequest{
+		Model: "claude-sonnet-4-5",
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: "list providers"},
+		},
+		Account: core.Account{Provider: "anthropic", Type: core.AccountToken, Token: setupToken},
+		Tools: []ToolDefinition{
+			{Name: "providers_list", Description: "list providers", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateToolTurn failed: %v", err)
+	}
+	if gotTools != 1 {
+		t.Fatalf("expected 1 tool in request, got %d", gotTools)
+	}
+	if resp.StopReason != "tool_use" {
+		t.Fatalf("unexpected stop reason: %q", resp.StopReason)
+	}
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("expected one tool call, got %d", len(resp.ToolCalls))
+	}
+	if resp.ToolCalls[0].ID != "toolu_123" || resp.ToolCalls[0].Name != "providers_list" {
+		t.Fatalf("unexpected tool call: %+v", resp.ToolCalls[0])
 	}
 }

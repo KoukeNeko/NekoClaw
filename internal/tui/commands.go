@@ -19,6 +19,9 @@ func sendChatCmd(apiClient *client.APIClient, req core.ChatRequest) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		resp, err := apiClient.Chat(ctx, req)
+		if err != nil && resp.SessionID == "" {
+			resp.SessionID = req.SessionID
+		}
 		return ChatResultMsg{Response: resp, Err: err}
 	}
 }
@@ -191,7 +194,8 @@ func startAnthropicBrowserLoginCmd(apiClient *client.APIClient, mode string) tea
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		resp, err := apiClient.StartAnthropicBrowserLogin(ctx, client.AnthropicBrowserStartRequest{
-			Mode: strings.TrimSpace(mode),
+			Mode:         strings.TrimSpace(mode),
+			SetPreferred: true,
 		})
 		return AnthropicBrowserStartMsg{Response: resp, Err: err}
 	}
@@ -211,8 +215,9 @@ func completeAnthropicBrowserManualCmd(apiClient *client.APIClient, jobID, setup
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		resp, err := apiClient.CompleteAnthropicBrowserManual(ctx, client.AnthropicBrowserManualCompleteRequest{
-			JobID:      strings.TrimSpace(jobID),
-			SetupToken: strings.TrimSpace(setupToken),
+			JobID:        strings.TrimSpace(jobID),
+			SetupToken:   strings.TrimSpace(setupToken),
+			SetPreferred: true,
 		})
 		return AnthropicAddMsg{Response: resp, Err: err}
 	}
@@ -224,6 +229,103 @@ func cancelAnthropicBrowserLoginCmd(apiClient *client.APIClient, jobID string) t
 		defer cancel()
 		err := apiClient.CancelAnthropicBrowserLogin(ctx, strings.TrimSpace(jobID))
 		return AnthropicBrowserCancelMsg{JobID: strings.TrimSpace(jobID), Err: err}
+	}
+}
+
+func addOpenAIKeyCmd(apiClient *client.APIClient, apiKey, displayName string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		resp, err := apiClient.AddOpenAIKey(ctx, client.OpenAIAddKeyRequest{
+			APIKey:      strings.TrimSpace(apiKey),
+			DisplayName: strings.TrimSpace(displayName),
+		})
+		return OpenAIAddMsg{Response: resp, Err: err}
+	}
+}
+
+func addOpenAICodexTokenCmd(apiClient *client.APIClient, token, displayName string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		resp, err := apiClient.AddOpenAICodexToken(ctx, client.OpenAICodexAddTokenRequest{
+			Token:       strings.TrimSpace(token),
+			DisplayName: strings.TrimSpace(displayName),
+		})
+		return OpenAIAddMsg{Response: resp, Err: err}
+	}
+}
+
+func startOpenAICodexBrowserLoginCmd(apiClient *client.APIClient, mode string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		resp, err := apiClient.StartOpenAICodexBrowserLogin(ctx, client.OpenAICodexBrowserStartRequest{
+			Mode: strings.TrimSpace(mode),
+		})
+		return OpenAICodexBrowserStartMsg{Response: resp, Err: err}
+	}
+}
+
+func pollOpenAICodexBrowserLoginJobCmd(apiClient *client.APIClient, jobID string, delay time.Duration) tea.Cmd {
+	return tea.Tick(delay, func(_ time.Time) tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		resp, err := apiClient.GetOpenAICodexBrowserLoginJob(ctx, strings.TrimSpace(jobID))
+		return OpenAICodexBrowserJobMsg{Response: resp, Err: err}
+	})
+}
+
+func completeOpenAICodexBrowserManualCmd(apiClient *client.APIClient, jobID, token string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		resp, err := apiClient.CompleteOpenAICodexBrowserManual(ctx, client.OpenAICodexBrowserManualCompleteRequest{
+			JobID: strings.TrimSpace(jobID),
+			Token: strings.TrimSpace(token),
+		})
+		return OpenAIAddMsg{Response: resp, Err: err}
+	}
+}
+
+func cancelOpenAICodexBrowserLoginCmd(apiClient *client.APIClient, jobID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		err := apiClient.CancelOpenAICodexBrowserLogin(ctx, strings.TrimSpace(jobID))
+		return OpenAICodexBrowserCancelMsg{JobID: strings.TrimSpace(jobID), Err: err}
+	}
+}
+
+func listOpenAIProfilesCmd(apiClient *client.APIClient, providerID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		providerID = strings.TrimSpace(providerID)
+		profiles, err := apiClient.ListOpenAIProfiles(ctx, providerID)
+		return OpenAIProfilesMsg{Provider: providerID, Profiles: profiles, Err: err}
+	}
+}
+
+func useOpenAIProfileCmd(apiClient *client.APIClient, providerID, profileID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		providerID = strings.TrimSpace(providerID)
+		profileID = strings.TrimSpace(profileID)
+		err := apiClient.UseOpenAIProfile(ctx, providerID, profileID)
+		return OpenAIProfileActionMsg{Provider: providerID, ProfileID: profileID, Err: err}
+	}
+}
+
+func deleteOpenAIProfileCmd(apiClient *client.APIClient, providerID, profileID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		providerID = strings.TrimSpace(providerID)
+		profileID = strings.TrimSpace(profileID)
+		err := apiClient.DeleteOpenAIProfile(ctx, providerID, profileID)
+		return OpenAIProfileActionMsg{Provider: providerID, ProfileID: profileID, Deleted: true, Err: err}
 	}
 }
 

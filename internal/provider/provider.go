@@ -25,10 +25,52 @@ type GenerateResponse struct {
 	Usage    core.UsageInfo
 }
 
+type ToolDefinition struct {
+	Name        string
+	Description string
+	InputSchema json.RawMessage
+}
+
+type ToolCall struct {
+	ID        string
+	Name      string
+	Arguments json.RawMessage
+}
+
+type ToolTurnRequest struct {
+	Model    string
+	Messages []core.Message
+	Account  core.Account
+	Tools    []ToolDefinition
+}
+
+type ToolTurnResponse struct {
+	Text       string
+	Endpoint   string
+	Raw        json.RawMessage
+	Usage      core.UsageInfo
+	StopReason string
+	ToolCalls  []ToolCall
+}
+
+type ToolCapabilities struct {
+	SupportsTools         bool
+	SupportsParallelCalls bool
+	MaxToolCalls          int
+}
+
 type Provider interface {
 	ID() string
 	ContextWindow(model string) int
 	Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error)
+}
+
+// ToolCallingProvider optionally supports native provider-side tool calling.
+// Providers that do not support tools should omit this interface.
+type ToolCallingProvider interface {
+	Provider
+	ToolCapabilities() ToolCapabilities
+	GenerateToolTurn(ctx context.Context, req ToolTurnRequest) (ToolTurnResponse, error)
 }
 
 // ModelDiscoveryProvider optionally resolves a provider-specific default model

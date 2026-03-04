@@ -190,6 +190,90 @@ type AnthropicBrowserManualCompleteRequest struct {
 	SetPreferred bool   `json:"set_preferred,omitempty"`
 }
 
+type OpenAIAddKeyRequest struct {
+	APIKey       string `json:"api_key"`
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+}
+
+type OpenAICodexAddTokenRequest struct {
+	Token        string `json:"token"`
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+}
+
+type OpenAICodexBrowserStartRequest struct {
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+	Mode         string `json:"mode,omitempty"`
+}
+
+type OpenAICodexBrowserStartResponse struct {
+	JobID      string    `json:"job_id"`
+	Provider   string    `json:"provider"`
+	Mode       string    `json:"mode"`
+	Status     string    `json:"status"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	Message    string    `json:"message,omitempty"`
+	ManualHint string    `json:"manual_hint,omitempty"`
+}
+
+type OpenAICodexBrowserJobEvent struct {
+	At      time.Time `json:"at"`
+	Message string    `json:"message"`
+}
+
+type OpenAICodexBrowserJobResponse struct {
+	JobID        string                       `json:"job_id"`
+	Provider     string                       `json:"provider"`
+	Mode         string                       `json:"mode"`
+	Status       string                       `json:"status"`
+	Events       []OpenAICodexBrowserJobEvent `json:"events,omitempty"`
+	ProfileID    string                       `json:"profile_id,omitempty"`
+	KeyHint      string                       `json:"key_hint,omitempty"`
+	ExpiresAt    time.Time                    `json:"expires_at"`
+	Message      string                       `json:"message,omitempty"`
+	ManualHint   string                       `json:"manual_hint,omitempty"`
+	ErrorCode    string                       `json:"error_code,omitempty"`
+	ErrorMessage string                       `json:"error_message,omitempty"`
+}
+
+type OpenAICodexBrowserManualCompleteRequest struct {
+	JobID        string `json:"job_id"`
+	Token        string `json:"token"`
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+}
+
+type OpenAIAddCredentialResponse struct {
+	ProfileID   string `json:"profile_id"`
+	Provider    string `json:"provider"`
+	Type        string `json:"type"`
+	DisplayName string `json:"display_name"`
+	KeyHint     string `json:"key_hint"`
+	Preferred   bool   `json:"preferred"`
+	Available   bool   `json:"available"`
+}
+
+type OpenAIProfile struct {
+	ProfileID      string    `json:"profile_id"`
+	Provider       string    `json:"provider"`
+	Type           string    `json:"type"`
+	DisplayName    string    `json:"display_name,omitempty"`
+	KeyHint        string    `json:"key_hint,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	Available      bool      `json:"available"`
+	CooldownUntil  time.Time `json:"cooldown_until,omitempty"`
+	DisabledUntil  time.Time `json:"disabled_until,omitempty"`
+	DisabledReason string    `json:"disabled_reason,omitempty"`
+	Preferred      bool      `json:"preferred"`
+}
+
 // APIError preserves the structured error information returned by the NekoClaw API server.
 // Callers can use errors.As to inspect status code, error code, and message separately.
 type APIError struct {
@@ -595,6 +679,210 @@ func (c *APIClient) CancelAnthropicBrowserLogin(ctx context.Context, jobID strin
 		ctx,
 		http.MethodPost,
 		c.baseURL+"/v1/auth/anthropic/browser/cancel",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out map[string]any
+	return c.doAndDecodeJSON(httpReq, &out)
+}
+
+func (c *APIClient) AddOpenAIKey(ctx context.Context, req OpenAIAddKeyRequest) (OpenAIAddCredentialResponse, error) {
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return OpenAIAddCredentialResponse{}, fmt.Errorf("marshal openai add key request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/auth/openai/add-key",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return OpenAIAddCredentialResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out OpenAIAddCredentialResponse
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return OpenAIAddCredentialResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *APIClient) AddOpenAICodexToken(ctx context.Context, req OpenAICodexAddTokenRequest) (OpenAIAddCredentialResponse, error) {
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return OpenAIAddCredentialResponse{}, fmt.Errorf("marshal openai-codex add token request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/auth/openai-codex/add-token",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return OpenAIAddCredentialResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out OpenAIAddCredentialResponse
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return OpenAIAddCredentialResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *APIClient) StartOpenAICodexBrowserLogin(
+	ctx context.Context,
+	req OpenAICodexBrowserStartRequest,
+) (OpenAICodexBrowserStartResponse, error) {
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return OpenAICodexBrowserStartResponse{}, fmt.Errorf("marshal openai-codex browser start request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/auth/openai-codex/browser/start",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return OpenAICodexBrowserStartResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out OpenAICodexBrowserStartResponse
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return OpenAICodexBrowserStartResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *APIClient) GetOpenAICodexBrowserLoginJob(
+	ctx context.Context,
+	jobID string,
+) (OpenAICodexBrowserJobResponse, error) {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return OpenAICodexBrowserJobResponse{}, fmt.Errorf("job_id is required")
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		c.baseURL+"/v1/auth/openai-codex/browser/jobs/"+url.PathEscape(jobID),
+		nil,
+	)
+	if err != nil {
+		return OpenAICodexBrowserJobResponse{}, err
+	}
+	var out OpenAICodexBrowserJobResponse
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return OpenAICodexBrowserJobResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *APIClient) CompleteOpenAICodexBrowserManual(
+	ctx context.Context,
+	req OpenAICodexBrowserManualCompleteRequest,
+) (OpenAIAddCredentialResponse, error) {
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return OpenAIAddCredentialResponse{}, fmt.Errorf("marshal openai-codex browser manual request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/auth/openai-codex/browser/manual/complete",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return OpenAIAddCredentialResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out OpenAIAddCredentialResponse
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return OpenAIAddCredentialResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *APIClient) CancelOpenAICodexBrowserLogin(ctx context.Context, jobID string) error {
+	payload, err := json.Marshal(map[string]string{"job_id": strings.TrimSpace(jobID)})
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/v1/auth/openai-codex/browser/cancel",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out map[string]any
+	return c.doAndDecodeJSON(httpReq, &out)
+}
+
+func (c *APIClient) ListOpenAIProfiles(ctx context.Context, providerID string) ([]OpenAIProfile, error) {
+	providerID = strings.TrimSpace(providerID)
+	endpoint := "/v1/auth/openai/profiles"
+	if providerID == "openai-codex" {
+		endpoint = "/v1/auth/openai-codex/profiles"
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Profiles []OpenAIProfile `json:"profiles"`
+	}
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return nil, err
+	}
+	return out.Profiles, nil
+}
+
+func (c *APIClient) UseOpenAIProfile(ctx context.Context, providerID, profileID string) error {
+	providerID = strings.TrimSpace(providerID)
+	endpoint := "/v1/auth/openai/use"
+	if providerID == "openai-codex" {
+		endpoint = "/v1/auth/openai-codex/use"
+	}
+	payload, err := json.Marshal(map[string]string{"profile_id": strings.TrimSpace(profileID)})
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+endpoint,
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out map[string]any
+	return c.doAndDecodeJSON(httpReq, &out)
+}
+
+func (c *APIClient) DeleteOpenAIProfile(ctx context.Context, providerID, profileID string) error {
+	providerID = strings.TrimSpace(providerID)
+	endpoint := "/v1/auth/openai/delete"
+	if providerID == "openai-codex" {
+		endpoint = "/v1/auth/openai-codex/delete"
+	}
+	payload, err := json.Marshal(map[string]string{"profile_id": strings.TrimSpace(profileID)})
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+endpoint,
 		bytes.NewReader(payload),
 	)
 	if err != nil {
