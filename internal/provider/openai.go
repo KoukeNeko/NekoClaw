@@ -202,20 +202,17 @@ func (p *OpenAIProvider) Generate(ctx context.Context, req GenerateRequest) (Gen
 	raw, _ := json.Marshal(payload)
 
 	targetURL := strings.TrimRight(p.baseURL, "/") + "/responses"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(raw))
-	if err != nil {
-		return GenerateResponse{}, &FailureError{
-			Reason:   core.FailureUnknown,
-			Message:  err.Error(),
-			Endpoint: p.baseURL,
+
+	resp, err := doWithRetry(ctx, DefaultRetryConfig(), func() (*http.Response, error) {
+		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(raw))
+		if reqErr != nil {
+			return nil, reqErr
 		}
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+secret)
-	httpReq.Header.Set("User-Agent", "nekoclaw/1.0")
-
-	resp, err := p.client.Do(httpReq)
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Authorization", "Bearer "+secret)
+		httpReq.Header.Set("User-Agent", "nekoclaw/1.0")
+		return p.client.Do(httpReq)
+	}, nil)
 	if err != nil {
 		return GenerateResponse{}, &FailureError{
 			Reason:   core.FailureUnknown,
@@ -228,10 +225,11 @@ func (p *OpenAIProvider) Generate(ctx context.Context, req GenerateRequest) (Gen
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return GenerateResponse{}, &FailureError{
-			Reason:   classifyOpenAIStatus(resp.StatusCode, string(body)),
-			Message:  summarizeOpenAIError(body),
-			Endpoint: p.baseURL,
-			Status:   resp.StatusCode,
+			Reason:     classifyOpenAIStatus(resp.StatusCode, string(body)),
+			Message:    summarizeOpenAIError(body),
+			Endpoint:   p.baseURL,
+			Status:     resp.StatusCode,
+			RetryAfter: parseRetryAfter(resp),
 		}
 	}
 
@@ -315,19 +313,17 @@ func (p *OpenAIProvider) GenerateToolTurn(ctx context.Context, req ToolTurnReque
 	}
 	raw, _ := json.Marshal(payload)
 	targetURL := strings.TrimRight(p.baseURL, "/") + "/responses"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(raw))
-	if err != nil {
-		return ToolTurnResponse{}, &FailureError{
-			Reason:   core.FailureUnknown,
-			Message:  err.Error(),
-			Endpoint: p.baseURL,
-		}
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+secret)
-	httpReq.Header.Set("User-Agent", "nekoclaw/1.0")
 
-	resp, err := p.client.Do(httpReq)
+	resp, err := doWithRetry(ctx, DefaultRetryConfig(), func() (*http.Response, error) {
+		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(raw))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Authorization", "Bearer "+secret)
+		httpReq.Header.Set("User-Agent", "nekoclaw/1.0")
+		return p.client.Do(httpReq)
+	}, nil)
 	if err != nil {
 		return ToolTurnResponse{}, &FailureError{
 			Reason:   core.FailureUnknown,
@@ -339,10 +335,11 @@ func (p *OpenAIProvider) GenerateToolTurn(ctx context.Context, req ToolTurnReque
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return ToolTurnResponse{}, &FailureError{
-			Reason:   classifyOpenAIStatus(resp.StatusCode, string(body)),
-			Message:  summarizeOpenAIError(body),
-			Endpoint: p.baseURL,
-			Status:   resp.StatusCode,
+			Reason:     classifyOpenAIStatus(resp.StatusCode, string(body)),
+			Message:    summarizeOpenAIError(body),
+			Endpoint:   p.baseURL,
+			Status:     resp.StatusCode,
+			RetryAfter: parseRetryAfter(resp),
 		}
 	}
 

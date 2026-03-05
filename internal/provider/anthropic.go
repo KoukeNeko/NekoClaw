@@ -234,19 +234,16 @@ func (p *AnthropicProvider) Generate(ctx context.Context, req GenerateRequest) (
 	raw, _ := json.Marshal(payload)
 
 	targetURL := strings.TrimRight(p.baseURL, "/") + "/v1/messages"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(raw))
-	if err != nil {
-		return GenerateResponse{}, &FailureError{
-			Reason:   core.FailureUnknown,
-			Message:  err.Error(),
-			Endpoint: p.baseURL,
-		}
-	}
-
 	authType := resolveAnthropicCredentialType(req.Account, secret)
-	setAnthropicHeaders(httpReq, secret, authType)
 
-	resp, err := p.client.Do(httpReq)
+	resp, err := doWithRetry(ctx, DefaultRetryConfig(), func() (*http.Response, error) {
+		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(raw))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		setAnthropicHeaders(httpReq, secret, authType)
+		return p.client.Do(httpReq)
+	}, nil)
 	if err != nil {
 		return GenerateResponse{}, &FailureError{
 			Reason:   core.FailureUnknown,
@@ -265,10 +262,11 @@ func (p *AnthropicProvider) Generate(ctx context.Context, req GenerateRequest) (
 			message = "Invalid bearer token. Your Claude setup-token may have expired. Please run 'claude setup-token' again to get a new one."
 		}
 		return GenerateResponse{}, &FailureError{
-			Reason:   classifyAnthropicStatus(resp.StatusCode, string(body)),
-			Message:  message,
-			Endpoint: p.baseURL,
-			Status:   resp.StatusCode,
+			Reason:     classifyAnthropicStatus(resp.StatusCode, string(body)),
+			Message:    message,
+			Endpoint:   p.baseURL,
+			Status:     resp.StatusCode,
+			RetryAfter: parseRetryAfter(resp),
 		}
 	}
 
@@ -342,17 +340,16 @@ func (p *AnthropicProvider) GenerateToolTurn(ctx context.Context, req ToolTurnRe
 	}
 	raw, _ := json.Marshal(payload)
 	targetURL := strings.TrimRight(p.baseURL, "/") + "/v1/messages"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(raw))
-	if err != nil {
-		return ToolTurnResponse{}, &FailureError{
-			Reason:   core.FailureUnknown,
-			Message:  err.Error(),
-			Endpoint: p.baseURL,
-		}
-	}
 	authType := resolveAnthropicCredentialType(req.Account, secret)
-	setAnthropicHeaders(httpReq, secret, authType)
-	resp, err := p.client.Do(httpReq)
+
+	resp, err := doWithRetry(ctx, DefaultRetryConfig(), func() (*http.Response, error) {
+		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(raw))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		setAnthropicHeaders(httpReq, secret, authType)
+		return p.client.Do(httpReq)
+	}, nil)
 	if err != nil {
 		return ToolTurnResponse{}, &FailureError{
 			Reason:   core.FailureUnknown,
@@ -370,10 +367,11 @@ func (p *AnthropicProvider) GenerateToolTurn(ctx context.Context, req ToolTurnRe
 			message = "Invalid bearer token. Your Claude setup-token may have expired. Please run 'claude setup-token' again to get a new one."
 		}
 		return ToolTurnResponse{}, &FailureError{
-			Reason:   classifyAnthropicStatus(resp.StatusCode, string(body)),
-			Message:  message,
-			Endpoint: p.baseURL,
-			Status:   resp.StatusCode,
+			Reason:     classifyAnthropicStatus(resp.StatusCode, string(body)),
+			Message:    message,
+			Endpoint:   p.baseURL,
+			Status:     resp.StatusCode,
+			RetryAfter: parseRetryAfter(resp),
 		}
 	}
 	var decoded anthropicToolResponse

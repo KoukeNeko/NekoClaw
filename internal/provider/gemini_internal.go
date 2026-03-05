@@ -304,20 +304,21 @@ func (p *GeminiInternalProvider) Generate(ctx context.Context, req GenerateReque
 
 	var lastErr error
 	for _, endpoint := range endpointOrder {
-		url := strings.TrimRight(endpoint, "/") + p.generatePath
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		httpReq.Header.Set("Authorization", "Bearer "+req.Account.Token)
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Accept", "text/event-stream")
-		httpReq.Header.Set("User-Agent", "google-cloud-sdk vscode_cloudshelleditor/0.1")
-		httpReq.Header.Set("X-Goog-Api-Client", "google-cloud-sdk vscode_cloudshelleditor/0.1")
-		httpReq.Header.Set("Client-Metadata", `{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}`)
+		endpointURL := strings.TrimRight(endpoint, "/") + p.generatePath
 
-		resp, err := p.client.Do(httpReq)
+		resp, err := doWithRetry(ctx, DefaultRetryConfig(), func() (*http.Response, error) {
+			httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(body))
+			if reqErr != nil {
+				return nil, reqErr
+			}
+			httpReq.Header.Set("Authorization", "Bearer "+req.Account.Token)
+			httpReq.Header.Set("Content-Type", "application/json")
+			httpReq.Header.Set("Accept", "text/event-stream")
+			httpReq.Header.Set("User-Agent", "google-cloud-sdk vscode_cloudshelleditor/0.1")
+			httpReq.Header.Set("X-Goog-Api-Client", "google-cloud-sdk vscode_cloudshelleditor/0.1")
+			httpReq.Header.Set("Client-Metadata", `{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}`)
+			return p.client.Do(httpReq)
+		}, nil)
 		if err != nil {
 			lastErr = &FailureError{Reason: core.FailureUnknown, Message: err.Error(), Endpoint: endpoint}
 			continue
@@ -328,10 +329,11 @@ func (p *GeminiInternalProvider) Generate(ctx context.Context, req GenerateReque
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			reason := classifyStatus(resp.StatusCode, string(respBody))
 			lastErr = &FailureError{
-				Reason:   reason,
-				Message:  strings.TrimSpace(string(respBody)),
-				Endpoint: endpoint,
-				Status:   resp.StatusCode,
+				Reason:     reason,
+				Message:    strings.TrimSpace(string(respBody)),
+				Endpoint:   endpoint,
+				Status:     resp.StatusCode,
+				RetryAfter: parseRetryAfter(resp),
 			}
 			if shouldFallbackEndpoint(resp.StatusCode, respBody) {
 				continue

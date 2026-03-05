@@ -132,10 +132,11 @@ type AuthProvider interface {
 }
 
 type FailureError struct {
-	Reason   core.FailureReason
-	Message  string
-	Endpoint string
-	Status   int
+	Reason     core.FailureReason
+	Message    string
+	Endpoint   string
+	Status     int
+	RetryAfter time.Duration // Parsed from Retry-After header, zero if not present.
 }
 
 func (e *FailureError) Error() string {

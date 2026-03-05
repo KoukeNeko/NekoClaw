@@ -156,18 +156,15 @@ func (p *GoogleAIStudioProvider) Generate(ctx context.Context, req GenerateReque
 		}
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, callURL, bytes.NewReader(raw))
-	if err != nil {
-		return GenerateResponse{}, &FailureError{
-			Reason:   core.FailureUnknown,
-			Message:  err.Error(),
-			Endpoint: p.baseURL,
+	resp, err := doWithRetry(ctx, DefaultRetryConfig(), func() (*http.Response, error) {
+		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, callURL, bytes.NewReader(raw))
+		if reqErr != nil {
+			return nil, reqErr
 		}
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("User-Agent", "nekoclaw/1.0")
-
-	resp, err := p.client.Do(httpReq)
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("User-Agent", "nekoclaw/1.0")
+		return p.client.Do(httpReq)
+	}, nil)
 	if err != nil {
 		return GenerateResponse{}, &FailureError{
 			Reason:   core.FailureUnknown,
@@ -181,10 +178,11 @@ func (p *GoogleAIStudioProvider) Generate(ctx context.Context, req GenerateReque
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		reason := classifyAIStudioStatus(resp.StatusCode, string(body))
 		return GenerateResponse{}, &FailureError{
-			Reason:   reason,
-			Message:  summarizeAIStudioError(body),
-			Endpoint: p.baseURL,
-			Status:   resp.StatusCode,
+			Reason:     reason,
+			Message:    summarizeAIStudioError(body),
+			Endpoint:   p.baseURL,
+			Status:     resp.StatusCode,
+			RetryAfter: parseRetryAfter(resp),
 		}
 	}
 
