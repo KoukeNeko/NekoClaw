@@ -21,6 +21,7 @@ import (
 	"github.com/doeshing/nekoclaw/internal/app"
 	"github.com/doeshing/nekoclaw/internal/auth"
 	"github.com/doeshing/nekoclaw/internal/core"
+	"github.com/doeshing/nekoclaw/internal/discord"
 	"github.com/doeshing/nekoclaw/internal/memory"
 	"github.com/doeshing/nekoclaw/internal/provider"
 	"github.com/doeshing/nekoclaw/internal/tui"
@@ -85,20 +86,66 @@ func main() {
 		}
 	}()
 
+	// Start Discord bot if token is configured (runs in all modes).
+	discordBot, discordErr := startDiscordBot(service, *defaultProvider, *defaultModel)
+	if discordErr != nil {
+		log.Printf("event=discord_bot_init_error error=%q", discordErr)
+	}
+
 	switch runMode {
 	case "api":
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		var wg sync.WaitGroup
+		if discordBot != nil {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := discordBot.Start(ctx); err != nil {
+					log.Printf("event=discord_bot_error error=%q", err)
+				}
+			}()
+		}
+
 		server := api.NewServer(service)
 		fmt.Printf("NekoClaw API listening on %s\n", *addr)
-		fatal(server.Run(ctx, *addr))
+		apiErr := server.Run(ctx, *addr)
+		cancel()
+		wg.Wait()
+		fatal(apiErr)
 	case "tui":
-		fatal(tui.Run(*apiBaseURL, *defaultProvider, *defaultModel, *sessionID))
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		if discordBot != nil {
+			go func() {
+				if err := discordBot.Start(ctx); err != nil {
+					log.Printf("event=discord_bot_error error=%q", err)
+				}
+			}()
+		}
+
+		tuiErr := tui.Run(*apiBaseURL, *defaultProvider, *defaultModel, *sessionID)
+		cancel()
+		fatal(tuiErr)
 	case "both":
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		server := api.NewServer(service)
 		var wg sync.WaitGroup
+
+		if discordBot != nil {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := discordBot.Start(ctx); err != nil {
+					log.Printf("event=discord_bot_error error=%q", err)
+				}
+			}()
+		}
+
+		server := api.NewServer(service)
 		var apiErr error
 		wg.Add(1)
 		go func() {
@@ -121,6 +168,27 @@ func main() {
 	default:
 		fatal(fmt.Errorf("unsupported mode %q", *mode))
 	}
+}
+
+// startDiscordBot creates a Discord bot if DISCORD_BOT_TOKEN is set.
+// Returns nil bot (no error) when token is empty.
+func startDiscordBot(svc *app.Service, defaultProvider, defaultModel string) (*discord.Bot, error) {
+	token := strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
+	if token == "" {
+		return nil, nil
+	}
+	activeChannels := splitCSV(os.Getenv("DISCORD_ACTIVE_CHANNELS"))
+	bot, err := discord.New(svc, discord.Config{
+		Token:          token,
+		Provider:       defaultProvider,
+		Model:          defaultModel,
+		ActiveChannels: activeChannels,
+	})
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("event=discord_bot_configured active_channels=%d", len(activeChannels))
+	return bot, nil
 }
 
 func configureRuntimeLogging(runMode string, authDir string) func() {
