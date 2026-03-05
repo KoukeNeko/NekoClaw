@@ -17,6 +17,19 @@ import (
 // discordMessageLimit is the maximum length of a single Discord message.
 const discordMessageLimit = 2000
 
+// Reaction emoji for message lifecycle.
+const (
+	emojiReceived   = "👀"
+	emojiProcessing = "🔄"
+	emojiDone       = "✅"
+)
+
+// messageJob represents a queued message to be processed.
+type messageJob struct {
+	s *discordgo.Session
+	m *discordgo.MessageCreate
+}
+
 // Bot connects to Discord Gateway and forwards messages to the NekoClaw service.
 type Bot struct {
 	session     *discordgo.Session
@@ -26,6 +39,10 @@ type Bot struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	// Per-channel message queues for sequential processing.
+	queues   map[string]chan messageJob
+	queuesMu sync.Mutex
 }
 
 // Config holds the configuration needed to create a Discord bot.
@@ -62,6 +79,7 @@ func New(svc *app.Service, cfg Config) (*Bot, error) {
 		session:     dg,
 		svc:         svc,
 		activeChans: activeChans,
+		queues:      make(map[string]chan messageJob),
 	}, nil
 }
 
@@ -78,6 +96,15 @@ func (b *Bot) Start(ctx context.Context) error {
 
 	// Block until context is done.
 	<-b.ctx.Done()
+
+	// Close all queues so workers drain remaining jobs and exit.
+	b.queuesMu.Lock()
+	for _, ch := range b.queues {
+		close(ch)
+	}
+	b.queues = nil
+	b.queuesMu.Unlock()
+
 	b.wg.Wait()
 	return b.session.Close()
 }
@@ -103,11 +130,36 @@ func (b *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate) 
 		return
 	}
 
-	b.wg.Add(1)
-	go func() {
-		defer b.wg.Done()
-		b.handleMessage(s, m)
-	}()
+	// React to acknowledge receipt.
+	_ = s.MessageReactionAdd(m.ChannelID, m.ID, emojiReceived)
+
+	// Enqueue for sequential per-channel processing.
+	b.queuesMu.Lock()
+	if b.queues == nil {
+		b.queuesMu.Unlock()
+		return
+	}
+	ch, ok := b.queues[m.ChannelID]
+	if !ok {
+		ch = make(chan messageJob, 64)
+		b.queues[m.ChannelID] = ch
+		b.wg.Add(1)
+		go b.channelWorker(ch)
+	}
+	b.queuesMu.Unlock()
+
+	select {
+	case ch <- messageJob{s: s, m: m}:
+	case <-b.ctx.Done():
+	}
+}
+
+// channelWorker processes messages for a single channel sequentially.
+func (b *Bot) channelWorker(ch <-chan messageJob) {
+	defer b.wg.Done()
+	for job := range ch {
+		b.handleMessage(job.s, job.m)
+	}
 }
 
 // shouldRespond checks whether the bot should respond to this message.
@@ -151,9 +203,14 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
+	botID := s.State.User.ID
+
+	// Transition: 👀 → 🔄
+	_ = s.MessageReactionRemove(m.ChannelID, m.ID, emojiReceived, botID)
+	_ = s.MessageReactionAdd(m.ChannelID, m.ID, emojiProcessing)
+
 	// Show typing indicator while processing.
 	stopTyping := b.startTyping(s, m.ChannelID)
-	defer stopTyping()
 
 	sessionID := fmt.Sprintf("discord:%s:%s", m.ChannelID, m.Author.ID)
 
@@ -165,6 +222,13 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		Message:     text,
 		EnableTools: true,
 	})
+
+	stopTyping()
+
+	// Transition: 🔄 → ✅
+	_ = s.MessageReactionRemove(m.ChannelID, m.ID, emojiProcessing, botID)
+	_ = s.MessageReactionAdd(m.ChannelID, m.ID, emojiDone)
+
 	if err != nil {
 		log.Printf("event=discord_chat_error channel=%s user=%s error=%q", m.ChannelID, m.Author.ID, err)
 		b.sendReply(s, m, "⚠️ "+err.Error())
