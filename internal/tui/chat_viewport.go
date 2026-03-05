@@ -241,11 +241,13 @@ func formatUsageStats(msg *ChatMessage) string {
 		}
 	}
 
-	// Token counts: ↑input ↓output
+	// Token counts: ↑input ↓output (total)
 	if hasTokens {
-		parts = append(parts, fmt.Sprintf("↑%s ↓%s",
+		total := msg.InputTokens + msg.OutputTokens
+		parts = append(parts, fmt.Sprintf("↑%s ↓%s (%s)",
 			formatTokenCount(msg.InputTokens),
 			formatTokenCount(msg.OutputTokens),
+			formatTokenCount(total),
 		))
 	}
 

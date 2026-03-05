@@ -22,6 +22,20 @@ var logTelegram = logger.New("telegram", logger.Blue)
 // telegramMessageLimit is the maximum length of a single Telegram message.
 const telegramMessageLimit = 4096
 
+// Group context buffer settings.
+const (
+	maxGroupHistoryMessages = 50
+	groupHistoryMaxAge      = 30 * time.Minute
+)
+
+// groupMessage stores a single ambient group message for context injection.
+type groupMessage struct {
+	SenderName string
+	Text       string
+	HasImage   bool
+	Timestamp  time.Time
+}
+
 // messageJob represents a queued message to be processed.
 type messageJob struct {
 	update tgbotapi.Update
@@ -44,6 +58,10 @@ type Bot struct {
 	// Key: chatID, Value: current sessionID.
 	activeSessions   map[int64]string
 	activeSessionsMu sync.RWMutex
+
+	// Per-chat recent message buffer for group context injection.
+	groupHistory   map[int64][]groupMessage
+	groupHistoryMu sync.RWMutex
 }
 
 // Config holds the configuration needed to create a Telegram bot.
@@ -68,6 +86,7 @@ func New(svc *app.Service, cfg Config) (*Bot, error) {
 		svc:            svc,
 		queues:         make(map[int64]chan messageJob),
 		activeSessions: make(map[int64]string),
+		groupHistory:   make(map[int64][]groupMessage),
 	}, nil
 }
 
@@ -105,7 +124,17 @@ func (b *Bot) Start(ctx context.Context) error {
 			if update.Message == nil {
 				continue
 			}
-			if !b.shouldRespond(update) {
+
+			respond := b.shouldRespond(update)
+
+			// Record ambient group messages for context injection.
+			// Only non-trigger messages are stored; triggered messages
+			// are the user's actual input and already go to HandleChat.
+			if !respond && update.Message.Chat.Type != "private" {
+				b.recordGroupMessage(update.Message)
+			}
+
+			if !respond {
 				continue
 			}
 			b.enqueue(update)
@@ -210,8 +239,23 @@ func (b *Bot) enqueue(update tgbotapi.Update) {
 func (b *Bot) chatWorker(ch <-chan messageJob) {
 	defer b.wg.Done()
 	for job := range ch {
-		b.handleMessage(job.update)
+		b.safeHandleMessage(job.update)
 	}
+}
+
+// safeHandleMessage wraps handleMessage with panic recovery so a single
+// bad message cannot kill the per-chat worker goroutine.
+func (b *Bot) safeHandleMessage(update tgbotapi.Update) {
+	defer func() {
+		if r := recover(); r != nil {
+			chatID := int64(0)
+			if update.Message != nil {
+				chatID = update.Message.Chat.ID
+			}
+			logTelegram.Errorf("panic recovered: chat=%d error=%v", chatID, r)
+		}
+	}()
+	b.handleMessage(update)
 }
 
 func (b *Bot) handleMessage(update tgbotapi.Update) {
@@ -225,9 +269,44 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 	}
 
 	text := b.extractText(msg)
-
-	// Extract images from photos or document attachments.
 	images := b.extractImages(msg)
+
+	// --- Context building ---
+	var contextParts []string
+
+	// 1. Recent group conversation (ambient messages not directed at bot).
+	if msg.Chat.Type != "private" {
+		if groupCtx := b.buildGroupContext(msg.Chat.ID); groupCtx != "" {
+			contextParts = append(contextParts, groupCtx)
+		}
+	}
+
+	// 2. Reply-to message context (when replying to another user, not bot).
+	//    This is critical for cases like replying to a photo with "@bot 這張照片是什麼？".
+	if msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil &&
+		msg.ReplyToMessage.From.ID != b.api.Self.ID {
+		replyText := msg.ReplyToMessage.Text
+		if replyText == "" {
+			replyText = msg.ReplyToMessage.Caption
+		}
+		// Include images from the replied-to message (e.g. user replies to a photo).
+		replyImages := b.extractImages(msg.ReplyToMessage)
+		images = append(replyImages, images...) // replied images first, then user's own
+
+		senderName := formatSenderName(msg.ReplyToMessage.From)
+		if replyText != "" {
+			contextParts = append(contextParts, fmt.Sprintf("[回覆 %s 的訊息]\n%s", senderName, replyText))
+		} else if len(replyImages) > 0 {
+			contextParts = append(contextParts, fmt.Sprintf("[回覆 %s 的圖片]", senderName))
+		}
+	}
+
+	// Prepend context to the user message.
+	if len(contextParts) > 0 && text != "" {
+		text = strings.Join(contextParts, "\n\n") + "\n\n---\n" + text
+	} else if len(contextParts) > 0 {
+		text = strings.Join(contextParts, "\n\n")
+	}
 
 	// Skip if no text and no images.
 	if text == "" && len(images) == 0 {
@@ -383,6 +462,89 @@ func isImageMIME(mime string) bool {
 		return true
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// Group context
+// ---------------------------------------------------------------------------
+
+// recordGroupMessage stores an ambient group message for later context injection.
+func (b *Bot) recordGroupMessage(msg *tgbotapi.Message) {
+	if msg == nil || msg.From == nil || msg.From.IsBot {
+		return
+	}
+
+	text := msg.Text
+	if text == "" {
+		text = msg.Caption
+	}
+	hasImage := len(msg.Photo) > 0 || (msg.Document != nil && isImageMIME(msg.Document.MimeType))
+
+	// Skip empty messages (stickers, voice notes, etc.).
+	if text == "" && !hasImage {
+		return
+	}
+
+	gm := groupMessage{
+		SenderName: formatSenderName(msg.From),
+		Text:       text,
+		HasImage:   hasImage,
+		Timestamp:  time.Unix(int64(msg.Date), 0),
+	}
+
+	chatID := msg.Chat.ID
+	b.groupHistoryMu.Lock()
+	defer b.groupHistoryMu.Unlock()
+
+	history := b.groupHistory[chatID]
+	history = append(history, gm)
+	if len(history) > maxGroupHistoryMessages {
+		history = history[len(history)-maxGroupHistoryMessages:]
+	}
+	b.groupHistory[chatID] = history
+}
+
+// buildGroupContext formats recent group messages as a context block.
+func (b *Bot) buildGroupContext(chatID int64) string {
+	b.groupHistoryMu.RLock()
+	messages, ok := b.groupHistory[chatID]
+	b.groupHistoryMu.RUnlock()
+	if !ok || len(messages) == 0 {
+		return ""
+	}
+
+	cutoff := time.Now().Add(-groupHistoryMaxAge)
+	var lines []string
+	for _, gm := range messages {
+		if gm.Timestamp.Before(cutoff) {
+			continue
+		}
+		ts := gm.Timestamp.Format("15:04")
+		switch {
+		case gm.Text != "" && gm.HasImage:
+			lines = append(lines, fmt.Sprintf("%s (%s): %s [附圖]", gm.SenderName, ts, gm.Text))
+		case gm.HasImage:
+			lines = append(lines, fmt.Sprintf("%s (%s): [圖片]", gm.SenderName, ts))
+		default:
+			lines = append(lines, fmt.Sprintf("%s (%s): %s", gm.SenderName, ts, gm.Text))
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "[近期群組對話]\n" + strings.Join(lines, "\n")
+}
+
+// formatSenderName builds a display name from a Telegram user.
+func formatSenderName(user *tgbotapi.User) string {
+	if user == nil {
+		return "Unknown"
+	}
+	name := user.FirstName
+	if user.LastName != "" {
+		name += " " + user.LastName
+	}
+	return name
 }
 
 // ---------------------------------------------------------------------------
@@ -614,10 +776,12 @@ func formatUsageStats(usage core.UsageInfo, elapsed time.Duration, provider, mod
 		}
 	}
 
-	// Token counts.
+	// Token counts: ↑input ↓output (total)
 	if usage.InputTokens > 0 || usage.OutputTokens > 0 {
-		parts = append(parts, fmt.Sprintf("↑%s ↓%s",
-			formatTokenCount(usage.InputTokens), formatTokenCount(usage.OutputTokens)))
+		total := usage.InputTokens + usage.OutputTokens
+		parts = append(parts, fmt.Sprintf("↑%s ↓%s (%s)",
+			formatTokenCount(usage.InputTokens), formatTokenCount(usage.OutputTokens),
+			formatTokenCount(total)))
 	}
 
 	// Throughput.

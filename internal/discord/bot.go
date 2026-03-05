@@ -647,10 +647,12 @@ func formatUsageStats(usage core.UsageInfo, elapsed time.Duration, provider, mod
 		}
 	}
 
-	// Token counts.
+	// Token counts: ↑input ↓output (total)
 	if usage.InputTokens > 0 || usage.OutputTokens > 0 {
-		parts = append(parts, fmt.Sprintf("↑%s ↓%s",
-			formatTokenCount(usage.InputTokens), formatTokenCount(usage.OutputTokens)))
+		total := usage.InputTokens + usage.OutputTokens
+		parts = append(parts, fmt.Sprintf("↑%s ↓%s (%s)",
+			formatTokenCount(usage.InputTokens), formatTokenCount(usage.OutputTokens),
+			formatTokenCount(total)))
 	}
 
 	// Throughput.
