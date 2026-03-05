@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/doeshing/nekoclaw/internal/client"
 	"github.com/doeshing/nekoclaw/internal/core"
 )
@@ -53,8 +54,9 @@ func (ps *ProviderSection) SetModel(m string)    { ps.currentModel = m }
 
 // HasActiveInput reports whether the section is in an editing mode that
 // should capture Left/Right keys (preventing settings tab switching).
+// Always true for the 3-column layout: Left/Right navigates between columns.
 func (ps *ProviderSection) HasActiveInput() bool {
-	return ps.focusField >= 2
+	return true
 }
 
 // ---------------------------------------------------------------------------
@@ -206,6 +208,27 @@ func (ps *ProviderSection) Update(msg tea.KeyMsg, apiClient *client.APIClient, c
 	}
 
 	switch {
+	case key.Matches(msg, settingsKeys.Back):
+		if ps.focusField > 0 {
+			ps.focusField = 0
+			return nil
+		}
+		// In providers column: close the settings overlay.
+		return func() tea.Msg { return ToggleSettingsMsg{} }
+
+	case key.Matches(msg, settingsKeys.Left):
+		if ps.focusField > 0 {
+			ps.focusField--
+		}
+
+	case key.Matches(msg, settingsKeys.Right):
+		if ps.focusField == 0 {
+			ps.focusField = 1
+		} else if ps.focusField == 1 {
+			ps.focusField = 2
+			ps.fallbackField = 0
+		}
+
 	case key.Matches(msg, settingsKeys.Up):
 		if ps.focusField == 0 {
 			if ps.providerIdx > 0 {
@@ -214,34 +237,20 @@ func (ps *ProviderSection) Update(msg tea.KeyMsg, apiClient *client.APIClient, c
 		} else {
 			if ps.modelIdx > 0 {
 				ps.modelIdx--
-			} else if len(ps.providers) > 0 {
-				// Jump to last provider
-				ps.focusField = 0
-				ps.providerIdx = len(ps.providers) - 1
 			}
 		}
+
 	case key.Matches(msg, settingsKeys.Down):
 		if ps.focusField == 0 {
 			if ps.providerIdx < len(ps.providers)-1 {
 				ps.providerIdx++
-			} else if len(ps.models) > 0 {
-				// Jump to first model
-				ps.focusField = 1
-				ps.modelIdx = 0
-			} else {
-				// Skip empty models list, jump to first fallback slot
-				ps.focusField = 2
-				ps.fallbackField = 0
 			}
 		} else {
 			if ps.modelIdx < len(ps.models)-1 {
 				ps.modelIdx++
-			} else {
-				// Jump to first fallback slot
-				ps.focusField = 2
-				ps.fallbackField = 0
 			}
 		}
+
 	case key.Matches(msg, settingsKeys.Select):
 		if ps.focusField == 0 && ps.providerIdx < len(ps.providers) {
 			selected := ps.providers[ps.providerIdx]
@@ -277,21 +286,12 @@ func (ps *ProviderSection) updateFallback(msg tea.KeyMsg, apiClient *client.APIC
 
 	switch {
 	case key.Matches(msg, settingsKeys.Back):
-		// Exit fallback editing mode, return to providers list.
+		// Exit fallback editing mode, return to providers column.
 		ps.focusField = 0
 		ps.fallbackField = 0
 
 	case key.Matches(msg, settingsKeys.Up):
-		if ps.focusField == 2 {
-			// Jump back to models list (last item) or providers list.
-			if len(ps.models) > 0 {
-				ps.focusField = 1
-				ps.modelIdx = len(ps.models) - 1
-			} else if len(ps.providers) > 0 {
-				ps.focusField = 0
-				ps.providerIdx = len(ps.providers) - 1
-			}
-		} else {
+		if ps.focusField > 2 {
 			ps.focusField--
 		}
 
@@ -303,6 +303,10 @@ func (ps *ProviderSection) updateFallback(msg tea.KeyMsg, apiClient *client.APIC
 	case key.Matches(msg, settingsKeys.Left):
 		if ps.fallbackField > 0 {
 			ps.fallbackField--
+		} else {
+			// At leftmost sub-field: switch to models column.
+			ps.focusField = 1
+			ps.fallbackField = 0
 		}
 
 	case key.Matches(msg, settingsKeys.Right):
@@ -376,16 +380,58 @@ func (ps ProviderSection) View(width int) string {
 		textW = 10
 	}
 
-	var lines []string
-	lines = append(lines, theme.HeaderStyle.Render("Provider / Model"))
-	lines = append(lines, "")
+	var out []string
+	out = append(out, theme.HeaderStyle.Render("Provider / Model"))
+	out = append(out, "")
 
-	// Provider list
-	providerHeader := "Providers"
-	if ps.focusField == 0 {
-		providerHeader = "› Providers"
+	// 3-column layout with gap between columns.
+	const colGap = 3
+	colW := (textW - colGap*2) / 3
+	if colW < 15 {
+		colW = 15
 	}
-	lines = append(lines, theme.SectionStyle.Render(providerHeader))
+
+	col1 := ps.renderProviderColumn(colW)
+	col2 := ps.renderModelColumn(colW)
+	col3 := ps.renderFallbackColumn(colW)
+
+	colStyle := lipgloss.NewStyle().Width(colW)
+	gapStr := strings.Repeat(" ", colGap)
+	columns := lipgloss.JoinHorizontal(lipgloss.Top,
+		colStyle.Render(col1),
+		gapStr,
+		colStyle.Render(col2),
+		gapStr,
+		colStyle.Render(col3),
+	)
+	out = append(out, columns)
+
+	out = append(out, "")
+
+	// Context-sensitive help text
+	if ps.focusField >= 2 {
+		out = append(out, theme.HintStyle.Render("←→ 切換欄位  ·  ↑↓ 選擇  ·  Enter 切換選項  ·  d 清除  ·  Tab 分頁"))
+	} else {
+		out = append(out, theme.HintStyle.Render("←→ 切換欄位  ·  ↑↓ 選擇  ·  Enter 確認  ·  Tab 分頁"))
+	}
+
+	return strings.Join(out, "\n")
+}
+
+// renderProviderColumn renders the provider list as a single column.
+func (ps ProviderSection) renderProviderColumn(colW int) string {
+	itemW := colW - 2 // account for NormalStyle/SelectedStyle padding
+	if itemW < 5 {
+		itemW = 5
+	}
+
+	var lines []string
+
+	header := "Providers"
+	if ps.focusField == 0 {
+		header = "› " + header
+	}
+	lines = append(lines, theme.SectionStyle.Render(header))
 
 	if !ps.loaded {
 		lines = append(lines, theme.HintStyle.Render("  載入中..."))
@@ -405,13 +451,22 @@ func (ps ProviderSection) View(width int) string {
 			if p == ps.currentProvider {
 				label += " ✓"
 			}
-			lines = append(lines, style.Render(clampLine(prefix+label, textW)))
+			lines = append(lines, style.Render(clampLine(prefix+label, itemW)))
 		}
 	}
 
-	lines = append(lines, "")
+	return strings.Join(lines, "\n")
+}
 
-	// Model list (scroll-windowed to prevent layout overflow)
+// renderModelColumn renders the model list as a single column with scroll window.
+func (ps ProviderSection) renderModelColumn(colW int) string {
+	itemW := colW - 2
+	if itemW < 5 {
+		itemW = 5
+	}
+
+	var lines []string
+
 	modelHeader := "Models"
 	if ps.modelsLoading {
 		modelHeader += " (載入中...)"
@@ -443,18 +498,30 @@ func (ps ProviderSection) View(width int) string {
 		if m == ps.currentModel {
 			label += " ✓"
 		}
-		lines = append(lines, style.Render(clampLine(prefix+label, textW)))
+		lines = append(lines, style.Render(clampLine(prefix+label, itemW)))
 	}
 	if modelEnd < len(ps.models) {
 		lines = append(lines, theme.HintStyle.Render(fmt.Sprintf("  ↓ 還有 %d 個…", len(ps.models)-modelEnd)))
 	}
 
-	lines = append(lines, "")
+	return strings.Join(lines, "\n")
+}
 
-	// Fallback section
-	fbHeader := "Fallback 設定"
+// renderFallbackColumn renders the fallback settings as a single column.
+func (ps ProviderSection) renderFallbackColumn(colW int) string {
+	itemW := colW - 2
+	if itemW < 5 {
+		itemW = 5
+	}
+
+	var lines []string
+
+	fbHeader := "Fallback"
 	if ps.fallbackSaved {
 		fbHeader += " ✓"
+	}
+	if ps.focusField >= 2 {
+		fbHeader = "› " + fbHeader
 	}
 	lines = append(lines, theme.SectionStyle.Render(fbHeader))
 
@@ -472,27 +539,17 @@ func (ps ProviderSection) View(width int) string {
 		}
 
 		if isFocused {
-			// Highlight the active sub-field with brackets.
 			if ps.fallbackField == 0 {
 				providerLabel = "[" + providerLabel + "]"
 			} else {
 				modelLabel = "[" + modelLabel + "]"
 			}
-			line := fmt.Sprintf("› #%d  %s / %s", i+1, providerLabel, modelLabel)
-			lines = append(lines, theme.SelectedStyle.Render(clampLine(line, textW)))
+			line := fmt.Sprintf("› #%d %s / %s", i+1, providerLabel, modelLabel)
+			lines = append(lines, theme.SelectedStyle.Render(clampLine(line, itemW)))
 		} else {
-			line := fmt.Sprintf("  #%d  %s / %s", i+1, providerLabel, modelLabel)
-			lines = append(lines, theme.NormalStyle.Render(clampLine(line, textW)))
+			line := fmt.Sprintf("  #%d %s / %s", i+1, providerLabel, modelLabel)
+			lines = append(lines, theme.NormalStyle.Render(clampLine(line, itemW)))
 		}
-	}
-
-	lines = append(lines, "")
-
-	// Context-sensitive help text
-	if ps.focusField >= 2 {
-		lines = append(lines, theme.HintStyle.Render("←→ 切換欄位  ·  Enter 切換選項  ·  d 清除  ·  Esc 返回"))
-	} else {
-		lines = append(lines, theme.HintStyle.Render("↑↓ 選擇  ·  Enter 確認  ·  Esc 返回"))
 	}
 
 	return strings.Join(lines, "\n")
