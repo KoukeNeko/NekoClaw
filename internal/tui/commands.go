@@ -120,6 +120,41 @@ func loadFallbackModelsCmd(apiClient *client.APIClient, slotIndex int, providerI
 }
 
 // ---------------------------------------------------------------------------
+// Default provider/model sync
+// ---------------------------------------------------------------------------
+
+func syncDefaultProviderCmd(apiClient *client.APIClient, providerID, modelID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = apiClient.SetDefaultProvider(ctx, providerID, modelID)
+		return nil // fire-and-forget
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Discord config
+// ---------------------------------------------------------------------------
+
+func loadDiscordConfigCmd(apiClient *client.APIClient) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cfg, err := apiClient.GetDiscordConfig(ctx)
+		return DiscordConfigMsg{Config: cfg, Err: err}
+	}
+}
+
+func saveDiscordConfigCmd(apiClient *client.APIClient, cfg core.DiscordConfig) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err := apiClient.SetDiscordConfig(ctx, cfg)
+		return DiscordSaveMsg{Err: err}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Auth — Gemini OAuth
 // ---------------------------------------------------------------------------
 

@@ -977,6 +977,46 @@ func (c *APIClient) SetFallbacks(ctx context.Context, entries []core.FallbackEnt
 	return c.doAndDecodeJSON(httpReq, &out)
 }
 
+func (c *APIClient) SetDefaultProvider(ctx context.Context, providerID, modelID string) error {
+	payload, err := json.Marshal(map[string]string{"provider": providerID, "model": modelID})
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/v1/default-provider", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out struct{}
+	return c.doAndDecodeJSON(httpReq, &out)
+}
+
+func (c *APIClient) GetDiscordConfig(ctx context.Context) (core.DiscordConfig, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/discord/config", nil)
+	if err != nil {
+		return core.DiscordConfig{}, err
+	}
+	var out core.DiscordConfig
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return core.DiscordConfig{}, err
+	}
+	return out, nil
+}
+
+func (c *APIClient) SetDiscordConfig(ctx context.Context, cfg core.DiscordConfig) error {
+	payload, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/v1/discord/config", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out struct{}
+	return c.doAndDecodeJSON(httpReq, &out)
+}
+
 func (c *APIClient) ListSessions(ctx context.Context) ([]SessionInfo, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/sessions", nil)
 	if err != nil {

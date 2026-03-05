@@ -13,9 +13,16 @@ const (
 	maxFallbackSlots     = 5
 )
 
+// DiscordConfig holds Discord bot settings.
+type DiscordConfig struct {
+	BotToken       string   `json:"bot_token,omitempty"`
+	ActiveChannels []string `json:"active_channels,omitempty"`
+}
+
 // AppConfig holds user-configurable settings persisted to config.json.
 type AppConfig struct {
 	Fallbacks []FallbackEntry `json:"fallbacks,omitempty"`
+	Discord   DiscordConfig   `json:"discord,omitempty"`
 }
 
 // LoadConfig reads config.json from configDir.

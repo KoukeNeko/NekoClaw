@@ -86,8 +86,12 @@ func main() {
 		}
 	}()
 
+	// Set initial default provider/model so Discord bot and other surfaces can read them.
+	service.SetDefaultProvider(*defaultProvider)
+	service.SetDefaultModel(*defaultModel)
+
 	// Start Discord bot if token is configured (runs in all modes).
-	discordBot, discordErr := startDiscordBot(service, *defaultProvider, *defaultModel)
+	discordBot, discordErr := startDiscordBot(service)
 	if discordErr != nil {
 		log.Printf("event=discord_bot_init_error error=%q", discordErr)
 	}
@@ -170,18 +174,28 @@ func main() {
 	}
 }
 
-// startDiscordBot creates a Discord bot if DISCORD_BOT_TOKEN is set.
-// Returns nil bot (no error) when token is empty.
-func startDiscordBot(svc *app.Service, defaultProvider, defaultModel string) (*discord.Bot, error) {
+// startDiscordBot creates a Discord bot if a token is available.
+// Environment variables take precedence over config.json settings.
+// Returns nil bot (no error) when no token is configured.
+func startDiscordBot(svc *app.Service) (*discord.Bot, error) {
 	token := strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
+	activeChannels := splitCSV(os.Getenv("DISCORD_ACTIVE_CHANNELS"))
+
+	// Fall back to config.json if env vars are empty.
+	if token == "" {
+		cfg := svc.GetDiscordConfig()
+		token = strings.TrimSpace(cfg.BotToken)
+		if len(activeChannels) == 0 {
+			activeChannels = cfg.ActiveChannels
+		}
+	}
+
 	if token == "" {
 		return nil, nil
 	}
-	activeChannels := splitCSV(os.Getenv("DISCORD_ACTIVE_CHANNELS"))
+
 	bot, err := discord.New(svc, discord.Config{
 		Token:          token,
-		Provider:       defaultProvider,
-		Model:          defaultModel,
 		ActiveChannels: activeChannels,
 	})
 	if err != nil {
@@ -406,6 +420,8 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	if configErr != nil {
 		log.Printf("event=config_load_error error=%q", configErr)
 	}
+	svc.SetDiscordConfig(appConfig.Discord)
+
 	if len(appConfig.Fallbacks) > 0 {
 		svc.SetFallbacks(appConfig.Fallbacks)
 	} else {

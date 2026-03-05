@@ -49,6 +49,9 @@ type Service struct {
 	searchIndex       *memory.SearchIndex
 	preferredProfiles map[string]string
 	fallbacks         []core.FallbackEntry // ordered fallback provider+model pairs
+	discordConfig     core.DiscordConfig   // persisted Discord bot settings
+	defaultProvider   string               // current default provider (synced from TUI)
+	defaultModel      string               // current default model (synced from TUI)
 	configDir         string               // directory for config.json persistence
 	toolRuntime       *tooling.Runtime
 	mcpManager        *mcp.Manager
@@ -330,6 +333,63 @@ func (s *Service) SaveFallbacks(entries []core.FallbackEntry) error {
 	cfg, _ := core.LoadConfig(configDir)
 	cfg.Fallbacks = entries
 	return core.SaveConfig(configDir, cfg)
+}
+
+// GetDiscordConfig returns a copy of the current Discord configuration.
+func (s *Service) GetDiscordConfig() core.DiscordConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return core.DiscordConfig{
+		BotToken:       s.discordConfig.BotToken,
+		ActiveChannels: append([]string(nil), s.discordConfig.ActiveChannels...),
+	}
+}
+
+// SaveDiscordConfig persists Discord settings to config.json and updates in-memory state.
+func (s *Service) SaveDiscordConfig(cfg core.DiscordConfig) error {
+	s.mu.Lock()
+	configDir := s.configDir
+	s.discordConfig = cfg
+	s.mu.Unlock()
+
+	appCfg, _ := core.LoadConfig(configDir)
+	appCfg.Discord = cfg
+	return core.SaveConfig(configDir, appCfg)
+}
+
+// SetDiscordConfig sets the in-memory Discord config (used during startup).
+func (s *Service) SetDiscordConfig(cfg core.DiscordConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.discordConfig = cfg
+}
+
+// GetDefaultProvider returns the current default provider ID.
+func (s *Service) GetDefaultProvider() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.defaultProvider
+}
+
+// GetDefaultModel returns the current default model ID.
+func (s *Service) GetDefaultModel() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.defaultModel
+}
+
+// SetDefaultProvider updates the current default provider ID.
+func (s *Service) SetDefaultProvider(p string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.defaultProvider = p
+}
+
+// SetDefaultModel updates the current default model ID.
+func (s *Service) SetDefaultModel(m string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.defaultModel = m
 }
 
 func (s *Service) SetAuthIntegration(manager *auth.GeminiOAuthManager, store *auth.Store) {

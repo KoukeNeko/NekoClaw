@@ -20,9 +20,10 @@ const (
 	SectionMemory
 	SectionUsage
 	SectionMCP
+	SectionDiscord
 )
 
-var sectionNames = []string{"Provider", "Persona", "Auth", "Sessions", "Memory", "Usage", "MCP"}
+var sectionNames = []string{"Provider", "Persona", "Auth", "Sessions", "Memory", "Usage", "MCP", "Discord"}
 
 // SettingsView is a modal overlay with tabbed navigation.
 type SettingsView struct {
@@ -37,6 +38,7 @@ type SettingsView struct {
 	memory   MemorySection
 	usage    UsageSection
 	mcp      MCPSection
+	discord  DiscordSection
 
 	// Shared state from parent
 	apiClient     *client.APIClient
@@ -58,6 +60,7 @@ func NewSettingsView(apiClient *client.APIClient, providerID, modelID, sessionID
 		memory:        NewMemorySection(),
 		usage:         NewUsageSection(providerID, modelID),
 		mcp:           NewMCPSection(),
+		discord:       NewDiscordSection(),
 		apiClient:     apiClient,
 		providerID:    providerID,
 		modelID:       modelID,
@@ -257,6 +260,10 @@ func (sv *SettingsView) Update(msg tea.Msg) tea.Cmd {
 			})
 		}
 		return cmd
+	case DiscordConfigMsg:
+		return sv.discord.HandleConfig(msg)
+	case DiscordSaveMsg:
+		return sv.discord.HandleSave(msg)
 	case PersonaClearMsg:
 		cmd := sv.persona.HandlePersonaClear(msg)
 		if msg.Err == nil {
@@ -302,6 +309,8 @@ func (sv *SettingsView) enterSection() tea.Cmd {
 			listMCPServersCmd(sv.apiClient),
 			listMCPBuiltinCmd(sv.apiClient),
 		)
+	case SectionDiscord:
+		return loadDiscordConfigCmd(sv.apiClient)
 	}
 	return nil
 }
@@ -322,6 +331,8 @@ func (sv *SettingsView) sectionHasActiveInput() bool {
 		return false
 	case SectionMCP:
 		return false
+	case SectionDiscord:
+		return sv.discord.HasActiveInput()
 	}
 	return false
 }
@@ -342,6 +353,8 @@ func (sv *SettingsView) delegateToSection(msg tea.KeyMsg) tea.Cmd {
 		return sv.usage.Update(msg)
 	case SectionMCP:
 		return sv.mcp.Update(msg, sv.apiClient)
+	case SectionDiscord:
+		return sv.discord.Update(msg, sv.apiClient)
 	}
 	return nil
 }
@@ -400,6 +413,8 @@ func (sv SettingsView) RenderOverlay(chatBg string, width, height int) string {
 		sectionContent = sv.usage.View(textW, maxContentLines)
 	case SectionMCP:
 		sectionContent = sv.mcp.View(textW, maxContentLines)
+	case SectionDiscord:
+		sectionContent = sv.discord.View(textW, maxContentLines)
 	}
 
 	var lines []string
@@ -463,6 +478,8 @@ func (sv SettingsView) sectionHintText() string {
 		return "↑↓ 瀏覽  ·  Tab 分頁  ·  Esc 關閉"
 	case SectionMCP:
 		return "↑↓ 選擇  ·  Enter 切換啟用  ·  r 重新載入  ·  o 開啟資料夾  ·  Tab 分頁  ·  Esc 關閉"
+	case SectionDiscord:
+		return "↑↓ 切換欄位  ·  Enter 儲存  ·  Tab 分頁  ·  Esc 關閉"
 	default:
 		return "↑↓ 選擇  ·  Enter 確認  ·  Tab 分頁  ·  Esc 關閉"
 	}

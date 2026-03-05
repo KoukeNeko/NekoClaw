@@ -47,6 +47,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/auth/ai-studio/delete", s.handleAIStudioDelete)
 	mux.HandleFunc("/v1/models", s.handleListModels)
 	mux.HandleFunc("/v1/fallbacks", s.handleFallbacks)
+	mux.HandleFunc("/v1/discord/config", s.handleDiscordConfig)
+	mux.HandleFunc("/v1/default-provider", s.handleDefaultProvider)
 	mux.HandleFunc("/v1/ai-studio/models", s.handleAIStudioModels)
 	mux.HandleFunc("/v1/auth/anthropic/add-token", s.handleAnthropicAddToken)
 	mux.HandleFunc("/v1/auth/anthropic/add-api-key", s.handleAnthropicAddAPIKey)
@@ -1246,6 +1248,58 @@ func (s *Server) handleFallbacks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		respondJSON(w, http.StatusOK, map[string]any{"fallbacks": s.svc.GetFallbacks()})
+	default:
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleDefaultProvider(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		respondJSON(w, http.StatusOK, map[string]string{
+			"provider": s.svc.GetDefaultProvider(),
+			"model":    s.svc.GetDefaultModel(),
+		})
+	case http.MethodPut:
+		var body struct {
+			Provider string `json:"provider"`
+			Model    string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		if p := strings.TrimSpace(body.Provider); p != "" {
+			s.svc.SetDefaultProvider(p)
+		}
+		if m := strings.TrimSpace(body.Model); m != "" {
+			s.svc.SetDefaultModel(m)
+		}
+		respondJSON(w, http.StatusOK, map[string]string{
+			"provider": s.svc.GetDefaultProvider(),
+			"model":    s.svc.GetDefaultModel(),
+		})
+	default:
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleDiscordConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		cfg := s.svc.GetDiscordConfig()
+		respondJSON(w, http.StatusOK, cfg)
+	case http.MethodPut:
+		var cfg core.DiscordConfig
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		if err := s.svc.SaveDiscordConfig(cfg); err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		respondJSON(w, http.StatusOK, s.svc.GetDiscordConfig())
 	default:
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}

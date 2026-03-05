@@ -343,3 +343,18 @@ type PersonaClearMsg struct {
 type PersonaChangedMsg struct {
 	Name string
 }
+
+// ---------------------------------------------------------------------------
+// Discord messages
+// ---------------------------------------------------------------------------
+
+// DiscordConfigMsg carries the loaded Discord bot configuration.
+type DiscordConfigMsg struct {
+	Config core.DiscordConfig
+	Err    error
+}
+
+// DiscordSaveMsg carries the result of saving Discord config.
+type DiscordSaveMsg struct {
+	Err error
+}
