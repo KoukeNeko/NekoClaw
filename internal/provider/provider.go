@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/doeshing/nekoclaw/internal/core"
@@ -144,8 +145,37 @@ func (e *FailureError) Error() string {
 	if e == nil {
 		return ""
 	}
+	msg := summarizeErrorMessage(e.Message)
 	if e.Status > 0 {
-		return fmt.Sprintf("%s (status=%d endpoint=%s)", e.Message, e.Status, e.Endpoint)
+		return fmt.Sprintf("%s (status=%d endpoint=%s)", msg, e.Status, e.Endpoint)
 	}
-	return fmt.Sprintf("%s (endpoint=%s)", e.Message, e.Endpoint)
+	return fmt.Sprintf("%s (endpoint=%s)", msg, e.Endpoint)
+}
+
+// summarizeErrorMessage extracts a human-readable message from a raw API
+// response body. If the body is JSON with an error.message field, that short
+// message is returned instead of the full JSON blob.
+func summarizeErrorMessage(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return raw
+	}
+	// Try to extract "error.message" from JSON API responses.
+	if strings.HasPrefix(raw, "{") {
+		var parsed struct {
+			Error struct {
+				Message string `json:"message"`
+				Code    int    `json:"code"`
+			} `json:"error"`
+		}
+		if json.Unmarshal([]byte(raw), &parsed) == nil && parsed.Error.Message != "" {
+			return parsed.Error.Message
+		}
+	}
+	// Truncate overly long non-JSON messages.
+	const maxLen = 300
+	if len(raw) > maxLen {
+		return raw[:maxLen] + "…"
+	}
+	return raw
 }

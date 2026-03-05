@@ -2188,9 +2188,9 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		}
 		lastErr = err
 
-		// Only fallback on "no available account" exhaustion.
-		// Non-retriable errors (format, model_not_found, missing_project) should not fallback.
-		if !errors.Is(err, ErrNoAvailableAccount) {
+		// Try next provider in the fallback chain unless the error is
+		// clearly request-level (would fail on any provider).
+		if !shouldTryNextProvider(err) {
 			break
 		}
 		if isFallback {
@@ -2963,6 +2963,25 @@ func deriveFailureReason(err error) core.FailureReason {
 		return failureErr.Reason
 	}
 	return core.ClassifyFailure(err.Error())
+}
+
+// shouldTryNextProvider decides if HandleChat should try the next provider in
+// the fallback chain. Provider-level errors (auth, billing, rate limit, etc.)
+// should fallback; request-level errors (format) should not.
+func shouldTryNextProvider(err error) bool {
+	if errors.Is(err, ErrNoAvailableAccount) {
+		return true
+	}
+	if errors.Is(err, ErrGeminiMissingProject) || errors.Is(err, ErrToolsNotSupported) {
+		return true
+	}
+	var fe *provider.FailureError
+	if errors.As(err, &fe) {
+		// Format errors are likely request-level — retrying another provider
+		// with the same payload would also fail.
+		return fe.Reason != core.FailureFormat
+	}
+	return false
 }
 
 type geminiProjectDiscoveryProvider interface {
