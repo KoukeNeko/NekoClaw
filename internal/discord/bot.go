@@ -21,8 +21,6 @@ const discordMessageLimit = 2000
 type Bot struct {
 	session     *discordgo.Session
 	svc         *app.Service
-	provider    string
-	model       string
 	activeChans map[string]bool // channels where bot responds to all messages
 
 	ctx    context.Context
@@ -33,8 +31,6 @@ type Bot struct {
 // Config holds the configuration needed to create a Discord bot.
 type Config struct {
 	Token          string   // Discord bot token (required)
-	Provider       string   // default provider ID
-	Model          string   // default model ID
 	ActiveChannels []string // channel IDs that respond to all messages
 }
 
@@ -65,8 +61,6 @@ func New(svc *app.Service, cfg Config) (*Bot, error) {
 	return &Bot{
 		session:     dg,
 		svc:         svc,
-		provider:    cfg.Provider,
-		model:       cfg.Model,
 		activeChans: activeChans,
 	}, nil
 }
@@ -166,8 +160,8 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	resp, err := b.svc.HandleChat(b.ctx, core.ChatRequest{
 		SessionID:   sessionID,
 		Surface:     core.SurfaceDiscord,
-		Provider:    b.provider,
-		Model:       b.model,
+		Provider:    b.svc.GetDefaultProvider(),
+		Model:       b.svc.GetDefaultModel(),
 		Message:     text,
 		EnableTools: true,
 	})
