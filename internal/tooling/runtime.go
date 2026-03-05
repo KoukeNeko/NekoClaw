@@ -104,7 +104,10 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			if err != nil {
 				return RunResult{}, err
 			}
-			usage.InputTokens += turnResp.Usage.InputTokens
+			// Each turn's InputTokens includes the full context (history + tool
+			// results), so we take the latest value instead of summing.
+			// OutputTokens are cumulative across all turns.
+			usage.InputTokens = turnResp.Usage.InputTokens
 			usage.OutputTokens += turnResp.Usage.OutputTokens
 			usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 			if txt := strings.TrimSpace(turnResp.Text); txt != "" {
