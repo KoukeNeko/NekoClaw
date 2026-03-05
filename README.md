@@ -4,10 +4,13 @@ Go-based agent runtime with:
 
 - TUI chat client
 - HTTP API for future Web UI
-- Discord event ingress API
+- Discord bot (emoji reactions, per-channel sessions, slash commands)
+- Telegram bot (placeholder message editing, per-chat sessions, slash commands)
 - Pluggable LLM provider architecture
 - Account pool cooldown/failover scheduler
 - Context compression (soft trim, hard clear, sliding window)
+- Persona system with template rendering and few-shot anchors
+- MCP (Model Context Protocol) tool integration
 
 ## Quick Start
 
@@ -187,6 +190,66 @@ Create `accounts.json` in repo root:
 }
 ```
 
+## Discord Bot
+
+NekoClaw includes a built-in Discord bot that runs alongside all modes (api/tui/both).
+
+### Configuration
+
+Set via environment variable or TUI Settings > Discord:
+
+- `DISCORD_BOT_TOKEN` — Bot token (env takes precedence over config.json)
+
+TUI settings also support:
+
+- **Reply Mode** — Toggle whether the bot replies to the original message
+- **Console Channel** — Channel ID for bot log output (startup, errors, session resets, persona changes)
+
+### Bot Commands
+
+| Command | Description |
+|---------|-------------|
+| `/reset` | Start a new conversation (old session preserved, accessible from TUI Sessions) |
+| `/persona` | List available personas |
+| `/persona <name>` | Switch to a persona (case-insensitive, supports substring match) |
+| `/persona off` | Deactivate current persona |
+
+### Behavior
+
+- Responds to: `@mention`, reply to bot, or DM
+- Emoji lifecycle: 👀 (received) → 🔄 (processing) → ✅ (done)
+- Per-channel sequential message queue
+- Each channel has its own independent session
+- Typing indicator every 8 seconds
+
+## Telegram Bot
+
+NekoClaw includes a built-in Telegram bot using long polling.
+
+### Configuration
+
+Set via environment variable or TUI Settings > Telegram:
+
+- `TELEGRAM_BOT_TOKEN` — Bot token (env takes precedence over config.json)
+
+### Bot Commands
+
+| Command | Description |
+|---------|-------------|
+| `/reset` | Start a new conversation |
+| `/persona` | List available personas |
+| `/persona <name>` | Switch to a persona |
+| `/persona off` | Deactivate current persona |
+
+### Behavior
+
+- Responds to: private chat, `@mention`, reply to bot, or commands
+- Placeholder message ("🔄 處理中...") edited with final reply
+- Per-chat sequential message queue
+- Each chat has its own independent session
+- Typing indicator every 4 seconds
+- Message limit: 4096 characters (auto-split)
+
 ## API Endpoints
 
 - `GET /healthz`
@@ -211,6 +274,9 @@ Create `accounts.json` in repo root:
 - `GET /v1/auth/anthropic/profiles`
 - `POST /v1/auth/anthropic/use`
 - `POST /v1/auth/anthropic/delete`
+
+- `GET/PUT /v1/discord/config`
+- `GET/PUT /v1/telegram/config`
 
 ## Architecture Notes
 
