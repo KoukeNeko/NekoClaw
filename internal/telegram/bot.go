@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -14,8 +13,11 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/doeshing/nekoclaw/internal/app"
 	"github.com/doeshing/nekoclaw/internal/core"
+	"github.com/doeshing/nekoclaw/internal/logger"
 	"github.com/doeshing/nekoclaw/internal/mcp"
 )
+
+var logTelegram = logger.New("telegram", logger.Blue)
 
 // telegramMessageLimit is the maximum length of a single Telegram message.
 const telegramMessageLimit = 4096
@@ -74,7 +76,7 @@ func New(svc *app.Service, cfg Config) (*Bot, error) {
 func (b *Bot) Start(ctx context.Context) error {
 	b.ctx, b.cancel = context.WithCancel(ctx)
 
-	log.Printf("event=telegram_bot_started user=%s", b.api.Self.UserName)
+	logTelegram.Logf("bot started: user=%s", b.api.Self.UserName)
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 30
@@ -273,7 +275,7 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 	}
 
 	if err != nil {
-		log.Printf("event=telegram_chat_error chat=%d user=%d error=%q", chatID, msg.From.ID, err)
+		logTelegram.Errorf("chat error: chat=%d user=%d error=%v", chatID, msg.From.ID, err)
 		b.sendReply(chatID, msg.MessageID, "⚠️ "+err.Error())
 		return
 	}
@@ -320,7 +322,7 @@ func (b *Bot) extractImages(msg *tgbotapi.Message) []core.ImageData {
 		largest := msg.Photo[len(msg.Photo)-1]
 		img, err := b.downloadTelegramFile(largest.FileID, "photo.jpg", "image/jpeg")
 		if err != nil {
-			log.Printf("event=telegram_image_download_error file_id=%s error=%q", largest.FileID, err)
+			logTelegram.Errorf("image download error: file_id=%s error=%v", largest.FileID, err)
 		} else {
 			images = append(images, img)
 		}
@@ -330,7 +332,7 @@ func (b *Bot) extractImages(msg *tgbotapi.Message) []core.ImageData {
 	if msg.Document != nil && isImageMIME(msg.Document.MimeType) {
 		img, err := b.downloadTelegramFile(msg.Document.FileID, msg.Document.FileName, msg.Document.MimeType)
 		if err != nil {
-			log.Printf("event=telegram_image_download_error file_id=%s error=%q", msg.Document.FileID, err)
+			logTelegram.Errorf("image download error: file_id=%s error=%v", msg.Document.FileID, err)
 		} else {
 			images = append(images, img)
 		}
@@ -394,7 +396,7 @@ func (b *Bot) handleCommand(msg *tgbotapi.Message) {
 	switch msg.Command() {
 	case "reset":
 		newID := b.resetSession(chatID)
-		log.Printf("event=telegram_session_reset chat=%d new_session=%s", chatID, newID)
+		logTelegram.Logf("session reset: chat=%d new_session=%s", chatID, newID)
 		b.sendReply(chatID, msg.MessageID, "✅ 對話已重置，開始新的對話。")
 
 	case "persona":
@@ -568,7 +570,7 @@ func (b *Bot) editMessage(chatID int64, messageID int, text string) {
 	}
 	edit := tgbotapi.NewEditMessageText(chatID, messageID, text)
 	if _, err := b.api.Send(edit); err != nil {
-		log.Printf("event=telegram_edit_error chat=%d message=%d error=%q", chatID, messageID, err)
+		logTelegram.Errorf("edit error: chat=%d message=%d error=%v", chatID, messageID, err)
 	}
 }
 
@@ -580,7 +582,7 @@ func (b *Bot) sendReply(chatID int64, replyToID int, content string) {
 			msg.ReplyToMessageID = replyToID
 		}
 		if _, err := b.api.Send(msg); err != nil {
-			log.Printf("event=telegram_send_error chat=%d error=%q", chatID, err)
+			logTelegram.Errorf("send error: chat=%d error=%v", chatID, err)
 			return
 		}
 	}

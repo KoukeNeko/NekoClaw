@@ -2,10 +2,13 @@ package core
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"time"
+
+	"github.com/doeshing/nekoclaw/internal/logger"
 )
+
+var logSession = logger.New("session", logger.Blue)
 
 // SessionLifecycle manages automatic session resets, rotation, and housekeeping.
 type SessionLifecycle struct {
@@ -86,7 +89,7 @@ func (l *SessionLifecycle) pastDailyResetBoundary(lastUpdate time.Time) bool {
 // its cache so a new session can start fresh.
 func (l *SessionLifecycle) RotateSession(sessionID string) error {
 	archivedID := fmt.Sprintf("%s_archived_%s", sessionID, time.Now().Format("20060102_150405"))
-	log.Printf("event=session_rotate session_id=%s archived_as=%s", sessionID, archivedID)
+	logSession.Logf("rotate: session_id=%s archived_as=%s", sessionID, archivedID)
 
 	l.store.mu.Lock()
 	defer l.store.mu.Unlock()
@@ -135,20 +138,20 @@ func (l *SessionLifecycle) RunHousekeeping() error {
 	for _, meta := range sessions {
 		// Retention: delete sessions older than RetentionDays.
 		if meta.UpdatedAt.Before(cutoff) {
-			log.Printf("event=housekeeping_delete session_id=%s reason=retention updated_at=%s",
+			logSession.Logf("housekeeping delete: session_id=%s reason=retention updated_at=%s",
 				meta.SessionID, meta.UpdatedAt.Format(time.RFC3339))
 			if err := l.store.DeleteSession(meta.SessionID); err != nil {
-				log.Printf("event=housekeeping_delete_error session_id=%s error=%q", meta.SessionID, err)
+				logSession.Errorf("housekeeping delete error: session_id=%s error=%v", meta.SessionID, err)
 			}
 			continue
 		}
 
 		// Entry cap: rotate sessions exceeding MaxEntries.
 		if meta.MessageCount > l.config.MaxEntries {
-			log.Printf("event=housekeeping_rotate session_id=%s reason=max_entries count=%d",
+			logSession.Logf("housekeeping rotate: session_id=%s reason=max_entries count=%d",
 				meta.SessionID, meta.MessageCount)
 			if err := l.RotateSession(meta.SessionID); err != nil {
-				log.Printf("event=housekeeping_rotate_error session_id=%s error=%q", meta.SessionID, err)
+				logSession.Errorf("housekeeping rotate error: session_id=%s error=%v", meta.SessionID, err)
 			}
 			continue
 		}
@@ -157,10 +160,10 @@ func (l *SessionLifecycle) RunHousekeeping() error {
 		if l.store.dataDir != "" {
 			path := l.store.transcriptPath(meta.SessionID)
 			if info, err := os.Stat(path); err == nil && info.Size() > l.config.MaxFileSize {
-				log.Printf("event=housekeeping_rotate session_id=%s reason=max_file_size size=%d",
+				logSession.Logf("housekeeping rotate: session_id=%s reason=max_file_size size=%d",
 					meta.SessionID, info.Size())
 				if err := l.RotateSession(meta.SessionID); err != nil {
-					log.Printf("event=housekeeping_rotate_error session_id=%s error=%q", meta.SessionID, err)
+					logSession.Errorf("housekeeping rotate error: session_id=%s error=%v", meta.SessionID, err)
 				}
 			}
 		}

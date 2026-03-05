@@ -5,14 +5,17 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/doeshing/nekoclaw/internal/logger"
 )
+
+var logStore = logger.New("store", logger.Blue)
 
 type metadataFile struct {
 	Sessions map[string]SessionMetadata `json:"sessions"`
@@ -223,7 +226,7 @@ func (s *SessionStore) ensureLoadedLocked(sessionID string) {
 		// Try typed entry first.
 		var entry SessionEntry
 		if err := json.Unmarshal(line, &entry); err != nil {
-			log.Printf("event=session_line_corrupt session_id=%s error=%q", sessionID, err)
+			logStore.Warnf("line corrupt: session_id=%s error=%v", sessionID, err)
 			continue
 		}
 
@@ -259,7 +262,7 @@ func (s *SessionStore) appendToTranscriptLocked(sessionID string, entries []Sess
 	path := s.transcriptPath(sessionID)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		log.Printf("event=session_append_error session_id=%s error=%q", sessionID, err)
+		logStore.Errorf("append error: session_id=%s error=%v", sessionID, err)
 		return
 	}
 	defer file.Close()
@@ -267,7 +270,7 @@ func (s *SessionStore) appendToTranscriptLocked(sessionID string, entries []Sess
 	encoder := json.NewEncoder(file)
 	for _, entry := range entries {
 		if err := encoder.Encode(entry); err != nil {
-			log.Printf("event=session_encode_error session_id=%s error=%q", sessionID, err)
+			logStore.Errorf("encode error: session_id=%s error=%v", sessionID, err)
 		}
 	}
 }
@@ -329,17 +332,17 @@ func (s *SessionStore) writeMetadataLocked() {
 	file := metadataFile{Sessions: s.metadata}
 	payload, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
-		log.Printf("event=metadata_marshal_error error=%q", err)
+		logStore.Errorf("metadata marshal error: %v", err)
 		return
 	}
 	metaPath := filepath.Join(s.dataDir, "metadata.json")
 	tmp := metaPath + ".tmp"
 	if err := os.WriteFile(tmp, payload, 0o644); err != nil {
-		log.Printf("event=metadata_write_error error=%q", err)
+		logStore.Errorf("metadata write error: %v", err)
 		return
 	}
 	if err := os.Rename(tmp, metaPath); err != nil {
-		log.Printf("event=metadata_rename_error error=%q", err)
+		logStore.Errorf("metadata rename error: %v", err)
 	}
 }
 

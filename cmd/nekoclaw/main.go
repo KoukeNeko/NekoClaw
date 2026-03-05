@@ -22,11 +22,14 @@ import (
 	"github.com/doeshing/nekoclaw/internal/auth"
 	"github.com/doeshing/nekoclaw/internal/core"
 	"github.com/doeshing/nekoclaw/internal/discord"
+	"github.com/doeshing/nekoclaw/internal/logger"
 	"github.com/doeshing/nekoclaw/internal/memory"
 	"github.com/doeshing/nekoclaw/internal/provider"
 	"github.com/doeshing/nekoclaw/internal/telegram"
 	"github.com/doeshing/nekoclaw/internal/tui"
 )
+
+var logSystem = logger.New("system", logger.White)
 
 type accountFile struct {
 	Accounts []core.Account `json:"accounts"`
@@ -74,16 +77,16 @@ func main() {
 
 	// Start MCP server connections (non-fatal on failure).
 	if err := service.StartMCP(context.Background()); err != nil {
-		log.Printf("event=mcp_start_error error=%q", err)
+		logSystem.Errorf("mcp start: %v", err)
 	}
 
 	// Load persona definitions (non-fatal on failure).
 	if err := service.StartPersonas(); err != nil {
-		log.Printf("event=personas_start_error error=%q", err)
+		logSystem.Errorf("personas start: %v", err)
 	}
 	defer func() {
 		if err := service.StopMCP(); err != nil {
-			log.Printf("event=mcp_stop_error error=%q", err)
+			logSystem.Errorf("mcp stop: %v", err)
 		}
 	}()
 
@@ -94,13 +97,13 @@ func main() {
 	// Start Discord bot if token is configured (runs in all modes).
 	discordBot, discordErr := startDiscordBot(service)
 	if discordErr != nil {
-		log.Printf("event=discord_bot_init_error error=%q", discordErr)
+		logSystem.Errorf("discord bot init: %v", discordErr)
 	}
 
 	// Start Telegram bot if token is configured (runs in all modes).
 	telegramBot, telegramErr := startTelegramBot(service)
 	if telegramErr != nil {
-		log.Printf("event=telegram_bot_init_error error=%q", telegramErr)
+		logSystem.Errorf("telegram bot init: %v", telegramErr)
 	}
 
 	switch runMode {
@@ -114,7 +117,7 @@ func main() {
 			go func() {
 				defer wg.Done()
 				if err := discordBot.Start(ctx); err != nil {
-					log.Printf("event=discord_bot_error error=%q", err)
+					logSystem.Errorf("discord bot: %v", err)
 				}
 			}()
 		}
@@ -123,7 +126,7 @@ func main() {
 			go func() {
 				defer wg.Done()
 				if err := telegramBot.Start(ctx); err != nil {
-					log.Printf("event=telegram_bot_error error=%q", err)
+					logSystem.Errorf("telegram bot: %v", err)
 				}
 			}()
 		}
@@ -141,14 +144,14 @@ func main() {
 		if discordBot != nil {
 			go func() {
 				if err := discordBot.Start(ctx); err != nil {
-					log.Printf("event=discord_bot_error error=%q", err)
+					logSystem.Errorf("discord bot: %v", err)
 				}
 			}()
 		}
 		if telegramBot != nil {
 			go func() {
 				if err := telegramBot.Start(ctx); err != nil {
-					log.Printf("event=telegram_bot_error error=%q", err)
+					logSystem.Errorf("telegram bot: %v", err)
 				}
 			}()
 		}
@@ -167,7 +170,7 @@ func main() {
 			go func() {
 				defer wg.Done()
 				if err := discordBot.Start(ctx); err != nil {
-					log.Printf("event=discord_bot_error error=%q", err)
+					logSystem.Errorf("discord bot: %v", err)
 				}
 			}()
 		}
@@ -176,7 +179,7 @@ func main() {
 			go func() {
 				defer wg.Done()
 				if err := telegramBot.Start(ctx); err != nil {
-					log.Printf("event=telegram_bot_error error=%q", err)
+					logSystem.Errorf("telegram bot: %v", err)
 				}
 			}()
 		}
@@ -228,7 +231,7 @@ func startDiscordBot(svc *app.Service) (*discord.Bot, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("event=discord_bot_configured")
+	logSystem.Logf("discord bot configured")
 	return bot, nil
 }
 
@@ -254,7 +257,7 @@ func startTelegramBot(svc *app.Service) (*telegram.Bot, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("event=telegram_bot_configured")
+	logSystem.Logf("telegram bot configured")
 	return bot, nil
 }
 
@@ -270,19 +273,23 @@ func configureRuntimeLogging(runMode string, authDir string) func() {
 		}
 		if logPath == "" {
 			log.SetOutput(io.Discard)
+			logger.SetOutput(io.Discard)
 			return func() {}
 		}
 		if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 			log.SetOutput(io.Discard)
+			logger.SetOutput(io.Discard)
 			return func() {}
 		}
 		file, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
 			log.SetOutput(io.Discard)
+			logger.SetOutput(io.Discard)
 			return func() {}
 		}
 		log.SetOutput(file)
-		log.Printf("event=logging_redirect mode=%s path=%s", runMode, logPath)
+		logger.SetOutput(file)
+		logSystem.Logf("logging redirect: mode=%s path=%s", runMode, logPath)
 		return func() {
 			_ = file.Close()
 		}
@@ -348,7 +355,7 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		var idxErr error
 		searchIndex, idxErr = memory.NewSearchIndex(dbPath)
 		if idxErr != nil {
-			log.Printf("event=search_index_init_error error=%q", idxErr)
+			logSystem.Errorf("search index init: %v", idxErr)
 		}
 	}
 
@@ -471,7 +478,7 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 
 	appConfig, configErr := core.LoadConfig(configDir)
 	if configErr != nil {
-		log.Printf("event=config_load_error error=%q", configErr)
+		logSystem.Errorf("config load: %v", configErr)
 	}
 	svc.SetDiscordConfig(appConfig.Discord)
 	svc.SetTelegramConfig(appConfig.Telegram)
@@ -547,8 +554,7 @@ func hydrateGeminiProfiles(svc *app.Service, store *auth.Store) error {
 		if projectID == "" {
 			envProject := resolveGoogleCloudProject()
 			if envProject == "" {
-				log.Printf(
-					"event=profile_hydrated_skipped provider=google-gemini-cli profile_id=%s reason=missing_project",
+				logSystem.Warnf("profile skipped: provider=google-gemini-cli profile_id=%s reason=missing_project",
 					profile.ProfileID,
 				)
 				continue
@@ -569,8 +575,7 @@ func hydrateGeminiProfiles(svc *app.Service, store *auth.Store) error {
 				"project_source": projectSource,
 			},
 		})
-		log.Printf(
-			"event=profile_hydrated provider=google-gemini-cli profile_id=%s endpoint=%s project_source=%s",
+		logSystem.Logf("profile hydrated: provider=google-gemini-cli profile_id=%s endpoint=%s project_source=%s",
 			profile.ProfileID,
 			strings.TrimSpace(profile.Endpoint),
 			projectSource,
@@ -612,8 +617,7 @@ func hydrateAIStudioProfiles(svc *app.Service, store *auth.Store) error {
 			},
 		}
 		pool.SetCredential(profile.ProfileID, account)
-		log.Printf(
-			"event=profile_hydrated provider=google-ai-studio profile_id=%s key_hint=%s",
+		logSystem.Logf("profile hydrated: provider=google-ai-studio profile_id=%s key_hint=%s",
 			profile.ProfileID,
 			strings.TrimSpace(profile.KeyHint),
 		)
@@ -658,8 +662,7 @@ func hydrateAnthropicProfiles(svc *app.Service, store *auth.Store) error {
 			},
 		}
 		pool.SetCredential(profile.ProfileID, account)
-		log.Printf(
-			"event=profile_hydrated provider=anthropic profile_id=%s type=%s key_hint=%s",
+		logSystem.Logf("profile hydrated: provider=anthropic profile_id=%s type=%s key_hint=%s",
 			profile.ProfileID,
 			accountType,
 			strings.TrimSpace(profile.KeyHint),
@@ -701,8 +704,7 @@ func hydrateOpenAIProfiles(svc *app.Service, store *auth.Store) error {
 			},
 		}
 		pool.SetCredential(profile.ProfileID, account)
-		log.Printf(
-			"event=profile_hydrated provider=openai profile_id=%s key_hint=%s",
+		logSystem.Logf("profile hydrated: provider=openai profile_id=%s key_hint=%s",
 			profile.ProfileID,
 			strings.TrimSpace(profile.KeyHint),
 		)
@@ -748,8 +750,7 @@ func hydrateOpenAICodexProfiles(svc *app.Service, store *auth.Store) error {
 			},
 		}
 		pool.SetCredential(profile.ProfileID, account)
-		log.Printf(
-			"event=profile_hydrated provider=openai-codex profile_id=%s type=%s key_hint=%s",
+		logSystem.Logf("profile hydrated: provider=openai-codex profile_id=%s type=%s key_hint=%s",
 			profile.ProfileID,
 			accountType,
 			strings.TrimSpace(profile.KeyHint),
@@ -1329,7 +1330,7 @@ func runHousekeepingLoop(lifecycle *core.SessionLifecycle) {
 	defer ticker.Stop()
 	for range ticker.C {
 		if err := lifecycle.RunHousekeeping(); err != nil {
-			log.Printf("event=housekeeping_error error=%q", err)
+			logSystem.Errorf("housekeeping: %v", err)
 		}
 	}
 }

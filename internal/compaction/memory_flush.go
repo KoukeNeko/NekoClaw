@@ -2,7 +2,6 @@ package compaction
 
 import (
 	"context"
-	"log"
 	"strings"
 
 	"github.com/doeshing/nekoclaw/internal/core"
@@ -11,8 +10,8 @@ import (
 )
 
 const (
-	noReplyMarker            = "NO_REPLY"
-	defaultSoftThresholdGap  = 24000
+	noReplyMarker           = "NO_REPLY"
+	defaultSoftThresholdGap = 24000
 )
 
 // MemoryFlusher performs a "silent agent turn" before compaction to extract
@@ -68,7 +67,7 @@ func (f *MemoryFlusher) Flush(ctx context.Context, entries []core.SessionEntry) 
 
 	content := strings.TrimSpace(resp.Text)
 	if content == "" || content == noReplyMarker {
-		log.Printf("event=memory_flush_skip reason=no_content")
+		logCompact.Logf("memory flush skip: reason=no_content")
 		return "", nil
 	}
 
@@ -76,7 +75,7 @@ func (f *MemoryFlusher) Flush(ctx context.Context, entries []core.SessionEntry) 
 		return content, err
 	}
 
-	log.Printf("event=memory_flush_complete len=%d", len(content))
+	logCompact.Logf("memory flush complete: len=%d", len(content))
 	return content, nil
 }
 

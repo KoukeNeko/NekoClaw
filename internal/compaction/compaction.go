@@ -3,13 +3,15 @@ package compaction
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/doeshing/nekoclaw/internal/core"
+	"github.com/doeshing/nekoclaw/internal/logger"
 	"github.com/doeshing/nekoclaw/internal/provider"
 )
+
+var logCompact = logger.New("compact", logger.Cyan)
 
 const (
 	DefaultReserveTokens    = 16384
@@ -199,7 +201,7 @@ func (c *Compactor) summarizeDropped(ctx context.Context, dropped []core.Session
 		return "History compacted (no summary generated).", nil
 	}
 
-	log.Printf("event=compaction_summary dropped=%d dropped_tokens=%d summary_len=%d",
+	logCompact.Logf("summary: dropped=%d dropped_tokens=%d summary_len=%d",
 		len(dropped), EstimateEntriesTokens(dropped), len(summary))
 
 	return summary, nil

@@ -6,13 +6,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/doeshing/nekoclaw/internal/auth"
+	"github.com/doeshing/nekoclaw/internal/logger"
 	"github.com/doeshing/nekoclaw/internal/compaction"
 	"github.com/doeshing/nekoclaw/internal/contextwindow"
 	"github.com/doeshing/nekoclaw/internal/core"
@@ -22,6 +22,8 @@ import (
 	"github.com/doeshing/nekoclaw/internal/provider"
 	"github.com/doeshing/nekoclaw/internal/tooling"
 )
+
+var logService = logger.New("service", logger.White)
 
 var ErrProviderNotFound = errors.New("provider not found")
 var ErrNoAvailableAccount = errors.New("no available account")
@@ -787,8 +789,8 @@ func (s *Service) StartGeminiOAuth(ctx context.Context, req GeminiOAuthStartRequ
 		return auth.StartResult{}, err
 	}
 
-	log.Printf(
-		"event=oauth_start provider=google-gemini-cli profile_id=%s oauth_mode=%s mode=%s expires_at=%s",
+	logService.Logf(
+		"oauth start: provider=google-gemini-cli profile_id=%s oauth_mode=%s mode=%s expires_at=%s",
 		strings.TrimSpace(req.ProfileID),
 		start.OAuthMode,
 		start.Mode,
@@ -1011,8 +1013,8 @@ func (s *Service) AddAIStudioKey(ctx context.Context, req AIStudioAddKeyRequest)
 		_ = pool.SetPreferred(profileID)
 	}
 	s.syncProfileState("google-ai-studio", profileID)
-	log.Printf(
-		"event=ai_studio_key_add provider=google-ai-studio profile_id=%s key_hint=%s preferred=%t",
+	logService.Logf(
+		"ai studio key add: provider=google-ai-studio profile_id=%s key_hint=%s preferred=%t",
 		profileID,
 		keyHint,
 		preferred,
@@ -1114,7 +1116,7 @@ func (s *Service) UseAIStudioProfile(profileID string) error {
 			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
 		}
 	}
-	log.Printf("event=ai_studio_key_use provider=google-ai-studio profile_id=%s", profileID)
+	logService.Logf("ai studio key use: provider=google-ai-studio profile_id=%s", profileID)
 	return nil
 }
 
@@ -1147,7 +1149,7 @@ func (s *Service) DeleteAIStudioProfile(profileID string) error {
 	if pool != nil {
 		pool.RemoveAccount(profileID)
 	}
-	log.Printf("event=ai_studio_key_delete provider=google-ai-studio profile_id=%s", profileID)
+	logService.Logf("ai studio key delete: provider=google-ai-studio profile_id=%s", profileID)
 	return nil
 }
 
@@ -1252,7 +1254,7 @@ func (s *Service) ListModels(ctx context.Context, providerID, profileID string) 
 
 	models, err := catalogProvider.ListModels(ctx, account)
 	if err != nil {
-		log.Printf("event=list_models_error provider=%s error=%v", providerID, err)
+		logService.Errorf("list models: provider=%s error=%v", providerID, err)
 		// Return fallback on error so the TUI still shows something.
 		return ModelsResult{
 			Provider:  providerID,
@@ -1404,7 +1406,7 @@ func (s *Service) UseAnthropicProfile(profileID string) error {
 			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
 		}
 	}
-	log.Printf("event=anthropic_profile_use provider=anthropic profile_id=%s", profileID)
+	logService.Logf("anthropic profile use: provider=anthropic profile_id=%s", profileID)
 	return nil
 }
 
@@ -1438,7 +1440,7 @@ func (s *Service) DeleteAnthropicProfile(profileID string) error {
 	if pool != nil {
 		pool.RemoveAccount(profileID)
 	}
-	log.Printf("event=anthropic_profile_delete provider=anthropic profile_id=%s", profileID)
+	logService.Logf("anthropic profile delete: provider=anthropic profile_id=%s", profileID)
 	return nil
 }
 
@@ -1567,7 +1569,7 @@ func (s *Service) UseOpenAIProfile(providerID, profileID string) error {
 			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
 		}
 	}
-	log.Printf("event=openai_profile_use provider=%s profile_id=%s", providerID, profileID)
+	logService.Logf("openai profile use: provider=%s profile_id=%s", providerID, profileID)
 	return nil
 }
 
@@ -1605,7 +1607,7 @@ func (s *Service) DeleteOpenAIProfile(providerID, profileID string) error {
 	if pool != nil {
 		pool.RemoveAccount(profileID)
 	}
-	log.Printf("event=openai_profile_delete provider=%s profile_id=%s", providerID, profileID)
+	logService.Logf("openai profile delete: provider=%s profile_id=%s", providerID, profileID)
 	return nil
 }
 
@@ -1648,8 +1650,8 @@ func (s *Service) StartAnthropicBrowserLogin(
 	if err != nil {
 		return AnthropicBrowserStartResult{}, err
 	}
-	log.Printf(
-		"event=anthropic_browser_login_start provider=anthropic job_id=%s mode=%s status=%s",
+	logService.Logf(
+		"anthropic browser login start: provider=anthropic job_id=%s mode=%s status=%s",
 		snapshot.JobID,
 		snapshot.Mode,
 		snapshot.Status,
@@ -1685,15 +1687,15 @@ func (s *Service) GetAnthropicBrowserLoginJob(
 		})
 	}
 	if snapshot.Status == string(auth.AnthropicLoginStatusCompleted) {
-		log.Printf(
-			"event=anthropic_browser_login_complete provider=anthropic job_id=%s profile_id=%s",
+		logService.Logf(
+			"anthropic browser login complete: provider=anthropic job_id=%s profile_id=%s",
 			snapshot.JobID,
 			snapshot.ProfileID,
 		)
 	}
 	if snapshot.Status == string(auth.AnthropicLoginStatusFailed) {
-		log.Printf(
-			"event=anthropic_browser_login_failed provider=anthropic job_id=%s failure_reason=%s",
+		logService.Errorf(
+			"anthropic browser login failed: provider=anthropic job_id=%s failure_reason=%s",
 			snapshot.JobID,
 			snapshot.ErrorCode,
 		)
@@ -1785,8 +1787,8 @@ func (s *Service) CancelAnthropicBrowserLogin(
 	if err != nil {
 		return auth.AnthropicLoginCancelResult{}, err
 	}
-	log.Printf(
-		"event=anthropic_browser_login_cancelled provider=anthropic job_id=%s status=%s",
+	logService.Logf(
+		"anthropic browser login cancelled: provider=anthropic job_id=%s status=%s",
 		result.JobID,
 		result.Status,
 	)
@@ -1833,8 +1835,8 @@ func (s *Service) StartOpenAICodexBrowserLogin(
 	if err != nil {
 		return OpenAICodexBrowserStartResult{}, err
 	}
-	log.Printf(
-		"event=openai_codex_browser_login_start provider=openai-codex job_id=%s mode=%s status=%s",
+	logService.Logf(
+		"openai codex browser login start: provider=openai-codex job_id=%s mode=%s status=%s",
 		snapshot.JobID,
 		snapshot.Mode,
 		snapshot.Status,
@@ -1870,15 +1872,15 @@ func (s *Service) GetOpenAICodexBrowserLoginJob(
 		})
 	}
 	if snapshot.Status == string(auth.OpenAICodexLoginStatusCompleted) {
-		log.Printf(
-			"event=openai_codex_browser_login_complete provider=openai-codex job_id=%s profile_id=%s",
+		logService.Logf(
+			"openai codex browser login complete: provider=openai-codex job_id=%s profile_id=%s",
 			snapshot.JobID,
 			snapshot.ProfileID,
 		)
 	}
 	if snapshot.Status == string(auth.OpenAICodexLoginStatusFailed) {
-		log.Printf(
-			"event=openai_codex_browser_login_failed provider=openai-codex job_id=%s failure_reason=%s",
+		logService.Errorf(
+			"openai codex browser login failed: provider=openai-codex job_id=%s failure_reason=%s",
 			snapshot.JobID,
 			snapshot.ErrorCode,
 		)
@@ -1972,8 +1974,8 @@ func (s *Service) CancelOpenAICodexBrowserLogin(
 	if err != nil {
 		return auth.OpenAICodexLoginCancelResult{}, err
 	}
-	log.Printf(
-		"event=openai_codex_browser_login_cancelled provider=openai-codex job_id=%s status=%s",
+	logService.Logf(
+		"openai codex browser login cancelled: provider=openai-codex job_id=%s status=%s",
 		result.JobID,
 		result.Status,
 	)
@@ -2069,8 +2071,8 @@ func (s *Service) addOpenAICredential(req commonOpenAIAddRequest) (OpenAIAddCred
 	}
 
 	s.syncProfileState(providerID, profileID)
-	log.Printf(
-		"event=openai_profile_add provider=%s profile_id=%s type=%s key_hint=%s preferred=%t",
+	logService.Logf(
+		"openai profile add: provider=%s profile_id=%s type=%s key_hint=%s preferred=%t",
 		providerID,
 		profileID,
 		accountType,
@@ -2159,8 +2161,8 @@ func (s *Service) addAnthropicCredential(req commonAnthropicAddRequest) (Anthrop
 	}
 
 	s.syncProfileState("anthropic", profileID)
-	log.Printf(
-		"event=anthropic_profile_add provider=anthropic profile_id=%s type=%s key_hint=%s preferred=%t",
+	logService.Logf(
+		"anthropic profile add: provider=anthropic profile_id=%s type=%s key_hint=%s preferred=%t",
 		profileID,
 		accountType,
 		keyHint,
@@ -2199,7 +2201,7 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 
 	// Check session lifecycle before processing.
 	if s.lifecycle != nil && s.lifecycle.ShouldReset(sessionID) {
-		log.Printf("event=session_auto_reset session_id=%s", sessionID)
+		logService.Logf("session auto reset: session_id=%s", sessionID)
 		_ = s.lifecycle.RotateSession(sessionID)
 	}
 
@@ -2249,8 +2251,8 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		})
 		if err == nil {
 			if isFallback {
-				log.Printf(
-					"event=fallback_success primary_provider=%s fallback_provider=%s fallback_model=%s actual_model=%s",
+				logService.Logf(
+					"fallback success: primary_provider=%s fallback_provider=%s fallback_model=%s actual_model=%s",
 					providerID, candidate.provider, candidateModel, resp.Model,
 				)
 			}
@@ -2264,8 +2266,8 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 			break
 		}
 		if isFallback {
-			log.Printf(
-				"event=fallback_exhausted primary_provider=%s fallback_provider=%s fallback_model=%s error=%q",
+			logService.Warnf(
+				"fallback exhausted: primary_provider=%s fallback_provider=%s fallback_model=%s error=%q",
 				providerID, candidate.provider, candidateModel, err,
 			)
 		}
@@ -2332,7 +2334,7 @@ func (s *Service) attemptSingleProvider(
 		currentTokens := compaction.EstimateEntriesTokens(entries)
 		if flusher.ShouldFlush(currentTokens, contextWindow, compaction.DefaultReserveTokens) {
 			if _, flushErr := flusher.Flush(ctx, entries); flushErr != nil {
-				log.Printf("event=memory_flush_error session_id=%s error=%q", sessionID, flushErr)
+				logService.Errorf("memory flush: session_id=%s error=%q", sessionID, flushErr)
 			}
 		}
 	}
@@ -2355,9 +2357,9 @@ func (s *Service) attemptSingleProvider(
 				DroppedMessages:  result.DroppedCount,
 			}
 			compressed = true
-			log.Printf("event=llm_compaction session_id=%s dropped=%d", sessionID, result.DroppedCount)
+			logService.Logf("llm compaction: session_id=%s dropped=%d", sessionID, result.DroppedCount)
 		} else if compactErr != nil {
-			log.Printf("event=llm_compaction_fallback session_id=%s error=%q", sessionID, compactErr)
+			logService.Warnf("llm compaction fallback: session_id=%s error=%q", sessionID, compactErr)
 		}
 	}
 
@@ -2378,7 +2380,7 @@ func (s *Service) attemptSingleProvider(
 	if s.memoryDir != "" {
 		memCtx, memErr := memory.LoadMemoryContext(s.memoryDir)
 		if memErr != nil {
-			log.Printf("event=memory_load_error error=%q", memErr)
+			logService.Errorf("memory load: error=%q", memErr)
 		} else if !memCtx.IsEmpty() {
 			memoryPrompt = memory.BuildSystemPrompt(memCtx)
 		}
@@ -2389,7 +2391,7 @@ func (s *Service) attemptSingleProvider(
 	if activePersona := s.activePersona(); activePersona != nil {
 		rendered, renderErr := persona.RenderSystemPrompt(activePersona, memoryPrompt)
 		if renderErr != nil {
-			log.Printf("event=persona_render_error persona=%s error=%q", activePersona.DirName, renderErr)
+			logService.Errorf("persona render: persona=%s error=%q", activePersona.DirName, renderErr)
 		} else {
 			systemMsg := core.Message{
 				Role:    core.RoleSystem,
@@ -2440,8 +2442,8 @@ func (s *Service) attemptSingleProvider(
 		if isDefaultModel {
 			resolvedModel, source := s.resolveDefaultModel(ctx, prov, providerID, account)
 			attemptModelID = resolvedModel
-			log.Printf(
-				"event=default_model_resolved provider=%s profile_id=%s source=%s model=%s",
+			logService.Logf(
+				"default model resolved: provider=%s profile_id=%s source=%s model=%s",
 				providerID,
 				account.ID,
 				source,
@@ -2524,7 +2526,7 @@ func (s *Service) attemptSingleProvider(
 						}
 						go func(entries []core.SessionEntry) {
 							if idxErr := s.searchIndex.Index(sessionID, entries); idxErr != nil {
-								log.Printf("event=search_index_error session_id=%s error=%q", sessionID, idxErr)
+								logService.Errorf("search index: session_id=%s error=%q", sessionID, idxErr)
 							}
 						}(newEntries)
 					}
@@ -2591,7 +2593,7 @@ func (s *Service) attemptSingleProvider(
 				newEntries = append(newEntries, core.MessageToEntry(assistant))
 				go func(entries []core.SessionEntry) {
 					if idxErr := s.searchIndex.Index(sessionID, entries); idxErr != nil {
-						log.Printf("event=search_index_error session_id=%s error=%q", sessionID, idxErr)
+						logService.Errorf("search index: session_id=%s error=%q", sessionID, idxErr)
 					}
 				}(newEntries)
 			}
@@ -2693,7 +2695,7 @@ func (s *Service) completeGeminiOAuth(
 	})
 	if err != nil {
 		if errors.Is(err, provider.ErrProjectDiscoveryFailed) {
-			log.Printf("event=project_discovery_failed provider=google-gemini-cli error=%q", err)
+			logService.Errorf("project discovery failed: provider=google-gemini-cli error=%q", err)
 		}
 		return GeminiOAuthCompleteResult{}, err
 	}
@@ -2703,7 +2705,7 @@ func (s *Service) completeGeminiOAuth(
 			"%w: Could not discover or provision a Google Cloud project. Set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID, then retry OAuth.",
 			provider.ErrProjectDiscoveryFailed,
 		)
-		log.Printf("event=project_discovery_failed provider=google-gemini-cli error=%q", err)
+		logService.Errorf("project discovery failed: provider=google-gemini-cli error=%q", err)
 		return GeminiOAuthCompleteResult{}, err
 	}
 
@@ -2719,7 +2721,7 @@ func (s *Service) completeGeminiOAuth(
 		ExpiresAt:    credential.ExpiresAt,
 	}
 	if err := store.SaveCredential("google-gemini-cli", profileID, savedCredential); err != nil {
-		log.Printf("event=oauth_complete provider=google-gemini-cli profile_id=%s status=credential_store_failed error=%q", profileID, err)
+		logService.Errorf("oauth complete: provider=google-gemini-cli profile_id=%s status=credential_store_failed error=%q", profileID, err)
 		return GeminiOAuthCompleteResult{}, err
 	}
 
@@ -2733,7 +2735,7 @@ func (s *Service) completeGeminiOAuth(
 	}
 	if err := store.UpsertProfile(meta); err != nil {
 		_ = store.DeleteCredential("google-gemini-cli", profileID)
-		log.Printf("event=oauth_complete provider=google-gemini-cli profile_id=%s status=metadata_store_failed error=%q", profileID, err)
+		logService.Errorf("oauth complete: provider=google-gemini-cli profile_id=%s status=metadata_store_failed error=%q", profileID, err)
 		return GeminiOAuthCompleteResult{}, err
 	}
 
@@ -2758,8 +2760,8 @@ func (s *Service) completeGeminiOAuth(
 		s.syncProfileState("google-gemini-cli", profileID)
 	}
 
-	log.Printf(
-		"event=oauth_complete provider=google-gemini-cli profile_id=%s endpoint=%s project_hash=%s",
+	logService.Logf(
+		"oauth complete: provider=google-gemini-cli profile_id=%s endpoint=%s project_hash=%s",
 		profileID,
 		credential.ActiveEndpoint,
 		hashProjectIDForLog(credential.ProjectID),
@@ -2867,7 +2869,7 @@ func (s *Service) maybeRefreshAccountCredential(
 	}
 	refreshed, changed, err := authProv.RefreshOAuthIfNeeded(ctx, oauthCredential)
 	if err != nil {
-		log.Printf("event=token_refresh provider=%s profile_id=%s status=failed error=%q", providerID, account.ID, err)
+		logService.Errorf("token refresh failed: provider=%s profile_id=%s error=%q", providerID, account.ID, err)
 		return account, err
 	}
 
@@ -2909,7 +2911,7 @@ func (s *Service) maybeRefreshAccountCredential(
 		return account, err
 	}
 	pool.SetCredential(account.ID, account)
-	log.Printf("event=token_refresh provider=%s profile_id=%s status=ok model=%s", providerID, account.ID, modelID)
+	logService.Logf("token refresh ok: provider=%s profile_id=%s model=%s", providerID, account.ID, modelID)
 	return account, nil
 }
 
@@ -2943,8 +2945,8 @@ func (s *Service) ensureGeminiProject(
 			Token: account.Token,
 		})
 		if err != nil {
-			log.Printf(
-				"event=project_discovery_failed provider=google-gemini-cli profile_id=%s error=%q",
+			logService.Errorf(
+				"project discovery failed: provider=google-gemini-cli profile_id=%s error=%q",
 				account.ID,
 				err,
 			)
@@ -3333,8 +3335,8 @@ func logFailureEvent(providerID, profileID string, reason core.FailureReason, po
 		if snapshot.ID != profileID || snapshot.Usage == nil {
 			continue
 		}
-		log.Printf(
-			"event=profile_failure provider=%s profile_id=%s failure_reason=%s cooldown_until=%s disabled_until=%s",
+		logService.Warnf(
+			"profile failure: provider=%s profile_id=%s failure_reason=%s cooldown_until=%s disabled_until=%s",
 			providerID,
 			profileID,
 			reason,
@@ -3439,7 +3441,7 @@ func (s *Service) generateSessionTitleAsync(
 			Account: account,
 		})
 		if err != nil {
-			log.Printf("event=title_gen_error session_id=%s error=%q", sessionID, err)
+			logService.Errorf("title gen: session_id=%s error=%q", sessionID, err)
 			return
 		}
 
@@ -3453,7 +3455,7 @@ func (s *Service) generateSessionTitleAsync(
 		}
 
 		s.sessions.SetTitle(sessionID, title)
-		log.Printf("event=title_generated session_id=%s title=%q", sessionID, title)
+		logService.Logf("title generated: session_id=%s title=%q", sessionID, title)
 	}()
 }
 

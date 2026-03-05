@@ -350,6 +350,19 @@ func estimateMessageTokens(msg core.Message) int {
 	// structure, and per-message framing), not only plain content length.
 	runeBudget := contentRunes + roleRunes + toolRunes + 24
 	t := (runeBudget + (charsPerToken - 1)) / charsPerToken
+
+	// Account for image data: base64 is ~1.33× the raw bytes, and typical vision
+	// models charge ~85 tokens per 512×512 tile. A rough heuristic: treat each
+	// image's base64 length ÷ 750 as the estimated token cost (approximately
+	// 1 token per 3 base64 chars × 0.25 vision overhead factor).
+	for _, img := range msg.Images {
+		imageTokens := len(img.Data) / 750
+		if imageTokens < 85 {
+			imageTokens = 85 // minimum cost for any image
+		}
+		t += imageTokens
+	}
+
 	if msg.Role == core.RoleTool {
 		t += 4
 	}

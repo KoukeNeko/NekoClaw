@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -256,7 +255,7 @@ func (p *AnthropicProvider) Generate(ctx context.Context, req GenerateRequest) (
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		message := summarizeAnthropicError(body)
-		log.Printf("event=anthropic_api_error status=%d model=%s message=%q body=%s",
+		logProvider.Errorf("anthropic API error: status=%d model=%s message=%v body=%s",
 			resp.StatusCode, modelID, message, summarizeForError(body, 500))
 		if authType == core.AccountToken && looksLikeAnthropicInvalidBearer(body, message) {
 			message = "Invalid bearer token. Your Claude setup-token may have expired. Please run 'claude setup-token' again to get a new one."
@@ -361,7 +360,7 @@ func (p *AnthropicProvider) GenerateToolTurn(ctx context.Context, req ToolTurnRe
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		message := summarizeAnthropicError(body)
-		log.Printf("event=anthropic_api_error status=%d model=%s message=%q body=%s",
+		logProvider.Errorf("anthropic API error: status=%d model=%s message=%v body=%s",
 			resp.StatusCode, modelID, message, summarizeForError(body, 500))
 		if authType == core.AccountToken && looksLikeAnthropicInvalidBearer(body, message) {
 			message = "Invalid bearer token. Your Claude setup-token may have expired. Please run 'claude setup-token' again to get a new one."

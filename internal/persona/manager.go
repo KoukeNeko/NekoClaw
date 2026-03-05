@@ -3,11 +3,14 @@ package persona
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/doeshing/nekoclaw/internal/logger"
 )
+
+var logPersona = logger.New("persona", logger.Cyan)
 
 // Manager loads, caches, and manages the active persona.
 type Manager struct {
@@ -84,7 +87,7 @@ func (m *Manager) SetActive(dirName string) error {
 	}
 	m.activeID = dirName
 	m.saveStateLocked()
-	log.Printf("event=persona_activated persona=%s", dirName)
+	logPersona.Logf("activated: persona=%s", dirName)
 	return nil
 }
 
@@ -95,7 +98,7 @@ func (m *Manager) ClearActive() error {
 
 	m.activeID = ""
 	m.saveStateLocked()
-	log.Printf("event=persona_cleared")
+	logPersona.Logf("cleared active persona")
 	return nil
 }
 
@@ -145,11 +148,11 @@ func (m *Manager) loadAllLocked() error {
 		dir := filepath.Join(m.baseDir, entry.Name())
 		p, loadErr := LoadPersona(dir)
 		if loadErr != nil {
-			log.Printf("event=persona_load_skip dir=%s error=%q", entry.Name(), loadErr)
+			logPersona.Warnf("load skip: dir=%s error=%v", entry.Name(), loadErr)
 			continue
 		}
 		m.personas[p.DirName] = p
-		log.Printf("event=persona_loaded name=%s dir=%s", p.Config.Meta.Name, p.DirName)
+		logPersona.Logf("loaded: name=%s dir=%s", p.Config.Meta.Name, p.DirName)
 	}
 	return nil
 }
@@ -169,7 +172,7 @@ func (m *Manager) restoreState() {
 	// Only restore if the persona still exists.
 	if _, ok := m.personas[state.Active]; ok {
 		m.activeID = state.Active
-		log.Printf("event=persona_state_restored persona=%s", state.Active)
+		logPersona.Logf("state restored: persona=%s", state.Active)
 	}
 }
 
@@ -177,14 +180,14 @@ func (m *Manager) saveStateLocked() {
 	state := persistedState{Active: m.activeID}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
-		log.Printf("event=persona_state_save_error error=%q", err)
+		logPersona.Errorf("state save error: %v", err)
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(m.statePath), 0o755); err != nil {
-		log.Printf("event=persona_state_dir_error error=%q", err)
+		logPersona.Errorf("state dir error: %v", err)
 		return
 	}
 	if err := os.WriteFile(m.statePath, data, 0o644); err != nil {
-		log.Printf("event=persona_state_write_error error=%q", err)
+		logPersona.Errorf("state write error: %v", err)
 	}
 }

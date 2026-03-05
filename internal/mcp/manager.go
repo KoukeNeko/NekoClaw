@@ -4,14 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 
 	mcptypes "github.com/mark3labs/mcp-go/mcp"
 
+	"github.com/doeshing/nekoclaw/internal/logger"
 	"github.com/doeshing/nekoclaw/internal/provider"
 )
+
+var logMCP = logger.New("mcp", logger.Green)
 
 // ServerInfo exposes read-only status about an MCP server for display.
 type ServerInfo struct {
@@ -54,7 +56,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	// Load builtin state from disk.
 	state, err := loadBuiltinState(m.configDir)
 	if err != nil {
-		log.Printf("event=mcp_builtin_state_error error=%q", err)
+		logMCP.Errorf("builtin state error: %v", err)
 		state = map[string]bool{}
 	}
 	m.mu.Lock()
@@ -71,7 +73,7 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	userConfigs, errs := LoadConfigs(m.configDir)
 	for _, err := range errs {
-		log.Printf("event=mcp_config_error error=%q", err)
+		logMCP.Errorf("config error: %v", err)
 	}
 	allConfigs = append(allConfigs, userConfigs...)
 
@@ -84,7 +86,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	for _, cfg := range allConfigs {
 		name := strings.TrimSpace(cfg.Name)
 		if seen[name] {
-			log.Printf("event=mcp_duplicate_name name=%s", name)
+			logMCP.Warnf("duplicate name: %s", name)
 			continue
 		}
 		seen[name] = true
@@ -95,9 +97,9 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.mu.Unlock()
 
 		if err := conn.Connect(ctx); err != nil {
-			log.Printf("event=mcp_connect_error server=%s error=%q", name, err)
+			logMCP.Errorf("connect error: server=%s error=%v", name, err)
 		} else {
-			log.Printf("event=mcp_connected server=%s transport=%s trust=%s tools=%d",
+			logMCP.Logf("connected: server=%s transport=%s trust=%s tools=%d",
 				name, cfg.Transport, cfg.Trust, len(conn.Tools()))
 		}
 	}
@@ -112,7 +114,7 @@ func (m *Manager) Stop() error {
 	var firstErr error
 	for name, conn := range m.connections {
 		if err := conn.Disconnect(); err != nil {
-			log.Printf("event=mcp_disconnect_error server=%s error=%q", name, err)
+			logMCP.Errorf("disconnect error: server=%s error=%v", name, err)
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -309,7 +311,7 @@ func (m *Manager) SetBuiltinEnabled(ctx context.Context, name string, enabled bo
 
 	// Persist state to disk.
 	if err := saveBuiltinState(m.configDir, stateCopy); err != nil {
-		log.Printf("event=mcp_builtin_save_error error=%q", err)
+		logMCP.Errorf("builtin save error: %v", err)
 		return fmt.Errorf("save builtin state: %w", err)
 	}
 
@@ -319,10 +321,10 @@ func (m *Manager) SetBuiltinEnabled(ctx context.Context, name string, enabled bo
 		m.connections[name] = conn
 		m.mu.Unlock()
 		if err := conn.Connect(ctx); err != nil {
-			log.Printf("event=mcp_connect_error server=%s error=%q", name, err)
+			logMCP.Errorf("connect error: server=%s error=%v", name, err)
 			return err
 		}
-		log.Printf("event=mcp_builtin_enabled server=%s", name)
+		logMCP.Logf("builtin enabled: server=%s", name)
 	} else {
 		m.mu.Lock()
 		conn, ok := m.connections[name]
@@ -333,7 +335,7 @@ func (m *Manager) SetBuiltinEnabled(ctx context.Context, name string, enabled bo
 		if ok {
 			_ = conn.Disconnect()
 		}
-		log.Printf("event=mcp_builtin_disabled server=%s", name)
+		logMCP.Logf("builtin disabled: server=%s", name)
 	}
 	return nil
 }

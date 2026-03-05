@@ -3,14 +3,17 @@ package provider
 import (
 	"context"
 	"io"
-	"log"
 	"math"
 	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/doeshing/nekoclaw/internal/logger"
 )
+
+var logProvider = logger.New("provider", logger.Yellow)
 
 // RetryConfig controls how doWithRetry behaves.
 type RetryConfig struct {
@@ -93,7 +96,7 @@ func doWithRetry(
 			lastResp = nil
 			if attempt < cfg.MaxAttempts-1 {
 				delay := computeDelay(cfg, attempt)
-				log.Printf("event=http_retry attempt=%d/%d delay=%s error=%q",
+				logProvider.Warnf("http retry: attempt=%d/%d delay=%s error=%v",
 					attempt+1, cfg.MaxAttempts, delay, err)
 				if sleepErr := sleepWithContext(ctx, delay); sleepErr != nil {
 					return nil, sleepErr
@@ -108,7 +111,7 @@ func doWithRetry(
 			if ra := parseRetryAfter(resp); ra > 0 {
 				delay = ra
 			}
-			log.Printf("event=http_retry attempt=%d/%d delay=%s status=%d",
+			logProvider.Warnf("http retry: attempt=%d/%d delay=%s status=%d",
 				attempt+1, cfg.MaxAttempts, delay, resp.StatusCode)
 			// Drain and close the body so the connection can be reused.
 			drainAndClose(resp)

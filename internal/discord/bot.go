@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"path"
 	"strings"
@@ -15,8 +14,19 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/doeshing/nekoclaw/internal/app"
 	"github.com/doeshing/nekoclaw/internal/core"
+	"github.com/doeshing/nekoclaw/internal/logger"
 	"github.com/doeshing/nekoclaw/internal/mcp"
 )
+
+var logDiscord = logger.New("discord", logger.Magenta)
+
+// discordLogSender adapts *discordgo.Session to logger.DiscordSender.
+type discordLogSender struct{ session *discordgo.Session }
+
+func (d *discordLogSender) SendMessage(channelID, content string) error {
+	_, err := d.session.ChannelMessageSend(channelID, content)
+	return err
+}
 
 // discordMessageLimit is the maximum length of a single Discord message.
 const discordMessageLimit = 2000
@@ -92,7 +102,14 @@ func (b *Bot) Start(ctx context.Context) error {
 	if err := b.session.Open(); err != nil {
 		return fmt.Errorf("open discord gateway: %w", err)
 	}
-	log.Printf("event=discord_bot_started user=%s", b.session.State.User.Username)
+	logDiscord.Logf("bot started: user=%s", b.session.State.User.Username)
+
+	// Wire up Discord output for all module loggers.
+	cfg := b.svc.GetDiscordConfig()
+	if ch := strings.TrimSpace(cfg.ConsoleChannel); ch != "" {
+		logger.SetDiscordOutput(&discordLogSender{session: b.session}, ch)
+	}
+
 	b.logToConsole(b.session, fmt.Sprintf("[啟動] Discord Bot 已上線 (%s)", b.session.State.User.Username))
 
 	// Block until context is done.
@@ -291,7 +308,7 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	if err != nil {
-		log.Printf("event=discord_chat_error channel=%s user=%s error=%q", m.ChannelID, m.Author.ID, err)
+		logDiscord.Errorf("chat error: channel=%s user=%s error=%v", m.ChannelID, m.Author.ID, err)
 		b.sendReply(s, m, "⚠️ "+err.Error())
 		b.logToConsole(s, fmt.Sprintf("[錯誤] <#%s> %s: %s", m.ChannelID, m.Author.Username, err.Error()))
 		return
@@ -340,7 +357,7 @@ func (b *Bot) handleCommand(s *discordgo.Session, m *discordgo.MessageCreate, te
 	case lower == "/reset":
 		removeReceived()
 		newID := b.resetSession(m.ChannelID)
-		log.Printf("event=discord_session_reset channel=%s new_session=%s", m.ChannelID, newID)
+		logDiscord.Logf("session reset: channel=%s new_session=%s", m.ChannelID, newID)
 		b.sendReply(s, m, "✅ 對話已重置，開始新的對話。")
 		b.logToConsole(s, fmt.Sprintf("[重置] <#%s> 對話已重置 → %s (by %s)", m.ChannelID, newID, m.Author.Username))
 		return true
@@ -514,7 +531,7 @@ func (b *Bot) editMessage(s *discordgo.Session, channelID, messageID, content st
 		content = content[:discordMessageLimit]
 	}
 	if _, err := s.ChannelMessageEdit(channelID, messageID, content); err != nil {
-		log.Printf("event=discord_edit_error channel=%s message=%s error=%q", channelID, messageID, err)
+		logDiscord.Errorf("edit error: channel=%s message=%s error=%v", channelID, messageID, err)
 	}
 }
 
@@ -547,7 +564,7 @@ func (b *Bot) sendReply(s *discordgo.Session, m *discordgo.MessageCreate, conten
 			msg.Reference = ref
 		}
 		if _, err := s.ChannelMessageSendComplex(m.ChannelID, msg); err != nil {
-			log.Printf("event=discord_send_error channel=%s error=%q", m.ChannelID, err)
+			logDiscord.Errorf("send error: channel=%s error=%v", m.ChannelID, err)
 			return
 		}
 	}
@@ -563,7 +580,7 @@ func (b *Bot) logToConsole(s *discordgo.Session, message string) {
 	}
 	text := "```\n" + message + "\n```"
 	if _, err := s.ChannelMessageSend(channelID, text); err != nil {
-		log.Printf("event=discord_console_send_error channel=%s error=%q", channelID, err)
+		logDiscord.Errorf("console send error: channel=%s error=%v", channelID, err)
 	}
 }
 
@@ -748,13 +765,13 @@ func extractDiscordImages(attachments []*discordgo.MessageAttachment) []core.Ima
 
 		// Skip oversized attachments.
 		if att.Size > maxImageDownloadSize {
-			log.Printf("event=discord_image_skip file=%s reason=too_large size=%d", att.Filename, att.Size)
+			logDiscord.Warnf("image skip: file=%s reason=too_large size=%d", att.Filename, att.Size)
 			continue
 		}
 
 		data, err := downloadImage(att.URL)
 		if err != nil {
-			log.Printf("event=discord_image_download_error file=%s error=%q", att.Filename, err)
+			logDiscord.Errorf("image download error: file=%s error=%v", att.Filename, err)
 			continue
 		}
 

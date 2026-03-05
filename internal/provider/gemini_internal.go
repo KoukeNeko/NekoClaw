@@ -919,13 +919,27 @@ func toGeminiContents(messages []core.Message) []map[string]any {
 			role = "model"
 		}
 		text := strings.TrimSpace(msg.Content)
-		out = append(out, map[string]any{
-			"role": role,
-			"parts": []map[string]any{
-				{
-					"text": text,
+
+		// Build parts list: images first (inline_data), then text.
+		parts := make([]map[string]any, 0, len(msg.Images)+1)
+		for _, img := range msg.Images {
+			parts = append(parts, map[string]any{
+				"inline_data": map[string]any{
+					"mime_type": img.MimeType,
+					"data":      img.Data,
 				},
-			},
+			})
+		}
+		if text != "" {
+			parts = append(parts, map[string]any{"text": text})
+		}
+		if len(parts) == 0 {
+			continue
+		}
+
+		out = append(out, map[string]any{
+			"role":  role,
+			"parts": parts,
 		})
 	}
 	return out
