@@ -218,6 +218,8 @@ func (b *Bot) shouldRespond(s *discordgo.Session, m *discordgo.MessageCreate) bo
 }
 
 func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
+	startTime := time.Now()
+
 	// Strip bot mention from message content.
 	text := stripMention(m.Content, s.State.User.ID)
 	text = strings.TrimSpace(text)
@@ -285,6 +287,10 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	b.sendReply(s, m, reply)
+
+	// Log detailed traffic to console channel.
+	elapsed := time.Since(startTime)
+	b.logTraffic(s, m, resp, len(images), elapsed)
 }
 
 // ---------------------------------------------------------------------------
@@ -467,6 +473,47 @@ func (b *Bot) logToConsole(s *discordgo.Session, message string) {
 	if _, err := s.ChannelMessageSend(channelID, text); err != nil {
 		log.Printf("event=discord_console_send_error channel=%s error=%q", channelID, err)
 	}
+}
+
+// logTraffic logs detailed request/response info to the console channel.
+func (b *Bot) logTraffic(s *discordgo.Session, m *discordgo.MessageCreate, resp core.ChatResponse, imageCount int, elapsed time.Duration) {
+	// Truncate message preview.
+	preview := strings.TrimSpace(m.Content)
+	if len(preview) > 60 {
+		preview = preview[:60] + "…"
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("[對話] <#%s> %s\n", m.ChannelID, m.Author.Username))
+	sb.WriteString(fmt.Sprintf("  訊息: %s\n", preview))
+	if imageCount > 0 {
+		sb.WriteString(fmt.Sprintf("  圖片: %d 張\n", imageCount))
+	}
+	sb.WriteString(fmt.Sprintf("  模型: %s/%s\n", resp.Provider, resp.Model))
+	if resp.AccountID != "" {
+		sb.WriteString(fmt.Sprintf("  帳號: %s\n", resp.AccountID))
+	}
+	sb.WriteString(fmt.Sprintf("  Token: %d in / %d out / %d total\n",
+		resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.TotalTokens))
+	if resp.Compressed {
+		c := resp.Compression
+		sb.WriteString(fmt.Sprintf("  壓縮: %d → %d tokens (丟棄 %d 則)\n",
+			c.OriginalTokens, c.CompressedTokens, c.DroppedMessages))
+	}
+	if len(resp.ToolEvents) > 0 {
+		executed := 0
+		for _, evt := range resp.ToolEvents {
+			if evt.Phase == "executed" || evt.Phase == "failed" {
+				executed++
+			}
+		}
+		if executed > 0 {
+			sb.WriteString(fmt.Sprintf("  工具: %d 次呼叫\n", executed))
+		}
+	}
+	sb.WriteString(fmt.Sprintf("  耗時: %s", elapsed.Round(time.Millisecond)))
+
+	b.logToConsole(s, sb.String())
 }
 
 // formatToolSummary builds a short summary of executed tools.
