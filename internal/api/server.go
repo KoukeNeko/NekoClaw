@@ -1236,8 +1236,8 @@ func (s *Server) handleFallbacks(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
-		if len(body.Fallbacks) > 3 {
-			respondError(w, http.StatusBadRequest, "maximum 3 fallback entries")
+		if len(body.Fallbacks) > 5 {
+			respondError(w, http.StatusBadRequest, "maximum 5 fallback entries")
 			return
 		}
 		if err := s.svc.SaveFallbacks(body.Fallbacks); err != nil {

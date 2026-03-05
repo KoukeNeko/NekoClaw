@@ -12,7 +12,7 @@ import (
 )
 
 // maxFallbackSlots is the maximum number of configurable fallback entries.
-const maxFallbackSlots = 3
+const maxFallbackSlots = 5
 
 // fallbackSlot holds state for a single fallback configuration slot.
 type fallbackSlot struct {
@@ -36,7 +36,7 @@ type ProviderSection struct {
 	loaded          bool
 	modelsLoading   bool
 
-	// Fallback configuration (up to 3 slots)
+	// Fallback configuration (up to 5 slots)
 	fallbacks     [maxFallbackSlots]fallbackSlot
 	fallbackField int  // 0=provider, 1=model (within active fallback slot)
 	fallbackSaved bool // briefly true after successful save

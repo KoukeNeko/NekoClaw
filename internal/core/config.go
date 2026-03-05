@@ -10,7 +10,7 @@ import (
 const (
 	defaultConfigDirName = ".nekoclaw"
 	configFileName       = "config.json"
-	maxFallbackSlots     = 3
+	maxFallbackSlots     = 5
 )
 
 // AppConfig holds user-configurable settings persisted to config.json.
