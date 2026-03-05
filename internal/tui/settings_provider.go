@@ -411,7 +411,7 @@ func (ps ProviderSection) View(width int) string {
 
 	lines = append(lines, "")
 
-	// Model list
+	// Model list (scroll-windowed to prevent layout overflow)
 	modelHeader := "Models"
 	if ps.modelsLoading {
 		modelHeader += " (載入中...)"
@@ -421,7 +421,14 @@ func (ps ProviderSection) View(width int) string {
 	}
 	lines = append(lines, theme.SectionStyle.Render(modelHeader))
 
-	for i, m := range ps.models {
+	const maxVisibleModels = 6
+	modelStart, modelEnd := scrollWindow(ps.modelIdx, len(ps.models), maxVisibleModels)
+
+	if modelStart > 0 {
+		lines = append(lines, theme.HintStyle.Render(fmt.Sprintf("  ↑ 還有 %d 個…", modelStart)))
+	}
+	for i := modelStart; i < modelEnd; i++ {
+		m := ps.models[i]
 		prefix := "  "
 		style := theme.NormalStyle
 		if i == ps.modelIdx {
@@ -437,6 +444,9 @@ func (ps ProviderSection) View(width int) string {
 			label += " ✓"
 		}
 		lines = append(lines, style.Render(clampLine(prefix+label, textW)))
+	}
+	if modelEnd < len(ps.models) {
+		lines = append(lines, theme.HintStyle.Render(fmt.Sprintf("  ↓ 還有 %d 個…", len(ps.models)-modelEnd)))
 	}
 
 	lines = append(lines, "")
@@ -540,4 +550,23 @@ func (ps *ProviderSection) collectFallbackEntries() []core.FallbackEntry {
 func (ps *ProviderSection) saveFallbacks(apiClient *client.APIClient) tea.Cmd {
 	ps.fallbackSaved = false
 	return saveFallbacksCmd(apiClient, ps.collectFallbackEntries())
+}
+
+// scrollWindow returns the visible [start, end) range for a list,
+// keeping the cursor centered in a window of maxVisible items.
+func scrollWindow(cursor, total, maxVisible int) (start, end int) {
+	if total <= maxVisible {
+		return 0, total
+	}
+	half := maxVisible / 2
+	start = cursor - half
+	if start < 0 {
+		start = 0
+	}
+	end = start + maxVisible
+	if end > total {
+		end = total
+		start = end - maxVisible
+	}
+	return start, end
 }
