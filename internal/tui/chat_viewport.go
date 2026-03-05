@@ -183,6 +183,12 @@ func (cv *ChatViewport) renderMessage(msg *ChatMessage) string {
 		rendered = content
 	}
 
+	// Ensure all messages fit within the viewport width.
+	// Glamour's word wrap only breaks at whitespace, which doesn't work for
+	// CJK text (no spaces between characters). fitToTerminalWidth uses
+	// lipgloss.MaxWidth which handles CJK character widths correctly.
+	rendered = fitToTerminalWidth(rendered, cv.width)
+
 	msg.renderedCache = rendered
 	msg.renderedWidth = cv.width
 	return rendered

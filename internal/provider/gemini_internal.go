@@ -123,15 +123,125 @@ func (p *GeminiInternalProvider) Endpoints() []string {
 }
 
 func (p *GeminiInternalProvider) ToolCapabilities() ToolCapabilities {
-	return ToolCapabilities{SupportsTools: false}
+	return ToolCapabilities{
+		SupportsTools:         true,
+		SupportsParallelCalls: true,
+		MaxToolCalls:          8,
+	}
 }
 
-func (p *GeminiInternalProvider) GenerateToolTurn(_ context.Context, _ ToolTurnRequest) (ToolTurnResponse, error) {
-	return ToolTurnResponse{}, &FailureError{
-		Reason:   core.FailureFormat,
-		Message:  "provider google-gemini-cli does not support tool calling",
-		Endpoint: strings.Join(p.endpoints, ","),
+func (p *GeminiInternalProvider) GenerateToolTurn(ctx context.Context, req ToolTurnRequest) (ToolTurnResponse, error) {
+	token := strings.TrimSpace(req.Account.Token)
+	if token == "" {
+		return ToolTurnResponse{}, &FailureError{
+			Reason:   core.FailureAuthPermanent,
+			Message:  "missing account token",
+			Endpoint: strings.Join(p.endpoints, ","),
+			Status:   http.StatusUnauthorized,
+		}
 	}
+
+	modelID := strings.TrimSpace(req.Model)
+	if modelID == "" || strings.EqualFold(modelID, "default") {
+		modelID = "gemini-3-pro-preview"
+	}
+
+	systemInstruction, contents := toGeminiToolContents(req.Messages)
+	requestBody := map[string]any{
+		"contents": contents,
+	}
+	if tools := toGeminiFunctionDeclarations(req.Tools); len(tools) > 0 {
+		requestBody["tools"] = tools
+	}
+	if systemInstruction != "" {
+		requestBody["systemInstruction"] = map[string]any{
+			"parts": []map[string]any{{"text": systemInstruction}},
+		}
+	}
+	if genConfig := buildGeminiGenerationConfig(req.Generation); genConfig != nil {
+		requestBody["generationConfig"] = genConfig
+	}
+
+	outerPayload := map[string]any{
+		"model":   modelID,
+		"request": requestBody,
+	}
+	if projectID := strings.TrimSpace(req.Account.Metadata["project_id"]); projectID != "" {
+		outerPayload["project"] = projectID
+	}
+	body, _ := json.Marshal(outerPayload)
+
+	endpointOrder := p.resolveEndpointOrder(req.Account)
+	// Use non-streaming endpoint for tool turns to simplify functionCall parsing.
+	const toolGeneratePath = "/v1internal:generateContent"
+
+	var lastErr error
+	for _, endpoint := range endpointOrder {
+		endpointURL := strings.TrimRight(endpoint, "/") + toolGeneratePath
+
+		resp, err := doWithRetry(ctx, DefaultRetryConfig(), func() (*http.Response, error) {
+			httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(body))
+			if reqErr != nil {
+				return nil, reqErr
+			}
+			httpReq.Header.Set("Authorization", "Bearer "+token)
+			httpReq.Header.Set("Content-Type", "application/json")
+			httpReq.Header.Set("User-Agent", "google-cloud-sdk vscode_cloudshelleditor/0.1")
+			httpReq.Header.Set("X-Goog-Api-Client", "google-cloud-sdk vscode_cloudshelleditor/0.1")
+			httpReq.Header.Set("Client-Metadata", `{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}`)
+			return p.client.Do(httpReq)
+		}, nil)
+		if err != nil {
+			lastErr = &FailureError{Reason: core.FailureUnknown, Message: err.Error(), Endpoint: endpoint}
+			continue
+		}
+
+		respBody, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			reason := classifyStatus(resp.StatusCode, string(respBody))
+			lastErr = &FailureError{
+				Reason:     reason,
+				Message:    strings.TrimSpace(string(respBody)),
+				Endpoint:   endpoint,
+				Status:     resp.StatusCode,
+				RetryAfter: parseRetryAfter(resp),
+			}
+			if shouldFallbackEndpoint(resp.StatusCode, respBody) {
+				continue
+			}
+			return ToolTurnResponse{}, lastErr
+		}
+
+		text, calls, usage, ok := extractToolCallsFromGeminiResponse(respBody)
+		if !ok {
+			lastErr = &FailureError{
+				Reason:   core.FailureFormat,
+				Message:  "gemini internal tool response did not include text or tool calls: " + summarizeForError(respBody, 280),
+				Endpoint: endpoint,
+				Status:   resp.StatusCode,
+			}
+			continue
+		}
+
+		stopReason := "end_turn"
+		if len(calls) > 0 {
+			stopReason = "tool_calls"
+		}
+		return ToolTurnResponse{
+			Text:       text,
+			Endpoint:   endpoint,
+			Raw:        respBody,
+			Usage:      usage,
+			StopReason: stopReason,
+			ToolCalls:  calls,
+		}, nil
+	}
+
+	if lastErr == nil {
+		lastErr = &FailureError{Reason: core.FailureUnknown, Message: "gemini tool generate failed", Endpoint: ""}
+	}
+	return ToolTurnResponse{}, lastErr
 }
 
 func (p *GeminiInternalProvider) DiscoverPreferredModel(

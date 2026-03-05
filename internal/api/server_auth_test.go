@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -267,11 +268,15 @@ func TestChatMissingProjectAutoDiscoversLikeOpenClaw(t *testing.T) {
 		t.Fatalf("unexpected second chat status: %d body=%s", second.Code, second.Body.String())
 	}
 
-	if provider.discoverCalls != 1 {
-		t.Fatalf("expected project discovery once, got %d", provider.discoverCalls)
+	// Wait briefly for the async title generation goroutine to complete.
+	time.Sleep(200 * time.Millisecond)
+
+	if dc := provider.discoverCalls.Load(); dc != 1 {
+		t.Fatalf("expected project discovery once, got %d", dc)
 	}
-	if provider.generateCalls != 2 {
-		t.Fatalf("expected 2 generate calls, got %d", provider.generateCalls)
+	// 2 chat requests + 1 async title generation = 3 generate calls.
+	if gc := provider.generateCalls.Load(); gc != 3 {
+		t.Fatalf("expected 3 generate calls (2 chat + 1 title gen), got %d", gc)
 	}
 }
 
@@ -454,8 +459,8 @@ func (p *fakeGeminiProviderWithCounter) Generate(_ context.Context, _ provider.G
 }
 
 type fakeGeminiProviderWithProjectDiscoveryCounter struct {
-	generateCalls int
-	discoverCalls int
+	generateCalls atomic.Int32
+	discoverCalls atomic.Int32
 }
 
 func (p *fakeGeminiProviderWithProjectDiscoveryCounter) ID() string {
@@ -467,7 +472,7 @@ func (p *fakeGeminiProviderWithProjectDiscoveryCounter) ContextWindow(string) in
 }
 
 func (p *fakeGeminiProviderWithProjectDiscoveryCounter) Generate(_ context.Context, req provider.GenerateRequest) (provider.GenerateResponse, error) {
-	p.generateCalls++
+	p.generateCalls.Add(1)
 	projectID := strings.TrimSpace(req.Account.Metadata["project_id"])
 	if projectID == "" {
 		return provider.GenerateResponse{}, errors.New("missing project in generate request")
@@ -476,7 +481,7 @@ func (p *fakeGeminiProviderWithProjectDiscoveryCounter) Generate(_ context.Conte
 }
 
 func (p *fakeGeminiProviderWithProjectDiscoveryCounter) DiscoverProject(_ context.Context, _ provider.DiscoverProjectRequest) (provider.DiscoverProjectResult, error) {
-	p.discoverCalls++
+	p.discoverCalls.Add(1)
 	return provider.DiscoverProjectResult{
 		ProjectID:      "auto-proj-1",
 		ActiveEndpoint: "https://cloudcode-pa.googleapis.com",

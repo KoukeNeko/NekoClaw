@@ -99,15 +99,106 @@ func (p *GoogleAIStudioProvider) BaseURL() string {
 }
 
 func (p *GoogleAIStudioProvider) ToolCapabilities() ToolCapabilities {
-	return ToolCapabilities{SupportsTools: false}
+	return ToolCapabilities{
+		SupportsTools:         true,
+		SupportsParallelCalls: true,
+		MaxToolCalls:          8,
+	}
 }
 
-func (p *GoogleAIStudioProvider) GenerateToolTurn(_ context.Context, _ ToolTurnRequest) (ToolTurnResponse, error) {
-	return ToolTurnResponse{}, &FailureError{
-		Reason:   core.FailureFormat,
-		Message:  "provider google-ai-studio does not support tool calling",
-		Endpoint: p.baseURL,
+func (p *GoogleAIStudioProvider) GenerateToolTurn(ctx context.Context, req ToolTurnRequest) (ToolTurnResponse, error) {
+	apiKey := strings.TrimSpace(req.Account.Token)
+	if apiKey == "" {
+		return ToolTurnResponse{}, &FailureError{
+			Reason:   core.FailureAuthPermanent,
+			Message:  "missing API key",
+			Endpoint: p.baseURL,
+			Status:   http.StatusUnauthorized,
+		}
 	}
+	modelID := normalizeAIStudioModelID(req.Model)
+	if modelID == "" || strings.EqualFold(modelID, "default") {
+		modelID = "gemini-2.5-pro"
+	}
+
+	systemInstruction, contents := toGeminiToolContents(req.Messages)
+	payload := map[string]any{
+		"contents": contents,
+	}
+	if tools := toGeminiFunctionDeclarations(req.Tools); len(tools) > 0 {
+		payload["tools"] = tools
+	}
+	if systemInstruction != "" {
+		payload["systemInstruction"] = map[string]any{
+			"parts": []map[string]any{{"text": systemInstruction}},
+		}
+	}
+	if genConfig := buildGeminiGenerationConfig(req.Generation); genConfig != nil {
+		payload["generationConfig"] = genConfig
+	}
+
+	raw, _ := json.Marshal(payload)
+	callURL, err := p.buildURL("models/"+url.PathEscape(modelID)+":generateContent", apiKey)
+	if err != nil {
+		return ToolTurnResponse{}, &FailureError{
+			Reason:   core.FailureFormat,
+			Message:  err.Error(),
+			Endpoint: p.baseURL,
+		}
+	}
+
+	resp, err := doWithRetry(ctx, DefaultRetryConfig(), func() (*http.Response, error) {
+		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, callURL, bytes.NewReader(raw))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("User-Agent", "nekoclaw/1.0")
+		return p.client.Do(httpReq)
+	}, nil)
+	if err != nil {
+		return ToolTurnResponse{}, &FailureError{
+			Reason:   core.FailureUnknown,
+			Message:  err.Error(),
+			Endpoint: p.baseURL,
+		}
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		reason := classifyAIStudioStatus(resp.StatusCode, string(body))
+		return ToolTurnResponse{}, &FailureError{
+			Reason:     reason,
+			Message:    summarizeAIStudioError(body),
+			Endpoint:   p.baseURL,
+			Status:     resp.StatusCode,
+			RetryAfter: parseRetryAfter(resp),
+		}
+	}
+
+	text, calls, usage, ok := extractToolCallsFromGeminiResponse(body)
+	if !ok {
+		return ToolTurnResponse{}, &FailureError{
+			Reason:   core.FailureFormat,
+			Message:  "google ai studio tool response did not include text or tool calls: " + summarizeForError(body, 280),
+			Endpoint: p.baseURL,
+			Status:   resp.StatusCode,
+		}
+	}
+
+	stopReason := "end_turn"
+	if len(calls) > 0 {
+		stopReason = "tool_calls"
+	}
+	return ToolTurnResponse{
+		Text:       text,
+		Endpoint:   p.baseURL,
+		Raw:        body,
+		Usage:      usage,
+		StopReason: stopReason,
+		ToolCalls:  calls,
+	}, nil
 }
 
 func (p *GoogleAIStudioProvider) Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
