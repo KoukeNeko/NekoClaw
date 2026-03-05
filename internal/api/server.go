@@ -1521,5 +1521,9 @@ func (s *Server) handleToolStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	toolName := s.svc.GetActiveToolStatus(sessionID)
-	respondJSON(w, http.StatusOK, map[string]any{"tool_name": toolName})
+	retryStatus := s.svc.GetActiveRetryStatus(sessionID)
+	respondJSON(w, http.StatusOK, map[string]any{
+		"tool_name":    toolName,
+		"retry_status": retryStatus,
+	})
 }

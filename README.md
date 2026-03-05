@@ -4,13 +4,16 @@ Go-based agent runtime with:
 
 - TUI chat client
 - HTTP API for future Web UI
-- Discord bot (emoji reactions, per-channel sessions, slash commands)
-- Telegram bot (placeholder message editing, per-chat sessions, slash commands)
-- Pluggable LLM provider architecture
+- Discord bot (emoji reactions, per-channel sessions, slash commands, image support)
+- Telegram bot (per-chat sessions, slash commands, image support)
+- Pluggable LLM provider architecture with automatic failover
 - Account pool cooldown/failover scheduler
-- Context compression (soft trim, hard clear, sliding window)
+- Context compression (LLM compaction, sliding window)
 - Persona system with template rendering and few-shot anchors
+- Memory system (long-term notes, daily logs, FTS5 search index)
 - MCP (Model Context Protocol) tool integration
+- Multimodal image support across all surfaces
+- Real-time tool status display and usage stats
 
 ## Quick Start
 
@@ -218,9 +221,13 @@ TUI settings also support:
 
 - Responds to: `@mention`, reply to bot, or DM
 - Emoji lifecycle: 👀 (received) → 🔄 (processing) → ✅ (done)
+- Placeholder message shows real-time MCP tool status; deleted on completion and replaced with a fresh reply
 - Per-channel sequential message queue
 - Each channel has its own independent session
 - Typing indicator every 8 seconds
+- Image attachments are downloaded and sent as multimodal input
+- Usage stats footer: elapsed time, token counts, throughput, provider/model
+- Console channel logs detailed traffic (channel, user, message preview, model, tokens, tools, elapsed)
 
 ## Telegram Bot
 
@@ -244,11 +251,36 @@ Set via environment variable or TUI Settings > Telegram:
 ### Behavior
 
 - Responds to: private chat, `@mention`, reply to bot, or commands
-- Placeholder message ("🔄 處理中...") edited with final reply
+- Placeholder message shows real-time MCP tool status; deleted on completion and replaced with a fresh reply
 - Per-chat sequential message queue
 - Each chat has its own independent session
 - Typing indicator every 4 seconds
+- Photo and image document attachments are downloaded and sent as multimodal input
+- Usage stats footer: elapsed time, token counts, throughput, provider/model
 - Message limit: 4096 characters (auto-split)
+
+## Memory System
+
+NekoClaw includes a persistent memory system that gives the LLM long-term context across sessions.
+
+### Storage
+
+```
+~/.nekoclaw/memory/
+├── MEMORY.md        # Long-term notes (manually or LLM-curated)
+├── 2026-03-05.md    # Today's daily log
+├── 2026-03-04.md    # Yesterday's daily log
+└── search.db        # SQLite FTS5 full-text search index
+```
+
+Override path: `--memory-dir` flag or `NEKOCLAW_MEMORY_DIR` env.
+
+### How It Works
+
+1. **Read** — On every LLM request, `MEMORY.md` and the last 2 days of daily logs are loaded and injected as a system message (or embedded into the Persona template via `{{.Memory}}`)
+2. **Write** — When context approaches the window limit, a silent LLM round extracts key information (decisions, preferences, code changes) and appends it to today's daily log
+3. **Index** — After each chat turn, user and assistant messages are chunked (400 tokens, 80 overlap) and inserted into the FTS5 search index
+4. **Search** — TUI `/memory <query>`, Settings > Memory tab, API `POST /v1/memory/search`, or the LLM `memory_search` tool
 
 ## API Endpoints
 
@@ -274,6 +306,8 @@ Set via environment variable or TUI Settings > Telegram:
 - `GET /v1/auth/anthropic/profiles`
 - `POST /v1/auth/anthropic/use`
 - `POST /v1/auth/anthropic/delete`
+
+- `POST /v1/memory/search`
 
 - `GET/PUT /v1/discord/config`
 - `GET/PUT /v1/telegram/config`

@@ -336,21 +336,27 @@ func (c *APIClient) Chat(ctx context.Context, req core.ChatRequest) (core.ChatRe
 	return out, nil
 }
 
-// GetToolStatus returns the name of the tool currently being executed
-// for the given session, or an empty string if idle.
-func (c *APIClient) GetToolStatus(ctx context.Context, sessionID string) (string, error) {
+// ToolStatusResult holds the polled status for a session.
+type ToolStatusResult struct {
+	ToolName    string // active tool name (empty if idle)
+	RetryStatus string // failback status message (empty if no retry)
+}
+
+// GetToolStatus returns the active tool name and retry status for a session.
+func (c *APIClient) GetToolStatus(ctx context.Context, sessionID string) (ToolStatusResult, error) {
 	url := c.baseURL + "/v1/tool-status?session_id=" + sessionID
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", err
+		return ToolStatusResult{}, err
 	}
 	var out struct {
-		ToolName string `json:"tool_name"`
+		ToolName    string `json:"tool_name"`
+		RetryStatus string `json:"retry_status"`
 	}
 	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
-		return "", err
+		return ToolStatusResult{}, err
 	}
-	return out.ToolName, nil
+	return ToolStatusResult{ToolName: out.ToolName, RetryStatus: out.RetryStatus}, nil
 }
 
 func (c *APIClient) Providers(ctx context.Context) ([]string, error) {

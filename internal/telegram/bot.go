@@ -530,9 +530,12 @@ func (b *Bot) startToolStatusPolling(chatID int64, placeholderMsgID int, placeho
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				toolName := b.svc.GetActiveToolStatus(sessionID)
 				var display string
-				if toolName != "" {
+
+				// Priority: retry/failback status > tool status > default.
+				if retryStatus := b.svc.GetActiveRetryStatus(sessionID); retryStatus != "" {
+					display = "🔄 處理中...（" + retryStatus + "）"
+				} else if toolName := b.svc.GetActiveToolStatus(sessionID); toolName != "" {
 					displayName := toolName
 					if serverName, tn, isMCP := mcp.ParseNamespacedTool(toolName); isMCP {
 						displayName = serverName + "/" + tn

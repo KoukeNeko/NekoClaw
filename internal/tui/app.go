@@ -177,12 +177,14 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sidebar.SetProvider(msg.Provider)
 		m.chatView.SetProvider(msg.Provider)
 		m.settings.SetProvider(msg.Provider)
+		return m, syncDefaultProviderCmd(m.client, msg.Provider, m.modelID)
 
 	case ModelChangedMsg:
 		m.modelID = msg.ModelID
 		m.sidebar.SetModel(msg.ModelID)
 		m.chatView.SetModel(msg.ModelID)
 		m.settings.SetModel(msg.ModelID)
+		return m, syncDefaultProviderCmd(m.client, m.provider, msg.ModelID)
 
 	case SessionChangedMsg:
 		m.sessionID = msg.SessionID

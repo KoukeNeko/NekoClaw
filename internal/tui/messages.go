@@ -53,9 +53,10 @@ type ChatResultMsg struct {
 // StreamTickMsg drives simulated streaming display.
 type StreamTickMsg struct{}
 
-// ToolStatusMsg carries the polled active tool name during chat processing.
+// ToolStatusMsg carries the polled active tool name and retry status during chat processing.
 type ToolStatusMsg struct {
-	ToolName string
+	ToolName    string
+	RetryStatus string
 }
 
 // ToolStatusTickMsg triggers a delayed tool status poll during pending chat.

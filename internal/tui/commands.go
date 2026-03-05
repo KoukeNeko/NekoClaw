@@ -45,8 +45,8 @@ func pollToolStatusCmd(apiClient *client.APIClient, sessionID string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		name, _ := apiClient.GetToolStatus(ctx, sessionID)
-		return ToolStatusMsg{ToolName: name}
+		result, _ := apiClient.GetToolStatus(ctx, sessionID)
+		return ToolStatusMsg{ToolName: result.ToolName, RetryStatus: result.RetryStatus}
 	}
 }
 

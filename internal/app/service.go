@@ -59,6 +59,7 @@ type Service struct {
 	personaManager    *persona.Manager
 	titleGenPending   sync.Map // sessionID -> bool; dedup concurrent title generation
 	activeToolStatus  sync.Map // sessionID -> string (current tool name being executed)
+	activeRetryStatus sync.Map // sessionID -> string (failback status message)
 }
 
 type ServiceOptions struct {
@@ -118,6 +119,15 @@ func (s *Service) DeleteSession(sessionID string) error {
 // for the given session, or an empty string if no tool is active.
 func (s *Service) GetActiveToolStatus(sessionID string) string {
 	if v, ok := s.activeToolStatus.Load(sessionID); ok {
+		return v.(string)
+	}
+	return ""
+}
+
+// GetActiveRetryStatus returns a human-readable failback status message
+// for the given session, or an empty string if no retry is in progress.
+func (s *Service) GetActiveRetryStatus(sessionID string) string {
+	if v, ok := s.activeRetryStatus.Load(sessionID); ok {
 		return v.(string)
 	}
 	return ""
@@ -2212,11 +2222,18 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		s.mu.RUnlock()
 	}
 
+	defer s.activeRetryStatus.Delete(sessionID)
+
 	var lastErr error
 	for i, candidate := range chain {
 		isFallback := i > 0
 		candidateModel := candidate.model
 		candidateIsDefault := strings.EqualFold(candidateModel, "default")
+
+		if isFallback {
+			s.activeRetryStatus.Store(sessionID,
+				fmt.Sprintf("⚠️ %s 失敗，切換到 %s/%s", providerID, candidate.provider, candidateModel))
+		}
 
 		resp, err := s.attemptSingleProvider(ctx, attemptSingleProviderParams{
 			providerID:     candidate.provider,
@@ -2438,6 +2455,8 @@ func (s *Service) attemptSingleProvider(
 			pool.MarkFailure(account.ID, reason)
 			logFailureEvent(providerID, account.ID, reason, pool)
 			s.syncProfileState(providerID, account.ID)
+			s.activeRetryStatus.Store(sessionID,
+				fmt.Sprintf("⚠️ %s/%s 帳號 %s 失敗，嘗試下一個帳號...", providerID, attemptModelID, account.ID))
 			lastErr = refreshErr
 			if !core.IsRetriable(reason) {
 				break
@@ -2534,6 +2553,8 @@ func (s *Service) attemptSingleProvider(
 			pool.MarkFailure(account.ID, reason)
 			logFailureEvent(providerID, account.ID, reason, pool)
 			s.syncProfileState(providerID, account.ID)
+			s.activeRetryStatus.Store(sessionID,
+				fmt.Sprintf("⚠️ %s/%s 失敗（%s），嘗試下一個帳號...", providerID, attemptModelID, reason))
 			lastErr = runErr
 			if !core.IsRetriable(reason) {
 				break
@@ -2614,6 +2635,8 @@ func (s *Service) attemptSingleProvider(
 		pool.MarkFailure(account.ID, reason)
 		logFailureEvent(providerID, account.ID, reason, pool)
 		s.syncProfileState(providerID, account.ID)
+		s.activeRetryStatus.Store(sessionID,
+			fmt.Sprintf("⚠️ %s/%s 失敗（%s），嘗試下一個帳號...", providerID, attemptModelID, reason))
 		lastErr = err
 		if !core.IsRetriable(reason) {
 			break

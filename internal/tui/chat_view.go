@@ -24,7 +24,8 @@ type ChatView struct {
 	// Thinking pseudo-message tracking
 	thinkingActive  bool
 	thinkingStart   time.Time
-	currentToolName string // active tool name shown in spinner (polled from server)
+	currentToolName    string // active tool name shown in spinner (polled from server)
+	currentRetryStatus string // failback retry status shown in spinner (polled from server)
 
 	// Shared state (set by parent)
 	client    *client.APIClient
@@ -188,6 +189,7 @@ func (cv *ChatView) Update(msg tea.Msg) tea.Cmd {
 	case ToolStatusMsg:
 		if cv.pending {
 			cv.currentToolName = msg.ToolName
+			cv.currentRetryStatus = msg.RetryStatus
 			if cv.thinkingActive {
 				cv.viewport.UpdateLastMessage(cv.thinkingStatus())
 			}
@@ -348,11 +350,13 @@ func (cv ChatView) renderHeader() string {
 }
 
 // thinkingStatus builds a single-line status: ⠋ provider · model · 3.2s
-// When a tool is actively executing, appends "· 🔧 toolName".
+// Priority: retry status (failback) > tool status > default spinner.
 func (cv ChatView) thinkingStatus() string {
 	elapsed := time.Since(cv.thinkingStart).Truncate(100 * time.Millisecond)
 	status := fmt.Sprintf("%s %s · %s · %s", cv.spinner.View(), cv.provider, cv.displayModel(), elapsed)
-	if cv.currentToolName != "" {
+	if cv.currentRetryStatus != "" {
+		status += " · " + cv.currentRetryStatus
+	} else if cv.currentToolName != "" {
 		// Show friendly name for MCP tools: "server/tool" instead of "mcp__server__tool"
 		displayName := cv.currentToolName
 		if serverName, toolName, isMCP := mcp.ParseNamespacedTool(cv.currentToolName); isMCP {
@@ -403,7 +407,8 @@ func (cv *ChatView) handleSubmit(text string) tea.Cmd {
 	cv.pending = true
 	cv.thinkingActive = true
 	cv.thinkingStart = time.Now()
-	cv.currentToolName = "" // reset tool status
+	cv.currentToolName = ""    // reset tool status
+	cv.currentRetryStatus = "" // reset retry status
 	cv.viewport.AppendMessage(ChatMessage{
 		Role:      "thinking",
 		Content:   cv.thinkingStatus(),
@@ -433,7 +438,8 @@ func (cv *ChatView) handleSubmit(text string) tea.Cmd {
 
 func (cv *ChatView) handleChatResult(msg ChatResultMsg) tea.Cmd {
 	cv.pending = false
-	cv.currentToolName = "" // clear tool status on completion
+	cv.currentToolName = ""    // clear tool status on completion
+	cv.currentRetryStatus = "" // clear retry status on completion
 
 	if msg.Response.SessionID != cv.sessionID {
 		return nil
@@ -552,7 +558,8 @@ func (cv *ChatView) handleApprovalDecision(decision string) tea.Cmd {
 	cv.pending = true
 	cv.thinkingActive = true
 	cv.thinkingStart = time.Now()
-	cv.currentToolName = "" // reset tool status
+	cv.currentToolName = ""    // reset tool status
+	cv.currentRetryStatus = "" // reset retry status
 	cv.viewport.AppendMessage(ChatMessage{
 		Role:      "thinking",
 		Content:   cv.thinkingStatus(),
