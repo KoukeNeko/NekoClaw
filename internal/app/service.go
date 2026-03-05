@@ -50,6 +50,7 @@ type Service struct {
 	preferredProfiles map[string]string
 	fallbacks         []core.FallbackEntry // ordered fallback provider+model pairs
 	discordConfig     core.DiscordConfig   // persisted Discord bot settings
+	telegramConfig    core.TelegramConfig  // persisted Telegram bot settings
 	defaultProvider   string               // current default provider (synced from TUI)
 	defaultModel      string               // current default model (synced from TUI)
 	configDir         string               // directory for config.json persistence
@@ -361,6 +362,34 @@ func (s *Service) SetDiscordConfig(cfg core.DiscordConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.discordConfig = cfg
+}
+
+// GetTelegramConfig returns a copy of the current Telegram configuration.
+func (s *Service) GetTelegramConfig() core.TelegramConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return core.TelegramConfig{
+		BotToken: s.telegramConfig.BotToken,
+	}
+}
+
+// SaveTelegramConfig persists Telegram settings to config.json and updates in-memory state.
+func (s *Service) SaveTelegramConfig(cfg core.TelegramConfig) error {
+	s.mu.Lock()
+	configDir := s.configDir
+	s.telegramConfig = cfg
+	s.mu.Unlock()
+
+	appCfg, _ := core.LoadConfig(configDir)
+	appCfg.Telegram = cfg
+	return core.SaveConfig(configDir, appCfg)
+}
+
+// SetTelegramConfig sets the in-memory Telegram config (used during startup).
+func (s *Service) SetTelegramConfig(cfg core.TelegramConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.telegramConfig = cfg
 }
 
 // GetDefaultProvider returns the current default provider ID.

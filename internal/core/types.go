@@ -36,8 +36,9 @@ type Message struct {
 type Surface string
 
 const (
-	SurfaceTUI     Surface = "tui"
-	SurfaceDiscord Surface = "discord"
+	SurfaceTUI      Surface = "tui"
+	SurfaceDiscord  Surface = "discord"
+	SurfaceTelegram Surface = "telegram"
 )
 
 type AccountType string

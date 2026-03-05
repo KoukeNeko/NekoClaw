@@ -24,6 +24,7 @@ import (
 	"github.com/doeshing/nekoclaw/internal/discord"
 	"github.com/doeshing/nekoclaw/internal/memory"
 	"github.com/doeshing/nekoclaw/internal/provider"
+	"github.com/doeshing/nekoclaw/internal/telegram"
 	"github.com/doeshing/nekoclaw/internal/tui"
 )
 
@@ -96,6 +97,12 @@ func main() {
 		log.Printf("event=discord_bot_init_error error=%q", discordErr)
 	}
 
+	// Start Telegram bot if token is configured (runs in all modes).
+	telegramBot, telegramErr := startTelegramBot(service)
+	if telegramErr != nil {
+		log.Printf("event=telegram_bot_init_error error=%q", telegramErr)
+	}
+
 	switch runMode {
 	case "api":
 		ctx, cancel := context.WithCancel(context.Background())
@@ -108,6 +115,15 @@ func main() {
 				defer wg.Done()
 				if err := discordBot.Start(ctx); err != nil {
 					log.Printf("event=discord_bot_error error=%q", err)
+				}
+			}()
+		}
+		if telegramBot != nil {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := telegramBot.Start(ctx); err != nil {
+					log.Printf("event=telegram_bot_error error=%q", err)
 				}
 			}()
 		}
@@ -129,6 +145,13 @@ func main() {
 				}
 			}()
 		}
+		if telegramBot != nil {
+			go func() {
+				if err := telegramBot.Start(ctx); err != nil {
+					log.Printf("event=telegram_bot_error error=%q", err)
+				}
+			}()
+		}
 
 		tuiErr := tui.Run(*apiBaseURL, *defaultProvider, *defaultModel, *sessionID)
 		cancel()
@@ -145,6 +168,15 @@ func main() {
 				defer wg.Done()
 				if err := discordBot.Start(ctx); err != nil {
 					log.Printf("event=discord_bot_error error=%q", err)
+				}
+			}()
+		}
+		if telegramBot != nil {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := telegramBot.Start(ctx); err != nil {
+					log.Printf("event=telegram_bot_error error=%q", err)
 				}
 			}()
 		}
@@ -197,6 +229,32 @@ func startDiscordBot(svc *app.Service) (*discord.Bot, error) {
 		return nil, err
 	}
 	log.Printf("event=discord_bot_configured")
+	return bot, nil
+}
+
+// startTelegramBot creates a Telegram bot if a token is available.
+// Environment variables take precedence over config.json settings.
+// Returns nil bot (no error) when no token is configured.
+func startTelegramBot(svc *app.Service) (*telegram.Bot, error) {
+	token := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
+
+	// Fall back to config.json if env var is empty.
+	if token == "" {
+		cfg := svc.GetTelegramConfig()
+		token = strings.TrimSpace(cfg.BotToken)
+	}
+
+	if token == "" {
+		return nil, nil
+	}
+
+	bot, err := telegram.New(svc, telegram.Config{
+		Token: token,
+	})
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("event=telegram_bot_configured")
 	return bot, nil
 }
 
@@ -416,6 +474,7 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		log.Printf("event=config_load_error error=%q", configErr)
 	}
 	svc.SetDiscordConfig(appConfig.Discord)
+	svc.SetTelegramConfig(appConfig.Telegram)
 
 	if len(appConfig.Fallbacks) > 0 {
 		svc.SetFallbacks(appConfig.Fallbacks)

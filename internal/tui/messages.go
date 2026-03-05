@@ -358,3 +358,18 @@ type DiscordConfigMsg struct {
 type DiscordSaveMsg struct {
 	Err error
 }
+
+// ---------------------------------------------------------------------------
+// Telegram messages
+// ---------------------------------------------------------------------------
+
+// TelegramConfigMsg carries the loaded Telegram bot configuration.
+type TelegramConfigMsg struct {
+	Config core.TelegramConfig
+	Err    error
+}
+
+// TelegramSaveMsg carries the result of saving Telegram config.
+type TelegramSaveMsg struct {
+	Err error
+}

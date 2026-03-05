@@ -155,6 +155,28 @@ func saveDiscordConfigCmd(apiClient *client.APIClient, cfg core.DiscordConfig) t
 }
 
 // ---------------------------------------------------------------------------
+// Telegram config
+// ---------------------------------------------------------------------------
+
+func loadTelegramConfigCmd(apiClient *client.APIClient) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cfg, err := apiClient.GetTelegramConfig(ctx)
+		return TelegramConfigMsg{Config: cfg, Err: err}
+	}
+}
+
+func saveTelegramConfigCmd(apiClient *client.APIClient, cfg core.TelegramConfig) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err := apiClient.SetTelegramConfig(ctx, cfg)
+		return TelegramSaveMsg{Err: err}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Auth — Gemini OAuth
 // ---------------------------------------------------------------------------
 

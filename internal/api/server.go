@@ -48,6 +48,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/models", s.handleListModels)
 	mux.HandleFunc("/v1/fallbacks", s.handleFallbacks)
 	mux.HandleFunc("/v1/discord/config", s.handleDiscordConfig)
+	mux.HandleFunc("/v1/telegram/config", s.handleTelegramConfig)
 	mux.HandleFunc("/v1/default-provider", s.handleDefaultProvider)
 	mux.HandleFunc("/v1/ai-studio/models", s.handleAIStudioModels)
 	mux.HandleFunc("/v1/auth/anthropic/add-token", s.handleAnthropicAddToken)
@@ -1300,6 +1301,27 @@ func (s *Server) handleDiscordConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		respondJSON(w, http.StatusOK, s.svc.GetDiscordConfig())
+	default:
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleTelegramConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		cfg := s.svc.GetTelegramConfig()
+		respondJSON(w, http.StatusOK, cfg)
+	case http.MethodPut:
+		var cfg core.TelegramConfig
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		if err := s.svc.SaveTelegramConfig(cfg); err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		respondJSON(w, http.StatusOK, s.svc.GetTelegramConfig())
 	default:
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}

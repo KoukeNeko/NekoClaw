@@ -1017,6 +1017,32 @@ func (c *APIClient) SetDiscordConfig(ctx context.Context, cfg core.DiscordConfig
 	return c.doAndDecodeJSON(httpReq, &out)
 }
 
+func (c *APIClient) GetTelegramConfig(ctx context.Context) (core.TelegramConfig, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/telegram/config", nil)
+	if err != nil {
+		return core.TelegramConfig{}, err
+	}
+	var out core.TelegramConfig
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return core.TelegramConfig{}, err
+	}
+	return out, nil
+}
+
+func (c *APIClient) SetTelegramConfig(ctx context.Context, cfg core.TelegramConfig) error {
+	payload, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/v1/telegram/config", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out struct{}
+	return c.doAndDecodeJSON(httpReq, &out)
+}
+
 func (c *APIClient) ListSessions(ctx context.Context) ([]SessionInfo, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/sessions", nil)
 	if err != nil {

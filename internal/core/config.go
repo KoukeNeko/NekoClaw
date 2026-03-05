@@ -18,10 +18,16 @@ type DiscordConfig struct {
 	BotToken string `json:"bot_token,omitempty"`
 }
 
+// TelegramConfig holds Telegram bot settings.
+type TelegramConfig struct {
+	BotToken string `json:"bot_token,omitempty"`
+}
+
 // AppConfig holds user-configurable settings persisted to config.json.
 type AppConfig struct {
 	Fallbacks []FallbackEntry `json:"fallbacks,omitempty"`
 	Discord   DiscordConfig   `json:"discord,omitempty"`
+	Telegram  TelegramConfig  `json:"telegram,omitempty"`
 }
 
 // LoadConfig reads config.json from configDir.
