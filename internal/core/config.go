@@ -15,8 +15,7 @@ const (
 
 // DiscordConfig holds Discord bot settings.
 type DiscordConfig struct {
-	BotToken       string   `json:"bot_token,omitempty"`
-	ActiveChannels []string `json:"active_channels,omitempty"`
+	BotToken string `json:"bot_token,omitempty"`
 }
 
 // AppConfig holds user-configurable settings persisted to config.json.

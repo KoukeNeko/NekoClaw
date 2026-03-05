@@ -32,9 +32,8 @@ type messageJob struct {
 
 // Bot connects to Discord Gateway and forwards messages to the NekoClaw service.
 type Bot struct {
-	session     *discordgo.Session
-	svc         *app.Service
-	activeChans map[string]bool // channels where bot responds to all messages
+	session *discordgo.Session
+	svc     *app.Service
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -47,8 +46,7 @@ type Bot struct {
 
 // Config holds the configuration needed to create a Discord bot.
 type Config struct {
-	Token          string   // Discord bot token (required)
-	ActiveChannels []string // channel IDs that respond to all messages
+	Token string // Discord bot token (required)
 }
 
 // New creates a new Discord bot. Call Start() to connect.
@@ -68,18 +66,10 @@ func New(svc *app.Service, cfg Config) (*Bot, error) {
 	}
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsMessageContent
 
-	activeChans := make(map[string]bool, len(cfg.ActiveChannels))
-	for _, ch := range cfg.ActiveChannels {
-		if id := strings.TrimSpace(ch); id != "" {
-			activeChans[id] = true
-		}
-	}
-
 	return &Bot{
-		session:     dg,
-		svc:         svc,
-		activeChans: activeChans,
-		queues:      make(map[string]chan messageJob),
+		session: dg,
+		svc:     svc,
+		queues:  make(map[string]chan messageJob),
 	}, nil
 }
 
@@ -163,12 +153,8 @@ func (b *Bot) channelWorker(ch <-chan messageJob) {
 }
 
 // shouldRespond checks whether the bot should respond to this message.
+// Responds to: @mention, reply to bot, or DM.
 func (b *Bot) shouldRespond(s *discordgo.Session, m *discordgo.MessageCreate) bool {
-	// Active channel: respond to everything.
-	if b.activeChans[m.ChannelID] {
-		return true
-	}
-
 	// Reply to bot's own message.
 	if m.ReferencedMessage != nil && m.ReferencedMessage.Author != nil {
 		if m.ReferencedMessage.Author.ID == s.State.User.ID {

@@ -179,15 +179,11 @@ func main() {
 // Returns nil bot (no error) when no token is configured.
 func startDiscordBot(svc *app.Service) (*discord.Bot, error) {
 	token := strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
-	activeChannels := splitCSV(os.Getenv("DISCORD_ACTIVE_CHANNELS"))
 
-	// Fall back to config.json if env vars are empty.
+	// Fall back to config.json if env var is empty.
 	if token == "" {
 		cfg := svc.GetDiscordConfig()
 		token = strings.TrimSpace(cfg.BotToken)
-		if len(activeChannels) == 0 {
-			activeChannels = cfg.ActiveChannels
-		}
 	}
 
 	if token == "" {
@@ -195,13 +191,12 @@ func startDiscordBot(svc *app.Service) (*discord.Bot, error) {
 	}
 
 	bot, err := discord.New(svc, discord.Config{
-		Token:          token,
-		ActiveChannels: activeChannels,
+		Token: token,
 	})
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("event=discord_bot_configured active_channels=%d", len(activeChannels))
+	log.Printf("event=discord_bot_configured")
 	return bot, nil
 }
 

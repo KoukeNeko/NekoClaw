@@ -340,8 +340,7 @@ func (s *Service) GetDiscordConfig() core.DiscordConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return core.DiscordConfig{
-		BotToken:       s.discordConfig.BotToken,
-		ActiveChannels: append([]string(nil), s.discordConfig.ActiveChannels...),
+		BotToken: s.discordConfig.BotToken,
 	}
 }
 
