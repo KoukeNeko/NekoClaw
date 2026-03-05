@@ -284,14 +284,15 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	_ = s.MessageReactionRemove(m.ChannelID, m.ID, emojiProcessing, botID)
 	_ = s.MessageReactionAdd(m.ChannelID, m.ID, emojiDone)
 
+	// Delete the placeholder so it won't conflict with new messages in the channel.
+	// The final reply is always sent as fresh messages to avoid edit-interruption issues.
+	if placeholderErr == nil {
+		_ = s.ChannelMessageDelete(m.ChannelID, placeholderMsg.ID)
+	}
+
 	if err != nil {
 		log.Printf("event=discord_chat_error channel=%s user=%s error=%q", m.ChannelID, m.Author.ID, err)
-		errText := "⚠️ " + err.Error()
-		if placeholderErr == nil {
-			b.editMessage(s, m.ChannelID, placeholderMsg.ID, errText)
-		} else {
-			b.sendReply(s, m, errText)
-		}
+		b.sendReply(s, m, "⚠️ "+err.Error())
 		b.logToConsole(s, fmt.Sprintf("[錯誤] <#%s> %s: %s", m.ChannelID, m.Author.Username, err.Error()))
 		return
 	}
@@ -305,7 +306,7 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	// Append usage stats and tool summary (Discord -# small text).
 	var footer []string
-	if stats := formatUsageStats(resp.Usage, elapsed); stats != "" {
+	if stats := formatUsageStats(resp.Usage, elapsed, resp.Provider, resp.Model); stats != "" {
 		footer = append(footer, "-# "+stats)
 	}
 	if summary := formatToolSummary(resp.ToolEvents); summary != "" {
@@ -315,16 +316,7 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		reply += "\n\n" + strings.Join(footer, "\n")
 	}
 
-	// Edit placeholder with final reply; send remaining chunks as new messages.
-	if placeholderErr == nil {
-		chunks := splitMessage(reply, discordMessageLimit)
-		b.editMessage(s, m.ChannelID, placeholderMsg.ID, chunks[0])
-		for i := 1; i < len(chunks); i++ {
-			b.sendReply(s, m, chunks[i])
-		}
-	} else {
-		b.sendReply(s, m, reply)
-	}
+	b.sendReply(s, m, reply)
 
 	// Log detailed traffic to console channel.
 	b.logTraffic(s, m, resp, len(images), elapsed)
@@ -613,8 +605,9 @@ func (b *Bot) logTraffic(s *discordgo.Session, m *discordgo.MessageCreate, resp 
 	b.logToConsole(s, sb.String())
 }
 
-// formatUsageStats builds a TUI-style usage summary: ⏱ 2.3s · ↑1.2K ↓567 · 245 tok/s
-func formatUsageStats(usage core.UsageInfo, elapsed time.Duration) string {
+// formatUsageStats builds a TUI-style usage summary:
+// ⏱ 2.3s · ↑1.2K ↓567 · 245 tok/s · google-gemini-cli/gemini-2.0-flash
+func formatUsageStats(usage core.UsageInfo, elapsed time.Duration, provider, model string) string {
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 && elapsed == 0 {
 		return ""
 	}
@@ -644,6 +637,15 @@ func formatUsageStats(usage core.UsageInfo, elapsed time.Duration) string {
 	if usage.OutputTokens > 0 && elapsed > 0 {
 		tokPerSec := float64(usage.OutputTokens) / elapsed.Seconds()
 		parts = append(parts, fmt.Sprintf("%.0f tok/s", tokPerSec))
+	}
+
+	// Provider/model tag (useful when fallback occurs).
+	if model != "" {
+		tag := model
+		if provider != "" {
+			tag = provider + "/" + tag
+		}
+		parts = append(parts, tag)
 	}
 
 	return strings.Join(parts, " · ")

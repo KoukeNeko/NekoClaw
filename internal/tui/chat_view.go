@@ -496,6 +496,8 @@ func (cv *ChatView) handleChatResult(msg ChatResultMsg) tea.Cmd {
 	cv.viewport.AppendMessage(ChatMessage{
 		Role:         "assistant",
 		Content:      msg.Response.Reply,
+		Provider:     msg.Response.Provider,
+		Model:        msg.Response.Model,
 		InputTokens:  msg.Response.Usage.InputTokens,
 		OutputTokens: msg.Response.Usage.OutputTokens,
 		ElapsedMs:    elapsedMs,

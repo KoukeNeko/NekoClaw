@@ -20,6 +20,8 @@ type ChatMessage struct {
 	Timestamp time.Time
 
 	// Token usage stats (populated for assistant messages)
+	Provider     string // provider ID used for this response
+	Model        string // model ID used for this response
 	InputTokens  int
 	OutputTokens int
 	ElapsedMs    int64 // response time in milliseconds
@@ -217,7 +219,7 @@ func (cv *ChatViewport) renderMarkdown(content string) string {
 }
 
 // formatUsageStats builds a concise stats line for assistant messages.
-// Example: "⏱ 2.3s · ↑1.2K ↓567 · 245 tok/s"
+// Example: "⏱ 2.3s · ↑1.2K ↓567 · 245 tok/s · google-gemini-cli/gemini-2.0-flash"
 func formatUsageStats(msg *ChatMessage) string {
 	hasTokens := msg.InputTokens > 0 || msg.OutputTokens > 0
 	hasElapsed := msg.ElapsedMs > 0
@@ -251,6 +253,15 @@ func formatUsageStats(msg *ChatMessage) string {
 	if hasTokens && hasElapsed && msg.OutputTokens > 0 && msg.ElapsedMs > 0 {
 		tokPerSec := float64(msg.OutputTokens) / (float64(msg.ElapsedMs) / 1000.0)
 		parts = append(parts, fmt.Sprintf("%.0f tok/s", tokPerSec))
+	}
+
+	// Provider/model tag (useful when fallback occurs).
+	if msg.Model != "" {
+		tag := msg.Model
+		if msg.Provider != "" {
+			tag = msg.Provider + "/" + tag
+		}
+		parts = append(parts, tag)
 	}
 
 	return strings.Join(parts, " · ")

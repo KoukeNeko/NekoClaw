@@ -265,14 +265,16 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 	stopToolStatus()
 	stopTyping()
 
+	// Delete the placeholder so it won't conflict with new messages in the chat.
+	// The final reply is always sent as fresh messages to avoid edit-interruption issues.
+	if placeholderErr == nil {
+		del := tgbotapi.NewDeleteMessage(chatID, placeholderMsg.MessageID)
+		_, _ = b.api.Send(del)
+	}
+
 	if err != nil {
 		log.Printf("event=telegram_chat_error chat=%d user=%d error=%q", chatID, msg.From.ID, err)
-		errReply := "⚠️ " + err.Error()
-		if placeholderErr == nil {
-			b.editMessage(chatID, placeholderMsg.MessageID, errReply)
-		} else {
-			b.sendReply(chatID, msg.MessageID, errReply)
-		}
+		b.sendReply(chatID, msg.MessageID, "⚠️ "+err.Error())
 		return
 	}
 
@@ -285,7 +287,7 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 
 	// Append usage stats and tool summary.
 	var footer []string
-	if stats := formatUsageStats(resp.Usage, elapsed); stats != "" {
+	if stats := formatUsageStats(resp.Usage, elapsed, resp.Provider, resp.Model); stats != "" {
 		footer = append(footer, stats)
 	}
 	if summary := formatToolSummary(resp.ToolEvents); summary != "" {
@@ -295,16 +297,7 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 		reply += "\n\n" + strings.Join(footer, "\n")
 	}
 
-	// Edit the placeholder with the first chunk; send remaining chunks as new messages.
-	if placeholderErr == nil {
-		chunks := splitMessage(reply, telegramMessageLimit)
-		b.editMessage(chatID, placeholderMsg.MessageID, chunks[0])
-		for i := 1; i < len(chunks); i++ {
-			b.sendReply(chatID, msg.MessageID, chunks[i])
-		}
-	} else {
-		b.sendReply(chatID, msg.MessageID, reply)
-	}
+	b.sendReply(chatID, msg.MessageID, reply)
 }
 
 // extractText returns the user's text from a message, stripping the bot mention.
@@ -594,8 +587,9 @@ func (b *Bot) sendReply(chatID int64, replyToID int, content string) {
 // Usage stats
 // ---------------------------------------------------------------------------
 
-// formatUsageStats builds a TUI-style usage summary: ⏱ 2.3s · ↑1.2K ↓567 · 245 tok/s
-func formatUsageStats(usage core.UsageInfo, elapsed time.Duration) string {
+// formatUsageStats builds a TUI-style usage summary:
+// ⏱ 2.3s · ↑1.2K ↓567 · 245 tok/s · google-gemini-cli/gemini-2.0-flash
+func formatUsageStats(usage core.UsageInfo, elapsed time.Duration, provider, model string) string {
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 && elapsed == 0 {
 		return ""
 	}
@@ -625,6 +619,15 @@ func formatUsageStats(usage core.UsageInfo, elapsed time.Duration) string {
 	if usage.OutputTokens > 0 && elapsed > 0 {
 		tokPerSec := float64(usage.OutputTokens) / elapsed.Seconds()
 		parts = append(parts, fmt.Sprintf("%.0f tok/s", tokPerSec))
+	}
+
+	// Provider/model tag (useful when fallback occurs).
+	if model != "" {
+		tag := model
+		if provider != "" {
+			tag = provider + "/" + tag
+		}
+		parts = append(parts, tag)
 	}
 
 	return strings.Join(parts, " · ")
