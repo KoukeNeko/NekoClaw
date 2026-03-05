@@ -369,9 +369,7 @@ func (s *Service) SaveFallbacks(entries []core.FallbackEntry) error {
 func (s *Service) GetDiscordConfig() core.DiscordConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return core.DiscordConfig{
-		BotToken: s.discordConfig.BotToken,
-	}
+	return s.discordConfig
 }
 
 // SaveDiscordConfig persists Discord settings to config.json and updates in-memory state.
@@ -397,9 +395,7 @@ func (s *Service) SetDiscordConfig(cfg core.DiscordConfig) {
 func (s *Service) GetTelegramConfig() core.TelegramConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return core.TelegramConfig{
-		BotToken: s.telegramConfig.BotToken,
-	}
+	return s.telegramConfig
 }
 
 // SaveTelegramConfig persists Telegram settings to config.json and updates in-memory state.

@@ -2,8 +2,12 @@ package discord
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -217,13 +221,23 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// Strip bot mention from message content.
 	text := stripMention(m.Content, s.State.User.ID)
 	text = strings.TrimSpace(text)
-	if text == "" {
+
+	// Extract images from attachments.
+	images := extractDiscordImages(m.Attachments)
+
+	// Skip if no text and no images.
+	if text == "" && len(images) == 0 {
 		return
 	}
 
 	// Handle slash commands before sending to AI.
-	if b.handleCommand(s, m, text) {
+	if text != "" && b.handleCommand(s, m, text) {
 		return
+	}
+
+	// Default text when only images are sent.
+	if text == "" && len(images) > 0 {
+		text = "請描述這張圖片"
 	}
 
 	botID := s.State.User.ID
@@ -243,6 +257,7 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		Provider:    b.svc.GetDefaultProvider(),
 		Model:       b.svc.GetDefaultModel(),
 		Message:     text,
+		Images:      images,
 		EnableTools: true,
 	})
 
@@ -492,6 +507,90 @@ func formatToolSummary(events []core.ToolEvent) string {
 		}
 	}
 	return sb.String()
+}
+
+// ---------------------------------------------------------------------------
+// Image extraction
+// ---------------------------------------------------------------------------
+
+// imageContentTypes maps Discord attachment content types to supported MIME types.
+var imageContentTypes = map[string]bool{
+	"image/png":  true,
+	"image/jpeg": true,
+	"image/gif":  true,
+	"image/webp": true,
+}
+
+const maxImageDownloadSize = 20 * 1024 * 1024 // 20 MB
+
+// extractDiscordImages downloads image attachments and returns base64-encoded ImageData.
+func extractDiscordImages(attachments []*discordgo.MessageAttachment) []core.ImageData {
+	var images []core.ImageData
+	for _, att := range attachments {
+		if att == nil || att.URL == "" {
+			continue
+		}
+
+		// Check content type or infer from filename extension.
+		mime := att.ContentType
+		if !imageContentTypes[mime] {
+			ext := strings.ToLower(path.Ext(att.Filename))
+			switch ext {
+			case ".png":
+				mime = "image/png"
+			case ".jpg", ".jpeg":
+				mime = "image/jpeg"
+			case ".gif":
+				mime = "image/gif"
+			case ".webp":
+				mime = "image/webp"
+			default:
+				continue // Not an image attachment.
+			}
+		}
+
+		// Skip oversized attachments.
+		if att.Size > maxImageDownloadSize {
+			log.Printf("event=discord_image_skip file=%s reason=too_large size=%d", att.Filename, att.Size)
+			continue
+		}
+
+		data, err := downloadImage(att.URL)
+		if err != nil {
+			log.Printf("event=discord_image_download_error file=%s error=%q", att.Filename, err)
+			continue
+		}
+
+		images = append(images, core.ImageData{
+			MimeType: mime,
+			Data:     base64.StdEncoding.EncodeToString(data),
+			FileName: att.Filename,
+		})
+	}
+	return images
+}
+
+// downloadImage fetches raw bytes from a URL with size limit.
+func downloadImage(url string) ([]byte, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("fetch image: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch image: status %d", resp.StatusCode)
+	}
+
+	// Limit read to prevent memory exhaustion.
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageDownloadSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read image: %w", err)
+	}
+	if len(data) > maxImageDownloadSize {
+		return nil, fmt.Errorf("image exceeds %d MB limit", maxImageDownloadSize/(1024*1024))
+	}
+	return data, nil
 }
 
 // ---------------------------------------------------------------------------

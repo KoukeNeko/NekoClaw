@@ -2,8 +2,11 @@ package telegram
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -162,9 +165,9 @@ func (b *Bot) shouldRespond(update tgbotapi.Update) bool {
 		return true
 	}
 
-	// Respond if bot is @mentioned in group text.
+	// Respond if bot is @mentioned in group text or caption.
 	botMention := "@" + b.api.Self.UserName
-	if strings.Contains(msg.Text, botMention) {
+	if strings.Contains(msg.Text, botMention) || strings.Contains(msg.Caption, botMention) {
 		return true
 	}
 
@@ -219,8 +222,18 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 	}
 
 	text := b.extractText(msg)
-	if text == "" {
+
+	// Extract images from photos or document attachments.
+	images := b.extractImages(msg)
+
+	// Skip if no text and no images.
+	if text == "" && len(images) == 0 {
 		return
+	}
+
+	// Default text when only images are sent.
+	if text == "" && len(images) > 0 {
+		text = "請描述這張圖片"
 	}
 
 	chatID := msg.Chat.ID
@@ -241,6 +254,7 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 		Provider:    b.svc.GetDefaultProvider(),
 		Model:       b.svc.GetDefaultModel(),
 		Message:     text,
+		Images:      images,
 		EnableTools: true,
 	})
 
@@ -288,6 +302,78 @@ func (b *Bot) extractText(msg *tgbotapi.Message) string {
 	botMention := "@" + b.api.Self.UserName
 	text = strings.ReplaceAll(text, botMention, "")
 	return strings.TrimSpace(text)
+}
+
+// extractImages downloads photos or image documents from a Telegram message.
+func (b *Bot) extractImages(msg *tgbotapi.Message) []core.ImageData {
+	var images []core.ImageData
+
+	// Handle photo messages (Telegram sends multiple sizes; pick the largest).
+	if len(msg.Photo) > 0 {
+		largest := msg.Photo[len(msg.Photo)-1]
+		img, err := b.downloadTelegramFile(largest.FileID, "photo.jpg", "image/jpeg")
+		if err != nil {
+			log.Printf("event=telegram_image_download_error file_id=%s error=%q", largest.FileID, err)
+		} else {
+			images = append(images, img)
+		}
+	}
+
+	// Handle image documents (files sent as attachments, not compressed).
+	if msg.Document != nil && isImageMIME(msg.Document.MimeType) {
+		img, err := b.downloadTelegramFile(msg.Document.FileID, msg.Document.FileName, msg.Document.MimeType)
+		if err != nil {
+			log.Printf("event=telegram_image_download_error file_id=%s error=%q", msg.Document.FileID, err)
+		} else {
+			images = append(images, img)
+		}
+	}
+
+	return images
+}
+
+// downloadTelegramFile fetches a file from Telegram servers and returns base64-encoded ImageData.
+func (b *Bot) downloadTelegramFile(fileID, fileName, mimeType string) (core.ImageData, error) {
+	file, err := b.api.GetFile(tgbotapi.FileConfig{FileID: fileID})
+	if err != nil {
+		return core.ImageData{}, fmt.Errorf("get file info: %w", err)
+	}
+
+	fileURL := file.Link(b.api.Token)
+
+	resp, err := http.Get(fileURL)
+	if err != nil {
+		return core.ImageData{}, fmt.Errorf("download file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return core.ImageData{}, fmt.Errorf("download file: status %d", resp.StatusCode)
+	}
+
+	const maxSize = 20 * 1024 * 1024 // 20 MB
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxSize+1))
+	if err != nil {
+		return core.ImageData{}, fmt.Errorf("read file: %w", err)
+	}
+	if len(data) > maxSize {
+		return core.ImageData{}, fmt.Errorf("file exceeds 20 MB limit")
+	}
+
+	return core.ImageData{
+		MimeType: mimeType,
+		Data:     base64.StdEncoding.EncodeToString(data),
+		FileName: fileName,
+	}, nil
+}
+
+// isImageMIME checks whether a MIME type is a supported image format.
+func isImageMIME(mime string) bool {
+	switch mime {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return true
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------
