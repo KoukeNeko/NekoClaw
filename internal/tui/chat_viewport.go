@@ -8,6 +8,8 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
+	"github.com/doeshing/nekoclaw/internal/core"
+	"github.com/doeshing/nekoclaw/internal/mcp"
 )
 
 // ChatMessage represents a single message in the chat history.
@@ -21,6 +23,9 @@ type ChatMessage struct {
 	InputTokens  int
 	OutputTokens int
 	ElapsedMs    int64 // response time in milliseconds
+
+	// Tool events (populated for assistant messages when tools were used)
+	ToolEvents []core.ToolEvent
 
 	// Cache for rendered output; invalidated when width changes.
 	renderedCache string
@@ -171,6 +176,12 @@ func (cv *ChatViewport) renderMessage(msg *ChatMessage) string {
 		if stats := formatUsageStats(msg); stats != "" {
 			rendered += "\n" + theme.HintStyle.Render("  "+stats)
 		}
+		if summary := formatToolSummary(msg.ToolEvents); summary != "" {
+			// Summary is multi-line; style each line individually.
+			for _, line := range strings.Split(summary, "\n") {
+				rendered += "\n" + theme.HintStyle.Render("  "+line)
+			}
+		}
 	case "user":
 		rendered = imagePrefix + theme.PromptStyle.Render("> ") + theme.UserStyle.Render(content)
 	case "system":
@@ -243,6 +254,50 @@ func formatUsageStats(msg *ChatMessage) string {
 	}
 
 	return strings.Join(parts, " · ")
+}
+
+// formatToolSummary builds a numbered list of tools used during a response.
+// Groups by unique tool name (preserving first-seen order) with call counts.
+// MCP tools are displayed with friendly "server/tool" names.
+func formatToolSummary(events []core.ToolEvent) string {
+	if len(events) == 0 {
+		return ""
+	}
+	// Count calls per tool, preserving first-seen order.
+	type toolEntry struct {
+		displayName string
+		count       int
+	}
+	seen := map[string]int{} // raw name -> index in entries
+	var entries []toolEntry
+	for _, evt := range events {
+		if evt.Phase != "executed" && evt.Phase != "failed" {
+			continue
+		}
+		raw := evt.ToolName
+		if idx, ok := seen[raw]; ok {
+			entries[idx].count++
+			continue
+		}
+		display := raw
+		if serverName, toolName, isMCP := mcp.ParseNamespacedTool(raw); isMCP {
+			display = serverName + "/" + toolName
+		}
+		seen[raw] = len(entries)
+		entries = append(entries, toolEntry{displayName: display, count: 1})
+	}
+	if len(entries) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("🔧 使用的工具：")
+	for i, e := range entries {
+		b.WriteString(fmt.Sprintf("\n   %d. %s", i+1, e.displayName))
+		if e.count > 1 {
+			b.WriteString(fmt.Sprintf(" (×%d)", e.count))
+		}
+	}
+	return b.String()
 }
 
 func (cv *ChatViewport) invalidateCache() {

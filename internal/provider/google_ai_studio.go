@@ -76,7 +76,7 @@ func NewGoogleAIStudioProvider(opts GoogleAIStudioOptions) *GoogleAIStudioProvid
 	}
 	client := opts.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 25 * time.Second}
+		client = &http.Client{}
 	}
 	return &GoogleAIStudioProvider{
 		client:        client,
@@ -177,8 +177,8 @@ func (p *GoogleAIStudioProvider) GenerateToolTurn(ctx context.Context, req ToolT
 		}
 	}
 
-	text, calls, usage, ok := extractToolCallsFromGeminiResponse(body)
-	if !ok {
+	result := extractToolCallsFromGeminiResponse(body)
+	if !result.OK {
 		return ToolTurnResponse{}, &FailureError{
 			Reason:   core.FailureFormat,
 			Message:  "google ai studio tool response did not include text or tool calls: " + summarizeForError(body, 280),
@@ -188,16 +188,17 @@ func (p *GoogleAIStudioProvider) GenerateToolTurn(ctx context.Context, req ToolT
 	}
 
 	stopReason := "end_turn"
-	if len(calls) > 0 {
+	if len(result.Calls) > 0 {
 		stopReason = "tool_calls"
 	}
 	return ToolTurnResponse{
-		Text:       text,
-		Endpoint:   p.baseURL,
-		Raw:        body,
-		Usage:      usage,
-		StopReason: stopReason,
-		ToolCalls:  calls,
+		Text:            result.Text,
+		Endpoint:        p.baseURL,
+		Raw:             body,
+		Usage:           result.Usage,
+		StopReason:      stopReason,
+		ToolCalls:       result.Calls,
+		RawModelContent: result.RawModelContent,
 	}, nil
 }
 

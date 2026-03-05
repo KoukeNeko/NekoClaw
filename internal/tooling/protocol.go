@@ -41,6 +41,12 @@ type RunRequest struct {
 	Compressed   bool
 	Compression  core.CompressionMeta
 	Generation   *provider.GenerationParams // optional persona-driven sampling overrides
+
+	// OnToolEvent is an optional callback invoked synchronously when tool
+	// execution phases change (e.g. "requested", "executed", "failed").
+	// Used by the service layer to track active tool status for real-time
+	// display in the TUI spinner.
+	OnToolEvent func(core.ToolEvent)
 }
 
 type RunResult struct {

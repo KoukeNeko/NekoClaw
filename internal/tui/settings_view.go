@@ -378,22 +378,28 @@ func (sv SettingsView) RenderOverlay(chatBg string, width, height int) string {
 
 	tabBar := sv.renderTabBar(textW)
 
+	// Available content height for sections to fill.
+	maxContentLines := boxH - 6
+	if maxContentLines < 3 {
+		maxContentLines = 3
+	}
+
 	var sectionContent string
 	switch sv.activeSection {
 	case SectionProvider:
-		sectionContent = sv.provider.View(textW)
+		sectionContent = sv.provider.View(textW, maxContentLines)
 	case SectionPersona:
-		sectionContent = sv.persona.View(textW)
+		sectionContent = sv.persona.View(textW, maxContentLines)
 	case SectionAuth:
-		sectionContent = sv.auth.View(textW)
+		sectionContent = sv.auth.View(textW, maxContentLines)
 	case SectionSessions:
-		sectionContent = sv.session.View(textW)
+		sectionContent = sv.session.View(textW, maxContentLines)
 	case SectionMemory:
-		sectionContent = sv.memory.View(textW)
+		sectionContent = sv.memory.View(textW, maxContentLines)
 	case SectionUsage:
-		sectionContent = sv.usage.View(textW)
+		sectionContent = sv.usage.View(textW, maxContentLines)
 	case SectionMCP:
-		sectionContent = sv.mcp.View(textW)
+		sectionContent = sv.mcp.View(textW, maxContentLines)
 	}
 
 	var lines []string
@@ -403,22 +409,18 @@ func (sv SettingsView) RenderOverlay(chatBg string, width, height int) string {
 
 	// Section content (clamp to available height)
 	contentLines := strings.Split(sectionContent, "\n")
-	maxContentLines := boxH - 6
-	if maxContentLines < 3 {
-		maxContentLines = 3
-	}
 	if len(contentLines) > maxContentLines {
 		contentLines = contentLines[:maxContentLines]
 	}
 	lines = append(lines, contentLines...)
 
-	// Pad to fill
+	// Pad to fill (box height stays fixed)
 	for len(lines) < boxH-3 {
 		lines = append(lines, "")
 	}
 
 	lines = append(lines, "")
-	lines = append(lines, theme.HintStyle.Render("Esc close  ·  ←→ sections  ·  ↑↓ navigate  ·  Enter select"))
+	lines = append(lines, theme.HintStyle.Render(sv.sectionHintText()))
 
 	box := theme.DialogBoxStyle.Copy().
 		Width(innerW).
@@ -441,7 +443,32 @@ func (sv SettingsView) renderTabBar(maxW int) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(parts, "   "))
 }
 
+// sectionHintText returns context-sensitive help text for the active section.
+func (sv SettingsView) sectionHintText() string {
+	switch sv.activeSection {
+	case SectionProvider:
+		if sv.provider.focusField >= 2 {
+			return "←→ 切換欄位  ·  ↑↓ 選擇  ·  Enter 切換選項  ·  d 清除  ·  Tab 分頁  ·  Esc 關閉"
+		}
+		return "←→ 切換欄位  ·  ↑↓ 選擇  ·  Enter 確認  ·  Tab 分頁  ·  Esc 關閉"
+	case SectionPersona:
+		return "↑↓ 選擇  ·  Enter 啟用/停用  ·  d 停用  ·  r 重新載入  ·  o 開啟資料夾  ·  Tab 分頁  ·  Esc 關閉"
+	case SectionAuth:
+		return "↑↓ 選擇  ·  Enter/a 新增  ·  d 刪除  ·  Tab 分頁  ·  Esc 關閉"
+	case SectionSessions:
+		return "Enter 選擇  ·  n 新建  ·  r 重命名  ·  d 刪除  ·  Tab 分頁  ·  Esc 關閉"
+	case SectionMemory:
+		return "Enter 搜尋  ·  Tab 分頁  ·  Esc 關閉"
+	case SectionUsage:
+		return "↑↓ 瀏覽  ·  Tab 分頁  ·  Esc 關閉"
+	case SectionMCP:
+		return "↑↓ 選擇  ·  Enter 切換啟用  ·  r 重新載入  ·  o 開啟資料夾  ·  Tab 分頁  ·  Esc 關閉"
+	default:
+		return "↑↓ 選擇  ·  Enter 確認  ·  Tab 分頁  ·  Esc 關閉"
+	}
+}
+
 func (sv SettingsView) View() string {
 	// Fallback: if called directly (not as overlay), render just the content
-	return sv.provider.View(sv.width)
+	return sv.provider.View(sv.width, sv.height)
 }

@@ -111,7 +111,7 @@ func (ps *PersonaSection) HandlePersonaClear(msg PersonaClearMsg) tea.Cmd {
 }
 
 // View renders the persona section content.
-func (ps *PersonaSection) View(width int) string {
+func (ps *PersonaSection) View(width, height int) string {
 	textW := width - 4
 	if textW < 10 {
 		textW = 10
@@ -180,9 +180,6 @@ func (ps *PersonaSection) View(width int) string {
 		}
 	}
 
-	lines = append(lines, "")
-	lines = append(lines, theme.HintStyle.Render("↑↓ 選擇  ·  Enter 啟用/停用  ·  d 停用  ·  r 重新載入  ·  o 開啟資料夾  ·  Esc 返回"))
-
 	return strings.Join(lines, "\n")
 }
 
@@ -196,7 +193,6 @@ func (ps *PersonaSection) renderEmptyState(lines *[]string) {
 	*lines = append(*lines, theme.HintStyle.Render("    anchors.yaml — few-shot 範例 (選用)"))
 	*lines = append(*lines, theme.HintStyle.Render("    lore.md      — 角色知識庫 (選用)"))
 	*lines = append(*lines, "")
-	*lines = append(*lines, theme.HintStyle.Render("r 重新載入  ·  o 開啟資料夾  ·  Esc 返回"))
 }
 
 // openPersonasDirCmd opens the personas directory in the system file manager.

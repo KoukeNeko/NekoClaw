@@ -65,7 +65,7 @@ func (ms *MemorySection) Update(msg tea.KeyMsg, apiClient *client.APIClient) tea
 	return cmd
 }
 
-func (ms MemorySection) View(width int) string {
+func (ms MemorySection) View(width, height int) string {
 	textW := width - 4
 	if textW < 10 {
 		textW = 10
@@ -102,8 +102,6 @@ func (ms MemorySection) View(width int) string {
 			lines = append(lines, "")
 		}
 	}
-
-	lines = append(lines, theme.HintStyle.Render("Enter 搜尋  ·  Esc 返回"))
 
 	return strings.Join(lines, "\n")
 }

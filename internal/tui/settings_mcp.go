@@ -129,7 +129,7 @@ func (ms *MCPSection) HandleBuiltinToggle(msg MCPBuiltinToggleMsg) tea.Cmd {
 }
 
 // View renders the MCP section content.
-func (ms *MCPSection) View(width int) string {
+func (ms *MCPSection) View(width, height int) string {
 	textW := width - 4
 	if textW < 10 {
 		textW = 10
@@ -234,8 +234,6 @@ func (ms *MCPSection) View(width int) string {
 	// Show tools for the selected server.
 	ms.renderSelectedTools(&lines, custom, textW)
 
-	lines = append(lines, theme.HintStyle.Render("↑↓ 選擇  ·  Enter 切換啟用  ·  r 重新載入  ·  o 開啟資料夾  ·  Esc 返回"))
-
 	return strings.Join(lines, "\n")
 }
 
@@ -255,7 +253,6 @@ func (ms *MCPSection) renderEmptyState(lines *[]string) {
 	*lines = append(*lines, theme.HintStyle.Render(`    "trust": "trusted"`))
 	*lines = append(*lines, theme.HintStyle.Render(`  }`))
 	*lines = append(*lines, "")
-	*lines = append(*lines, theme.HintStyle.Render("r 重新載入  ·  o 開啟資料夾  ·  Esc 返回"))
 }
 
 // openMCPDirCmd opens the MCP config directory in the system file manager.

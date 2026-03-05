@@ -104,6 +104,7 @@ func TestToGeminiToolContents_ToolCallAndResult(t *testing.T) {
 	if system != "" {
 		t.Errorf("expected empty system, got %q", system)
 	}
+	// Grouped: user, model(functionCall), user(functionResponse), model(text) = 4
 	if len(contents) != 4 {
 		t.Fatalf("expected 4 content entries, got %d", len(contents))
 	}
@@ -148,6 +149,50 @@ func TestToGeminiToolContents_ToolCallAndResult(t *testing.T) {
 	}
 }
 
+func TestToGeminiToolContents_GroupsInterleavedToolCalls(t *testing.T) {
+	// Runtime creates interleaved assistant+tool pairs for parallel tool calls.
+	messages := []core.Message{
+		{Role: core.RoleUser, Content: "Search and navigate"},
+		{Role: core.RoleAssistant, Content: `{"q":"test"}`, ToolCallID: "tc-1", ToolName: "search"},
+		{Role: core.RoleTool, Content: `{"result":"found"}`, ToolCallID: "tc-1", ToolName: "search"},
+		{Role: core.RoleAssistant, Content: `{"url":"http://x"}`, ToolCallID: "tc-2", ToolName: "navigate"},
+		{Role: core.RoleTool, Content: `{"ok":true}`, ToolCallID: "tc-2", ToolName: "navigate"},
+	}
+	_, contents := toGeminiToolContents(messages)
+	// Should be: user, model(2 functionCalls), user(2 functionResponses) = 3
+	if len(contents) != 3 {
+		t.Fatalf("expected 3 content entries (grouped), got %d", len(contents))
+	}
+	// Model block should have 2 functionCall parts
+	modelParts, _ := contents[1]["parts"].([]map[string]any)
+	if len(modelParts) != 2 {
+		t.Fatalf("expected 2 functionCall parts, got %d", len(modelParts))
+	}
+	// User block should have 2 functionResponse parts
+	userParts, _ := contents[2]["parts"].([]map[string]any)
+	if len(userParts) != 2 {
+		t.Fatalf("expected 2 functionResponse parts, got %d", len(userParts))
+	}
+}
+
+func TestToGeminiToolContents_RawModelContent(t *testing.T) {
+	rawContent := json.RawMessage(`{"role":"model","parts":[{"functionCall":{"name":"search","args":{"q":"test"}}}],"thought_signature":"abc123"}`)
+	messages := []core.Message{
+		{Role: core.RoleUser, Content: "Search for something"},
+		{Role: core.RoleAssistant, Content: `{"q":"test"}`, ToolCallID: "tc-1", ToolName: "search", ProviderMeta: rawContent},
+		{Role: core.RoleTool, Content: `{"result":"found"}`, ToolCallID: "tc-1", ToolName: "search"},
+	}
+	_, contents := toGeminiToolContents(messages)
+	// Should be: user, raw model content, user(functionResponse) = 3
+	if len(contents) != 3 {
+		t.Fatalf("expected 3 content entries, got %d", len(contents))
+	}
+	// The model block should have thought_signature preserved.
+	if _, ok := contents[1]["thought_signature"]; !ok {
+		t.Error("expected thought_signature in raw model content block")
+	}
+}
+
 func TestToGeminiToolContents_EmptyContentSkipped(t *testing.T) {
 	messages := []core.Message{
 		{Role: core.RoleUser, Content: ""},
@@ -177,18 +222,21 @@ func TestExtractToolCallsFromGeminiResponse_TextOnly(t *testing.T) {
 			"totalTokenCount": 15
 		}
 	}`
-	text, calls, usage, ok := extractToolCallsFromGeminiResponse([]byte(body))
-	if !ok {
-		t.Fatal("expected ok=true")
+	r := extractToolCallsFromGeminiResponse([]byte(body))
+	if !r.OK {
+		t.Fatal("expected OK=true")
 	}
-	if text != "Hello world" {
-		t.Errorf("expected 'Hello world', got %q", text)
+	if r.Text != "Hello world" {
+		t.Errorf("expected 'Hello world', got %q", r.Text)
 	}
-	if len(calls) != 0 {
-		t.Errorf("expected 0 calls, got %d", len(calls))
+	if len(r.Calls) != 0 {
+		t.Errorf("expected 0 calls, got %d", len(r.Calls))
 	}
-	if usage.TotalTokens != 15 {
-		t.Errorf("expected 15 total tokens, got %d", usage.TotalTokens)
+	if r.Usage.TotalTokens != 15 {
+		t.Errorf("expected 15 total tokens, got %d", r.Usage.TotalTokens)
+	}
+	if len(r.RawModelContent) != 0 {
+		t.Error("expected no RawModelContent for text-only response")
 	}
 }
 
@@ -199,7 +247,8 @@ func TestExtractToolCallsFromGeminiResponse_FunctionCall(t *testing.T) {
 				"parts": [
 					{"text": "Let me check the weather."},
 					{"functionCall": {"name": "get_weather", "args": {"city": "Tokyo"}}}
-				]
+				],
+				"thought_signature": "sig123"
 			}
 		}],
 		"usageMetadata": {
@@ -208,31 +257,42 @@ func TestExtractToolCallsFromGeminiResponse_FunctionCall(t *testing.T) {
 			"totalTokenCount": 30
 		}
 	}`
-	text, calls, usage, ok := extractToolCallsFromGeminiResponse([]byte(body))
-	if !ok {
-		t.Fatal("expected ok=true")
+	r := extractToolCallsFromGeminiResponse([]byte(body))
+	if !r.OK {
+		t.Fatal("expected OK=true")
 	}
-	if text != "Let me check the weather." {
-		t.Errorf("expected text, got %q", text)
+	if r.Text != "Let me check the weather." {
+		t.Errorf("expected text, got %q", r.Text)
 	}
-	if len(calls) != 1 {
-		t.Fatalf("expected 1 call, got %d", len(calls))
+	if len(r.Calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(r.Calls))
 	}
-	if calls[0].Name != "get_weather" {
-		t.Errorf("expected get_weather, got %s", calls[0].Name)
+	if r.Calls[0].Name != "get_weather" {
+		t.Errorf("expected get_weather, got %s", r.Calls[0].Name)
 	}
-	if !strings.HasPrefix(calls[0].ID, "gemini-tc-") {
-		t.Errorf("expected generated ID, got %s", calls[0].ID)
+	if !strings.HasPrefix(r.Calls[0].ID, "gemini-tc-") {
+		t.Errorf("expected generated ID, got %s", r.Calls[0].ID)
 	}
 	var args map[string]any
-	if err := json.Unmarshal(calls[0].Arguments, &args); err != nil {
+	if err := json.Unmarshal(r.Calls[0].Arguments, &args); err != nil {
 		t.Fatalf("failed to parse arguments: %v", err)
 	}
 	if args["city"] != "Tokyo" {
 		t.Errorf("expected city=Tokyo, got %v", args["city"])
 	}
-	if usage.InputTokens != 20 {
-		t.Errorf("expected 20 input tokens, got %d", usage.InputTokens)
+	if r.Usage.InputTokens != 20 {
+		t.Errorf("expected 20 input tokens, got %d", r.Usage.InputTokens)
+	}
+	// Should have RawModelContent with thought_signature preserved.
+	if len(r.RawModelContent) == 0 {
+		t.Fatal("expected RawModelContent for function call response")
+	}
+	var rawContent map[string]any
+	if err := json.Unmarshal(r.RawModelContent, &rawContent); err != nil {
+		t.Fatalf("failed to parse RawModelContent: %v", err)
+	}
+	if rawContent["thought_signature"] != "sig123" {
+		t.Errorf("expected thought_signature=sig123, got %v", rawContent["thought_signature"])
 	}
 }
 
@@ -248,18 +308,18 @@ func TestExtractToolCallsFromGeminiResponse_ResponseWrapper(t *testing.T) {
 			"usageMetadata": {"totalTokenCount": 8}
 		}
 	}`
-	_, calls, usage, ok := extractToolCallsFromGeminiResponse([]byte(body))
-	if !ok {
-		t.Fatal("expected ok=true")
+	r := extractToolCallsFromGeminiResponse([]byte(body))
+	if !r.OK {
+		t.Fatal("expected OK=true")
 	}
-	if len(calls) != 1 {
-		t.Fatalf("expected 1 call, got %d", len(calls))
+	if len(r.Calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(r.Calls))
 	}
-	if calls[0].Name != "search" {
-		t.Errorf("expected search, got %s", calls[0].Name)
+	if r.Calls[0].Name != "search" {
+		t.Errorf("expected search, got %s", r.Calls[0].Name)
 	}
-	if usage.TotalTokens != 8 {
-		t.Errorf("expected 8 total tokens, got %d", usage.TotalTokens)
+	if r.Usage.TotalTokens != 8 {
+		t.Errorf("expected 8 total tokens, got %d", r.Usage.TotalTokens)
 	}
 }
 
@@ -274,33 +334,33 @@ func TestExtractToolCallsFromGeminiResponse_MultipleFunctionCalls(t *testing.T) 
 			}
 		}]
 	}`
-	_, calls, _, ok := extractToolCallsFromGeminiResponse([]byte(body))
-	if !ok {
-		t.Fatal("expected ok=true")
+	r := extractToolCallsFromGeminiResponse([]byte(body))
+	if !r.OK {
+		t.Fatal("expected OK=true")
 	}
-	if len(calls) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(calls))
+	if len(r.Calls) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(r.Calls))
 	}
-	if calls[0].Name != "tool_a" {
-		t.Errorf("expected tool_a, got %s", calls[0].Name)
+	if r.Calls[0].Name != "tool_a" {
+		t.Errorf("expected tool_a, got %s", r.Calls[0].Name)
 	}
-	if calls[1].Name != "tool_b" {
-		t.Errorf("expected tool_b, got %s", calls[1].Name)
+	if r.Calls[1].Name != "tool_b" {
+		t.Errorf("expected tool_b, got %s", r.Calls[1].Name)
 	}
 }
 
 func TestExtractToolCallsFromGeminiResponse_Empty(t *testing.T) {
 	body := `{"candidates": []}`
-	_, _, _, ok := extractToolCallsFromGeminiResponse([]byte(body))
-	if ok {
-		t.Error("expected ok=false for empty candidates")
+	r := extractToolCallsFromGeminiResponse([]byte(body))
+	if r.OK {
+		t.Error("expected OK=false for empty candidates")
 	}
 }
 
 func TestExtractToolCallsFromGeminiResponse_InvalidJSON(t *testing.T) {
-	_, _, _, ok := extractToolCallsFromGeminiResponse([]byte("not json"))
-	if ok {
-		t.Error("expected ok=false for invalid JSON")
+	r := extractToolCallsFromGeminiResponse([]byte("not json"))
+	if r.OK {
+		t.Error("expected OK=false for invalid JSON")
 	}
 }
 

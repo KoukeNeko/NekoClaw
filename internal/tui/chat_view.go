@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/doeshing/nekoclaw/internal/client"
 	"github.com/doeshing/nekoclaw/internal/core"
+	"github.com/doeshing/nekoclaw/internal/mcp"
 )
 
 // ChatView orchestrates the chat viewport, input, and spinner.
@@ -21,8 +22,9 @@ type ChatView struct {
 	pending  bool
 
 	// Thinking pseudo-message tracking
-	thinkingActive bool
-	thinkingStart  time.Time
+	thinkingActive  bool
+	thinkingStart   time.Time
+	currentToolName string // active tool name shown in spinner (polled from server)
 
 	// Shared state (set by parent)
 	client    *client.APIClient
@@ -183,6 +185,21 @@ func (cv *ChatView) Update(msg tea.Msg) tea.Cmd {
 	case ChatResultMsg:
 		return cv.handleChatResult(msg)
 
+	case ToolStatusMsg:
+		if cv.pending {
+			cv.currentToolName = msg.ToolName
+			if cv.thinkingActive {
+				cv.viewport.UpdateLastMessage(cv.thinkingStatus())
+			}
+			// Schedule next poll while still pending.
+			cmds = append(cmds, scheduleToolStatusTick())
+		}
+
+	case ToolStatusTickMsg:
+		if cv.pending {
+			return pollToolStatusCmd(cv.client, cv.sessionID)
+		}
+
 	case StreamTickMsg:
 		// Legacy: ignored (streaming removed)
 		return nil
@@ -331,9 +348,19 @@ func (cv ChatView) renderHeader() string {
 }
 
 // thinkingStatus builds a single-line status: ⠋ provider · model · 3.2s
+// When a tool is actively executing, appends "· 🔧 toolName".
 func (cv ChatView) thinkingStatus() string {
 	elapsed := time.Since(cv.thinkingStart).Truncate(100 * time.Millisecond)
-	return fmt.Sprintf("%s %s · %s · %s", cv.spinner.View(), cv.provider, cv.displayModel(), elapsed)
+	status := fmt.Sprintf("%s %s · %s · %s", cv.spinner.View(), cv.provider, cv.displayModel(), elapsed)
+	if cv.currentToolName != "" {
+		// Show friendly name for MCP tools: "server/tool" instead of "mcp__server__tool"
+		displayName := cv.currentToolName
+		if serverName, toolName, isMCP := mcp.ParseNamespacedTool(cv.currentToolName); isMCP {
+			displayName = serverName + "/" + toolName
+		}
+		status += " · 🔧 正在使用 " + displayName + "…"
+	}
+	return status
 }
 
 func (cv *ChatView) handleSubmit(text string) tea.Cmd {
@@ -376,6 +403,7 @@ func (cv *ChatView) handleSubmit(text string) tea.Cmd {
 	cv.pending = true
 	cv.thinkingActive = true
 	cv.thinkingStart = time.Now()
+	cv.currentToolName = "" // reset tool status
 	cv.viewport.AppendMessage(ChatMessage{
 		Role:      "thinking",
 		Content:   cv.thinkingStatus(),
@@ -392,14 +420,20 @@ func (cv *ChatView) handleSubmit(text string) tea.Cmd {
 		EnableTools: providerToolEnabled(cv.provider),
 	}
 	cv.pendingImages = nil // clear after submit
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		sendChatCmd(cv.client, req),
 		cv.spinner.Tick,
-	)
+	}
+	// Start tool status polling when tools are enabled.
+	if req.EnableTools {
+		cmds = append(cmds, scheduleToolStatusTick())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (cv *ChatView) handleChatResult(msg ChatResultMsg) tea.Cmd {
 	cv.pending = false
+	cv.currentToolName = "" // clear tool status on completion
 
 	if msg.Response.SessionID != cv.sessionID {
 		return nil
@@ -458,13 +492,14 @@ func (cv *ChatView) handleChatResult(msg ChatResultMsg) tea.Cmd {
 		elapsedMs = time.Since(cv.thinkingStart).Milliseconds()
 	}
 
-	// Show full response with token usage stats
+	// Show full response with token usage stats and tool summary
 	cv.viewport.AppendMessage(ChatMessage{
 		Role:         "assistant",
 		Content:      msg.Response.Reply,
 		InputTokens:  msg.Response.Usage.InputTokens,
 		OutputTokens: msg.Response.Usage.OutputTokens,
 		ElapsedMs:    elapsedMs,
+		ToolEvents:   msg.Response.ToolEvents,
 		Timestamp:    time.Now(),
 	})
 
@@ -515,12 +550,21 @@ func (cv *ChatView) handleApprovalDecision(decision string) tea.Cmd {
 	cv.pending = true
 	cv.thinkingActive = true
 	cv.thinkingStart = time.Now()
+	cv.currentToolName = "" // reset tool status
 	cv.viewport.AppendMessage(ChatMessage{
 		Role:      "thinking",
 		Content:   cv.thinkingStatus(),
 		Timestamp: time.Now(),
 	})
-	return tea.Batch(sendChatCmd(cv.client, req), cv.spinner.Tick)
+	cmds := []tea.Cmd{
+		sendChatCmd(cv.client, req),
+		cv.spinner.Tick,
+	}
+	// Resume tool status polling when tools are enabled.
+	if req.EnableTools {
+		cmds = append(cmds, scheduleToolStatusTick())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (cv *ChatView) renderApprovalPrompt() string {
@@ -544,12 +588,9 @@ func (cv *ChatView) renderApprovalPrompt() string {
 }
 
 func providerToolEnabled(providerID string) bool {
-	switch strings.TrimSpace(providerID) {
-	case "anthropic", "openai", "openai-codex":
-		return true
-	default:
-		return false
-	}
+	// All providers support tool calling except mock.
+	// Service layer validates ToolCallingProvider interface as a safety net.
+	return strings.TrimSpace(providerID) != "mock"
 }
 
 func (cv *ChatView) handleSlashCommand(text string) (tea.Cmd, bool) {

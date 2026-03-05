@@ -311,12 +311,9 @@ func New(baseURL string) *APIClient {
 	return &APIClient{
 		baseURL: trimmed,
 		http: &http.Client{
-			// No Timeout here — each call site controls timeout via context.
-			// ResponseHeaderTimeout acts as a safety net for connection-level hangs
-			// but never fires before the caller's context timeout.
-			Transport: &http.Transport{
-				ResponseHeaderTimeout: 120 * time.Second,
-			},
+			// No Timeout or ResponseHeaderTimeout — each call site controls
+			// timeout via context. MCP tool chains can run indefinitely;
+			// the user cancels via Esc which cancels the context.
 		},
 	}
 }
@@ -337,6 +334,23 @@ func (c *APIClient) Chat(ctx context.Context, req core.ChatRequest) (core.ChatRe
 		return core.ChatResponse{}, err
 	}
 	return out, nil
+}
+
+// GetToolStatus returns the name of the tool currently being executed
+// for the given session, or an empty string if idle.
+func (c *APIClient) GetToolStatus(ctx context.Context, sessionID string) (string, error) {
+	url := c.baseURL + "/v1/tool-status?session_id=" + sessionID
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		ToolName string `json:"tool_name"`
+	}
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return "", err
+	}
+	return out.ToolName, nil
 }
 
 func (c *APIClient) Providers(ctx context.Context) ([]string, error) {

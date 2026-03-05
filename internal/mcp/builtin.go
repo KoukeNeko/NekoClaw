@@ -24,7 +24,11 @@ var builtinRegistry = []BuiltinServerDef{
 			Name:      "playwright",
 			Transport: TransportStdio,
 			Command:   "npx",
-			Args:      []string{"-y", "@playwright/mcp@latest"},
+			Args: []string{
+				"-y", "@playwright/mcp@latest",
+				"--headless",
+				"--vision",
+			},
 			Env: map[string]string{
 				// Skip automatic Chromium download that triggers sudo password prompts.
 				// Users should install browsers separately: npx playwright install

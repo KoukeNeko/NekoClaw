@@ -46,17 +46,17 @@ func toGeminiFunctionDeclarations(tools []ToolDefinition) []map[string]any {
 // toGeminiToolContents converts core.Message slice (including tool-related
 // messages) into Gemini contents and an optional systemInstruction string.
 //
-// Message role mapping:
-//   - RoleSystem        → collected into systemInstruction
-//   - RoleAssistant + ToolCallID + ToolName → model role, functionCall part
-//   - RoleAssistant (plain)                 → model role, text part
-//   - RoleTool                              → user role, functionResponse part
-//   - default (user)                        → user role, text + inline_data parts
+// Handles proper grouping:
+//   - Consecutive assistant tool-call messages → one model content block
+//   - Consecutive tool result messages → one user content block
+//   - ProviderMeta on assistant messages → raw model content (preserves thought_signature)
 func toGeminiToolContents(messages []core.Message) (string, []map[string]any) {
 	systemParts := make([]string, 0, 4)
 	contents := make([]map[string]any, 0, len(messages))
 
-	for _, msg := range messages {
+	i := 0
+	for i < len(messages) {
+		msg := messages[i]
 		text := strings.TrimSpace(msg.Content)
 
 		switch msg.Role {
@@ -64,25 +64,47 @@ func toGeminiToolContents(messages []core.Message) (string, []map[string]any) {
 			if text != "" {
 				systemParts = append(systemParts, text)
 			}
+			i++
 
 		case core.RoleAssistant:
 			if strings.TrimSpace(msg.ToolCallID) != "" && strings.TrimSpace(msg.ToolName) != "" {
-				// Assistant message that represents a tool call (functionCall).
-				args := parseJSONOrWrap(text)
-				contents = append(contents, map[string]any{
-					"role": "model",
-					"parts": []map[string]any{
-						{
-							"functionCall": map[string]any{
-								"name": strings.TrimSpace(msg.ToolName),
-								"args": args,
-							},
-						},
-					},
-				})
+				// Tool call assistant message(s). Check if the first one carries
+				// the raw model content block (with thought_signature etc.).
+				if len(msg.ProviderMeta) > 0 {
+					rawContent, frParts, next := collectToolTurnWithRaw(messages, i)
+					i = next
+					if rawContent != nil {
+						contents = append(contents, rawContent)
+					}
+					if len(frParts) > 0 {
+						contents = append(contents, map[string]any{
+							"role":  "user",
+							"parts": frParts,
+						})
+					}
+					continue
+				}
+				// No raw content — reconstruct. Group consecutive assistant+tool
+				// pairs into batched model/user content blocks.
+				fcParts, frParts, next := collectToolTurnPair(messages, i)
+				i = next
+				if len(fcParts) > 0 {
+					contents = append(contents, map[string]any{
+						"role":  "model",
+						"parts": fcParts,
+					})
+				}
+				if len(frParts) > 0 {
+					contents = append(contents, map[string]any{
+						"role":  "user",
+						"parts": frParts,
+					})
+				}
 				continue
 			}
+			// Plain text assistant message.
 			if text == "" {
+				i++
 				continue
 			}
 			contents = append(contents, map[string]any{
@@ -91,24 +113,18 @@ func toGeminiToolContents(messages []core.Message) (string, []map[string]any) {
 					{"text": text},
 				},
 			})
+			i++
 
 		case core.RoleTool:
-			toolName := strings.TrimSpace(msg.ToolName)
-			if toolName == "" {
-				toolName = "unknown_tool"
+			// Orphan tool messages (shouldn't happen, but handle gracefully).
+			_, frParts, next := collectToolTurnPair(messages, i)
+			i = next
+			if len(frParts) > 0 {
+				contents = append(contents, map[string]any{
+					"role":  "user",
+					"parts": frParts,
+				})
 			}
-			responseContent := parseJSONOrWrap(text)
-			contents = append(contents, map[string]any{
-				"role": "user",
-				"parts": []map[string]any{
-					{
-						"functionResponse": map[string]any{
-							"name":     toolName,
-							"response": responseContent,
-						},
-					},
-				},
-			})
 
 		default:
 			// User message — may include images.
@@ -125,25 +141,192 @@ func toGeminiToolContents(messages []core.Message) (string, []map[string]any) {
 				parts = append(parts, map[string]any{"text": text})
 			}
 			if len(parts) == 0 {
+				i++
 				continue
 			}
 			contents = append(contents, map[string]any{
 				"role":  "user",
 				"parts": parts,
 			})
+			i++
 		}
 	}
 
 	return strings.Join(systemParts, "\n\n"), contents
 }
 
-// extractToolCallsFromGeminiResponse parses a Gemini generateContent JSON
-// response body and extracts text + functionCall parts from candidates.
-// Works for both raw responses and those wrapped in a "response" envelope.
-func extractToolCallsFromGeminiResponse(body []byte) (string, []ToolCall, core.UsageInfo, bool) {
+// collectToolTurnPair scans messages starting at idx, collecting interleaved
+// assistant-with-ToolCallID and tool messages into batched functionCall and
+// functionResponse part arrays. Returns (fcParts, frParts, nextIndex).
+func collectToolTurnPair(messages []core.Message, idx int) ([]map[string]any, []map[string]any, int) {
+	var fcParts []map[string]any
+	var frParts []map[string]any
+	i := idx
+	for i < len(messages) {
+		msg := messages[i]
+		if msg.Role == core.RoleAssistant && strings.TrimSpace(msg.ToolCallID) != "" {
+			args := parseJSONOrWrap(strings.TrimSpace(msg.Content))
+			fcParts = append(fcParts, map[string]any{
+				"functionCall": map[string]any{
+					"name": strings.TrimSpace(msg.ToolName),
+					"args": args,
+				},
+			})
+			i++
+			continue
+		}
+		if msg.Role == core.RoleTool {
+			toolName := strings.TrimSpace(msg.ToolName)
+			if toolName == "" {
+				toolName = "unknown_tool"
+			}
+			frParts = append(frParts, map[string]any{
+				"functionResponse": map[string]any{
+					"name":     toolName,
+					"response": parseJSONOrWrap(strings.TrimSpace(msg.Content)),
+				},
+			})
+			i++
+			continue
+		}
+		break
+	}
+	return fcParts, frParts, i
+}
+
+// collectToolTurnWithRaw handles a model turn where the first assistant message
+// carries ProviderMeta (raw model content block). It outputs the raw block
+// directly and collects tool results into a functionResponse user block.
+// Returns (modelContent, frParts, nextIndex).
+func collectToolTurnWithRaw(messages []core.Message, idx int) (map[string]any, []map[string]any, int) {
+	var rawContent map[string]any
+	_ = json.Unmarshal(messages[idx].ProviderMeta, &rawContent)
+
+	var frParts []map[string]any
+	i := idx
+	for i < len(messages) {
+		msg := messages[i]
+		if msg.Role == core.RoleAssistant && strings.TrimSpace(msg.ToolCallID) != "" {
+			// Skip — already represented in the raw content block.
+			i++
+			continue
+		}
+		if msg.Role == core.RoleTool {
+			toolName := strings.TrimSpace(msg.ToolName)
+			if toolName == "" {
+				toolName = "unknown_tool"
+			}
+			frParts = append(frParts, map[string]any{
+				"functionResponse": map[string]any{
+					"name":     toolName,
+					"response": parseJSONOrWrap(strings.TrimSpace(msg.Content)),
+				},
+			})
+			i++
+			continue
+		}
+		break
+	}
+	return rawContent, frParts, i
+}
+
+// ---------------------------------------------------------------------------
+// Response extraction
+// ---------------------------------------------------------------------------
+
+// geminiExtractResult bundles the return values of extraction functions.
+type geminiExtractResult struct {
+	Text            string
+	Calls           []ToolCall
+	Usage           core.UsageInfo
+	RawModelContent json.RawMessage // raw candidate content (preserves thought_signature)
+	OK              bool
+}
+
+// extractToolCallsFromGeminiResponse parses a Gemini generateContent response
+// body and extracts text + functionCall parts from candidates.
+// Handles both plain JSON and SSE (data: ...) formats, as well as responses
+// wrapped in a "response" envelope.
+func extractToolCallsFromGeminiResponse(body []byte) geminiExtractResult {
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
+		return geminiExtractResult{}
+	}
+
+	// SSE mode: parse each "data:" event and accumulate results.
+	if strings.Contains(trimmed, "data:") {
+		return extractToolCallsFromGeminiSSE(trimmed)
+	}
+
+	return extractToolCallsFromGeminiJSON(body)
+}
+
+// extractToolCallsFromGeminiSSE parses SSE events and accumulates text + functionCall
+// parts across all events.
+func extractToolCallsFromGeminiSSE(raw string) geminiExtractResult {
+	lines := strings.Split(raw, "\n")
+	var textParts []string
+	var calls []ToolCall
+	var usage core.UsageInfo
+	var rawModelContent json.RawMessage
+	var eventData []string
+
+	flush := func() {
+		if len(eventData) == 0 {
+			return
+		}
+		chunk := strings.TrimSpace(strings.Join(eventData, "\n"))
+		eventData = eventData[:0]
+		if chunk == "" || chunk == "[DONE]" {
+			return
+		}
+		r := extractToolCallsFromGeminiJSON([]byte(chunk))
+		if !r.OK {
+			return
+		}
+		if r.Text != "" {
+			textParts = append(textParts, r.Text)
+		}
+		calls = append(calls, r.Calls...)
+		if r.Usage.InputTokens > 0 || r.Usage.OutputTokens > 0 {
+			usage = r.Usage
+		}
+		// Keep raw content from any event that contains function calls.
+		if len(r.Calls) > 0 && len(r.RawModelContent) > 0 {
+			rawModelContent = r.RawModelContent
+		}
+	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			flush()
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "data:") {
+			continue
+		}
+		eventData = append(eventData, strings.TrimSpace(strings.TrimPrefix(trimmed, "data:")))
+	}
+	flush()
+
+	if len(textParts) == 0 && len(calls) == 0 {
+		return geminiExtractResult{}
+	}
+	return geminiExtractResult{
+		Text:            strings.Join(textParts, ""),
+		Calls:           calls,
+		Usage:           usage,
+		RawModelContent: rawModelContent,
+		OK:              true,
+	}
+}
+
+// extractToolCallsFromGeminiJSON parses a single JSON response body.
+func extractToolCallsFromGeminiJSON(body []byte) geminiExtractResult {
 	var root map[string]any
 	if err := json.Unmarshal(body, &root); err != nil {
-		return "", nil, core.UsageInfo{}, false
+		return geminiExtractResult{}
 	}
 
 	// Gemini Internal wraps the actual response inside "response".
@@ -154,11 +337,12 @@ func extractToolCallsFromGeminiResponse(body []byte) (string, []ToolCall, core.U
 
 	candidates, _ := actual["candidates"].([]any)
 	if len(candidates) == 0 {
-		return "", nil, core.UsageInfo{}, false
+		return geminiExtractResult{}
 	}
 
 	var textParts []string
 	var calls []ToolCall
+	var rawModelContent json.RawMessage
 
 	for _, rawCandidate := range candidates {
 		candidate, _ := rawCandidate.(map[string]any)
@@ -170,6 +354,7 @@ func extractToolCallsFromGeminiResponse(body []byte) (string, []ToolCall, core.U
 			continue
 		}
 		parts, _ := content["parts"].([]any)
+		hasFunctionCall := false
 		for _, rawPart := range parts {
 			part, _ := rawPart.(map[string]any)
 			if part == nil {
@@ -179,6 +364,7 @@ func extractToolCallsFromGeminiResponse(body []byte) (string, []ToolCall, core.U
 				textParts = append(textParts, txt)
 			}
 			if fc, ok := part["functionCall"].(map[string]any); ok {
+				hasFunctionCall = true
 				name, _ := fc["name"].(string)
 				name = strings.TrimSpace(name)
 				if name == "" {
@@ -200,15 +386,28 @@ func extractToolCallsFromGeminiResponse(body []byte) (string, []ToolCall, core.U
 				})
 			}
 		}
+		// Preserve the raw candidate content when it has function calls
+		// (includes thought_signature and any other provider-specific fields).
+		if hasFunctionCall {
+			if encoded, err := json.Marshal(content); err == nil {
+				rawModelContent = encoded
+			}
+		}
 	}
 
 	if len(textParts) == 0 && len(calls) == 0 {
-		return "", nil, core.UsageInfo{}, false
+		return geminiExtractResult{}
 	}
 
 	usage := parseUsageMetadata(actual)
 
-	return strings.Join(textParts, ""), calls, usage, true
+	return geminiExtractResult{
+		Text:            strings.Join(textParts, ""),
+		Calls:           calls,
+		Usage:           usage,
+		RawModelContent: rawModelContent,
+		OK:              true,
+	}
 }
 
 // buildGeminiGenerationConfig creates a generationConfig map from GenerationParams.

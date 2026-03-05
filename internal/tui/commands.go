@@ -28,14 +28,33 @@ func checkClipboardImageCmd() tea.Cmd {
 
 func sendChatCmd(apiClient *client.APIClient, req core.ChatRequest) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		resp, err := apiClient.Chat(ctx, req)
+		// No client-side timeout: MCP tool chains can run indefinitely.
+		// Server controls the lifecycle; user cancels via Esc.
+		resp, err := apiClient.Chat(context.Background(), req)
 		if err != nil && resp.SessionID == "" {
 			resp.SessionID = req.SessionID
 		}
 		return ChatResultMsg{Response: resp, Err: err}
 	}
+}
+
+// pollToolStatusCmd polls the active tool status during pending chat.
+// Returns a ToolStatusMsg with the current tool name, then schedules
+// the next poll via ToolStatusTickMsg after a short delay.
+func pollToolStatusCmd(apiClient *client.APIClient, sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		name, _ := apiClient.GetToolStatus(ctx, sessionID)
+		return ToolStatusMsg{ToolName: name}
+	}
+}
+
+// scheduleToolStatusTick schedules the next tool status poll after 500ms.
+func scheduleToolStatusTick() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(_ time.Time) tea.Msg {
+		return ToolStatusTickMsg{}
+	})
 }
 
 // ---------------------------------------------------------------------------

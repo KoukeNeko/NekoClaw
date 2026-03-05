@@ -127,7 +127,7 @@ func NewOpenAIProvider(opts OpenAIOptions) *OpenAIProvider {
 	}
 	client := opts.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = &http.Client{}
 	}
 	return &OpenAIProvider{
 		providerID:    providerID,

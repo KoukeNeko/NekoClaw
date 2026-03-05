@@ -45,7 +45,7 @@ func TestAuthViewStripsTerminalControlSequences(t *testing.T) {
 	}
 	as.statusMsg = "bad:\x1b]11;rgb:11/22/33\x07done"
 
-	view := as.View(80)
+	view := as.View(80, 30)
 	if strings.Contains(view, "\x1b]11;") {
 		t.Fatalf("view should not contain raw OSC sequence: %q", view)
 	}

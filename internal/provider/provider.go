@@ -56,12 +56,13 @@ type ToolTurnRequest struct {
 }
 
 type ToolTurnResponse struct {
-	Text       string
-	Endpoint   string
-	Raw        json.RawMessage
-	Usage      core.UsageInfo
-	StopReason string
-	ToolCalls  []ToolCall
+	Text            string
+	Endpoint        string
+	Raw             json.RawMessage
+	Usage           core.UsageInfo
+	StopReason      string
+	ToolCalls       []ToolCall
+	RawModelContent json.RawMessage // raw model content block (e.g. Gemini candidate content with thought_signature)
 }
 
 type ToolCapabilities struct {

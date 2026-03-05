@@ -98,7 +98,7 @@ func NewGeminiInternalProvider(opts GeminiInternalOptions) *GeminiInternalProvid
 	}
 	client := opts.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 25 * time.Second}
+		client = &http.Client{}
 	}
 	return &GeminiInternalProvider{
 		client:        client,
@@ -172,12 +172,10 @@ func (p *GeminiInternalProvider) GenerateToolTurn(ctx context.Context, req ToolT
 	body, _ := json.Marshal(outerPayload)
 
 	endpointOrder := p.resolveEndpointOrder(req.Account)
-	// Use non-streaming endpoint for tool turns to simplify functionCall parsing.
-	const toolGeneratePath = "/v1internal:generateContent"
 
 	var lastErr error
 	for _, endpoint := range endpointOrder {
-		endpointURL := strings.TrimRight(endpoint, "/") + toolGeneratePath
+		endpointURL := strings.TrimRight(endpoint, "/") + p.generatePath
 
 		resp, err := doWithRetry(ctx, DefaultRetryConfig(), func() (*http.Response, error) {
 			httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(body))
@@ -186,6 +184,7 @@ func (p *GeminiInternalProvider) GenerateToolTurn(ctx context.Context, req ToolT
 			}
 			httpReq.Header.Set("Authorization", "Bearer "+token)
 			httpReq.Header.Set("Content-Type", "application/json")
+			httpReq.Header.Set("Accept", "text/event-stream")
 			httpReq.Header.Set("User-Agent", "google-cloud-sdk vscode_cloudshelleditor/0.1")
 			httpReq.Header.Set("X-Goog-Api-Client", "google-cloud-sdk vscode_cloudshelleditor/0.1")
 			httpReq.Header.Set("Client-Metadata", `{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}`)
@@ -213,8 +212,8 @@ func (p *GeminiInternalProvider) GenerateToolTurn(ctx context.Context, req ToolT
 			return ToolTurnResponse{}, lastErr
 		}
 
-		text, calls, usage, ok := extractToolCallsFromGeminiResponse(respBody)
-		if !ok {
+		result := extractToolCallsFromGeminiResponse(respBody)
+		if !result.OK {
 			lastErr = &FailureError{
 				Reason:   core.FailureFormat,
 				Message:  "gemini internal tool response did not include text or tool calls: " + summarizeForError(respBody, 280),
@@ -225,16 +224,17 @@ func (p *GeminiInternalProvider) GenerateToolTurn(ctx context.Context, req ToolT
 		}
 
 		stopReason := "end_turn"
-		if len(calls) > 0 {
+		if len(result.Calls) > 0 {
 			stopReason = "tool_calls"
 		}
 		return ToolTurnResponse{
-			Text:       text,
-			Endpoint:   endpoint,
-			Raw:        respBody,
-			Usage:      usage,
-			StopReason: stopReason,
-			ToolCalls:  calls,
+			Text:            result.Text,
+			Endpoint:        endpoint,
+			Raw:             respBody,
+			Usage:           result.Usage,
+			StopReason:      stopReason,
+			ToolCalls:       result.Calls,
+			RawModelContent: result.RawModelContent,
 		}, nil
 	}
 

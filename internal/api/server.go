@@ -83,6 +83,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/personas/use", s.handlePersonaUse)
 	mux.HandleFunc("/v1/personas/clear", s.handlePersonaClear)
 	mux.HandleFunc("/v1/personas/reload", s.handlePersonaReload)
+	mux.HandleFunc("/v1/tool-status", s.handleToolStatus)
 	return mux
 }
 
@@ -1431,4 +1432,18 @@ func (s *Server) handlePersonaReload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleToolStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	sessionID := strings.TrimSpace(r.URL.Query().Get("session_id"))
+	if sessionID == "" {
+		respondError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+	toolName := s.svc.GetActiveToolStatus(sessionID)
+	respondJSON(w, http.StatusOK, map[string]any{"tool_name": toolName})
 }

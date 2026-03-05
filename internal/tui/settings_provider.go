@@ -374,7 +374,7 @@ func (ps *ProviderSection) clearFallbackSlot(slotIdx int, apiClient *client.APIC
 // View
 // ---------------------------------------------------------------------------
 
-func (ps ProviderSection) View(width int) string {
+func (ps ProviderSection) View(width, height int) string {
 	textW := width - 4
 	if textW < 10 {
 		textW = 10
@@ -391,8 +391,14 @@ func (ps ProviderSection) View(width int) string {
 		colW = 15
 	}
 
-	col1 := ps.renderProviderColumn(colW)
-	col2 := ps.renderModelColumn(colW)
+	// Column item height: total height minus header (1) + empty (1) + column header (1).
+	colItemH := height - 3
+	if colItemH < 3 {
+		colItemH = 3
+	}
+
+	col1 := ps.renderProviderColumn(colW, colItemH)
+	col2 := ps.renderModelColumn(colW, colItemH)
 	col3 := ps.renderFallbackColumn(colW)
 
 	colStyle := lipgloss.NewStyle().Width(colW)
@@ -406,20 +412,12 @@ func (ps ProviderSection) View(width int) string {
 	)
 	out = append(out, columns)
 
-	out = append(out, "")
-
-	// Context-sensitive help text
-	if ps.focusField >= 2 {
-		out = append(out, theme.HintStyle.Render("←→ 切換欄位  ·  ↑↓ 選擇  ·  Enter 切換選項  ·  d 清除  ·  Tab 分頁"))
-	} else {
-		out = append(out, theme.HintStyle.Render("←→ 切換欄位  ·  ↑↓ 選擇  ·  Enter 確認  ·  Tab 分頁"))
-	}
-
 	return strings.Join(out, "\n")
 }
 
 // renderProviderColumn renders the provider list as a single column.
-func (ps ProviderSection) renderProviderColumn(colW int) string {
+// maxItems is the maximum number of item lines (excluding column header).
+func (ps ProviderSection) renderProviderColumn(colW, maxItems int) string {
 	itemW := colW - 2 // account for NormalStyle/SelectedStyle padding
 	if itemW < 5 {
 		itemW = 5
@@ -436,7 +434,13 @@ func (ps ProviderSection) renderProviderColumn(colW int) string {
 	if !ps.loaded {
 		lines = append(lines, theme.HintStyle.Render("  載入中..."))
 	} else {
-		for i, p := range ps.providers {
+		provStart, provEnd := scrollWindow(ps.providerIdx, len(ps.providers), maxItems)
+
+		if provStart > 0 {
+			lines = append(lines, theme.HintStyle.Render(fmt.Sprintf("  ↑ 還有 %d 個…", provStart)))
+		}
+		for i := provStart; i < provEnd; i++ {
+			p := ps.providers[i]
 			prefix := "  "
 			style := theme.NormalStyle
 			if i == ps.providerIdx {
@@ -453,13 +457,17 @@ func (ps ProviderSection) renderProviderColumn(colW int) string {
 			}
 			lines = append(lines, style.Render(clampLine(prefix+label, itemW)))
 		}
+		if provEnd < len(ps.providers) {
+			lines = append(lines, theme.HintStyle.Render(fmt.Sprintf("  ↓ 還有 %d 個…", len(ps.providers)-provEnd)))
+		}
 	}
 
 	return strings.Join(lines, "\n")
 }
 
 // renderModelColumn renders the model list as a single column with scroll window.
-func (ps ProviderSection) renderModelColumn(colW int) string {
+// maxItems is the maximum number of item lines (excluding column header).
+func (ps ProviderSection) renderModelColumn(colW, maxItems int) string {
 	itemW := colW - 2
 	if itemW < 5 {
 		itemW = 5
@@ -476,8 +484,7 @@ func (ps ProviderSection) renderModelColumn(colW int) string {
 	}
 	lines = append(lines, theme.SectionStyle.Render(modelHeader))
 
-	const maxVisibleModels = 6
-	modelStart, modelEnd := scrollWindow(ps.modelIdx, len(ps.models), maxVisibleModels)
+	modelStart, modelEnd := scrollWindow(ps.modelIdx, len(ps.models), maxItems)
 
 	if modelStart > 0 {
 		lines = append(lines, theme.HintStyle.Render(fmt.Sprintf("  ↑ 還有 %d 個…", modelStart)))

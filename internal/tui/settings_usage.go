@@ -91,7 +91,7 @@ func (us *UsageSection) Update(_ tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (us *UsageSection) View(width int) string {
+func (us *UsageSection) View(width, height int) string {
 	var lines []string
 
 	lines = append(lines, theme.HeaderStyle.Render("Usage"))
@@ -141,8 +141,6 @@ func (us *UsageSection) View(width int) string {
 		lines = append(lines, theme.HintStyle.Render("  尚無使用紀錄。發送訊息後將在此顯示 token 用量。"))
 		lines = append(lines, "")
 	}
-
-	lines = append(lines, theme.HintStyle.Render("Esc 返回"))
 
 	return strings.Join(lines, "\n")
 }

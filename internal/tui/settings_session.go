@@ -162,7 +162,7 @@ func (ss *SessionSection) handleInputMode(msg tea.KeyMsg, apiClient *client.APIC
 	return cmd
 }
 
-func (ss SessionSection) View(width int) string {
+func (ss SessionSection) View(width, height int) string {
 	textW := width - 4
 	if textW < 10 {
 		textW = 10
@@ -222,8 +222,6 @@ func (ss SessionSection) View(width int) string {
 		lines = append(lines, theme.SystemStyle.Render(sanitizeDisplayText(ss.statusMsg)))
 		lines = append(lines, "")
 	}
-
-	lines = append(lines, theme.HintStyle.Render("Enter 選擇  ·  n 新建  ·  r 重命名  ·  d 刪除  ·  Esc 返回"))
 
 	return strings.Join(lines, "\n")
 }

@@ -2,6 +2,7 @@ package tooling
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -21,6 +22,13 @@ func NewRuntime(executor Executor, approvals *ApprovalStore) *Runtime {
 	return &Runtime{
 		executor:  executor,
 		approvals: approvals,
+	}
+}
+
+// emitToolEvent invokes the OnToolEvent callback if configured.
+func emitToolEvent(req *RunRequest, evt core.ToolEvent) {
+	if req.OnToolEvent != nil {
+		req.OnToolEvent(evt)
 	}
 }
 
@@ -50,13 +58,14 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	}
 
 	var (
-		modelID     = strings.TrimSpace(req.ModelID)
-		account     = req.Account
-		messages    = append([]core.Message(nil), req.Messages...)
-		pending     []provider.ToolCall
-		events      []core.ToolEvent
-		usage       core.UsageInfo
-		sessionMsgs []core.Message
+		modelID         = strings.TrimSpace(req.ModelID)
+		account         = req.Account
+		messages        = append([]core.Message(nil), req.Messages...)
+		pending         []provider.ToolCall
+		events          []core.ToolEvent
+		usage           core.UsageInfo
+		sessionMsgs     []core.Message
+		rawModelContent json.RawMessage // raw model content from current tool turn (e.g. Gemini thought_signature)
 	)
 	if modelID == "" {
 		modelID = "default"
@@ -126,6 +135,9 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 				}, nil
 			}
 			pending = append([]provider.ToolCall(nil), turnResp.ToolCalls...)
+			// Preserve the raw model content block (e.g. Gemini thought_signature)
+			// to be stored on the first assistant message for this tool turn.
+			rawModelContent = turnResp.RawModelContent
 		}
 
 		needsApproval := false
@@ -187,6 +199,15 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			}, nil
 		}
 
+		// consumeRawModel returns the rawModelContent on first call, nil thereafter.
+		// This attaches the raw model content block (with thought_signature etc.)
+		// to the first assistant message in this tool turn only.
+		consumeRawModel := func() json.RawMessage {
+			v := rawModelContent
+			rawModelContent = nil
+			return v
+		}
+
 		for _, call := range pending {
 			if !r.executor.HasTool(call.Name) {
 				errMsg := fmt.Sprintf("unknown tool: %s", call.Name)
@@ -197,19 +218,30 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 					Phase:      "failed",
 					Error:      errMsg,
 				})
-				messages = append(messages, core.Message{
+				assistantTool := core.Message{
+					Role:         core.RoleAssistant,
+					ToolName:     call.Name,
+					ToolCallID:   call.ID,
+					Content:      string(call.Arguments),
+					ProviderMeta: consumeRawModel(),
+					CreatedAt:    time.Now(),
+				}
+				toolMsg := core.Message{
 					Role:       core.RoleTool,
 					ToolName:   call.Name,
 					ToolCallID: call.ID,
 					Content:    errMsg,
 					CreatedAt:  time.Now(),
-				})
-				sessionMsgs = append(sessionMsgs, messages[len(messages)-1])
+				}
+				messages = append(messages, assistantTool, toolMsg)
+				sessionMsgs = append(sessionMsgs, assistantTool, toolMsg)
 				continue
 			}
 
 			mutating := r.executor.IsCallMutating(call)
-			events = append(events, newToolEvent(call.ID, call.Name, "requested", mutating))
+			reqEvt := newToolEvent(call.ID, call.Name, "requested", mutating)
+			events = append(events, reqEvt)
+			emitToolEvent(&req, reqEvt)
 
 			if mutating && req.Surface != core.SurfaceTUI {
 				errMsg := "approval_not_supported_for_surface"
@@ -223,11 +255,12 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 					Error:      errMsg,
 				})
 				assistantTool := core.Message{
-					Role:       core.RoleAssistant,
-					ToolName:   call.Name,
-					ToolCallID: call.ID,
-					Content:    string(call.Arguments),
-					CreatedAt:  time.Now(),
+					Role:         core.RoleAssistant,
+					ToolName:     call.Name,
+					ToolCallID:   call.ID,
+					Content:      string(call.Arguments),
+					ProviderMeta: consumeRawModel(),
+					CreatedAt:    time.Now(),
 				}
 				toolMsg := core.Message{
 					Role:       core.RoleTool,
@@ -262,11 +295,12 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 						Decision:   "deny",
 					})
 					assistantTool := core.Message{
-						Role:       core.RoleAssistant,
-						ToolName:   call.Name,
-						ToolCallID: call.ID,
-						Content:    string(call.Arguments),
-						CreatedAt:  time.Now(),
+						Role:         core.RoleAssistant,
+						ToolName:     call.Name,
+						ToolCallID:   call.ID,
+						Content:      string(call.Arguments),
+						ProviderMeta: consumeRawModel(),
+						CreatedAt:    time.Now(),
 					}
 					toolMsg := core.Message{
 						Role:       core.RoleTool,
@@ -284,32 +318,37 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			}
 
 			assistantTool := core.Message{
-				Role:       core.RoleAssistant,
-				ToolName:   call.Name,
-				ToolCallID: call.ID,
-				Content:    string(call.Arguments),
-				CreatedAt:  time.Now(),
+				Role:         core.RoleAssistant,
+				ToolName:     call.Name,
+				ToolCallID:   call.ID,
+				Content:      string(call.Arguments),
+				ProviderMeta: consumeRawModel(),
+				CreatedAt:    time.Now(),
 			}
 			content, err := r.executor.Run(ctx, call)
 			if err != nil {
 				content = "tool_error: " + err.Error()
-				events = append(events, core.ToolEvent{
+				failEvt := core.ToolEvent{
 					At:         time.Now(),
 					ToolCallID: call.ID,
 					ToolName:   call.Name,
 					Phase:      "failed",
 					Mutating:   mutating,
 					Error:      trimPreview(err.Error(), 200),
-				})
+				}
+				events = append(events, failEvt)
+				emitToolEvent(&req, failEvt)
 			} else {
-				events = append(events, core.ToolEvent{
+				execEvt := core.ToolEvent{
 					At:            time.Now(),
 					ToolCallID:    call.ID,
 					ToolName:      call.Name,
 					Phase:         "executed",
 					Mutating:      mutating,
 					OutputPreview: trimPreview(content, 200),
-				})
+				}
+				events = append(events, execEvt)
+				emitToolEvent(&req, execEvt)
 			}
 			toolMsg := core.Message{
 				Role:       core.RoleTool,

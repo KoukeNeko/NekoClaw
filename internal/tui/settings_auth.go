@@ -884,7 +884,7 @@ func (as *AuthSection) moveDown() {
 	}
 }
 
-func (as AuthSection) View(width int) string {
+func (as AuthSection) View(width, height int) string {
 	textW := width - 4
 	if textW < 10 {
 		textW = 10

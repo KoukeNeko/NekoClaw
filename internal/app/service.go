@@ -54,6 +54,7 @@ type Service struct {
 	mcpManager        *mcp.Manager
 	personaManager    *persona.Manager
 	titleGenPending   sync.Map // sessionID -> bool; dedup concurrent title generation
+	activeToolStatus  sync.Map // sessionID -> string (current tool name being executed)
 }
 
 type ServiceOptions struct {
@@ -107,6 +108,15 @@ func (s *Service) ListSessions() []core.SessionMetadata {
 
 func (s *Service) DeleteSession(sessionID string) error {
 	return s.sessions.DeleteSession(sessionID)
+}
+
+// GetActiveToolStatus returns the name of the tool currently being executed
+// for the given session, or an empty string if no tool is active.
+func (s *Service) GetActiveToolStatus(sessionID string) string {
+	if v, ok := s.activeToolStatus.Load(sessionID); ok {
+		return v.(string)
+	}
+	return ""
 }
 
 // StartMCP initializes all MCP server connections. Non-fatal errors are logged.
@@ -2350,6 +2360,14 @@ func (s *Service) attemptSingleProvider(
 				Compressed:   compressed,
 				Compression:  compressionMeta,
 				Generation:   generationParams,
+				OnToolEvent: func(evt core.ToolEvent) {
+					switch evt.Phase {
+					case "requested":
+						s.activeToolStatus.Store(sessionID, evt.ToolName)
+					case "executed", "failed", "denied":
+						s.activeToolStatus.Delete(sessionID)
+					}
+				},
 			})
 			if runErr == nil {
 				if !runResult.Pending && len(runResult.SessionMessages) > 0 {

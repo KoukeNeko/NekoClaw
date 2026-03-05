@@ -225,7 +225,15 @@ func formatChatError(err error) string {
 	case apiErr.Code == "rate_limit":
 		return "請求過於頻繁，請稍後再試。"
 	case apiErr.Code == "format":
-		return "請求格式被 provider 拒絕，請檢查模型與輸入內容。"
+		detail := strings.TrimSpace(apiErr.Message)
+		if detail == "" {
+			return "請求格式被 provider 拒絕，請檢查模型與輸入內容。"
+		}
+		// Truncate long error details to keep TUI readable.
+		if len(detail) > 200 {
+			detail = detail[:200] + "…"
+		}
+		return "請求格式被 provider 拒絕：" + detail
 	case apiErr.StatusCode == http.StatusBadGateway:
 		msg := strings.TrimSpace(apiErr.Message)
 		if msg == "" {

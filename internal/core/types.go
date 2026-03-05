@@ -3,6 +3,7 @@ package core
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"time"
 )
 
@@ -23,12 +24,13 @@ type ImageData struct {
 }
 
 type Message struct {
-	Role       MessageRole `json:"role"`
-	Content    string      `json:"content"`
-	Images     []ImageData `json:"images,omitempty"`
-	ToolName   string      `json:"tool_name,omitempty"`
-	ToolCallID string      `json:"tool_call_id,omitempty"`
-	CreatedAt  time.Time   `json:"created_at"`
+	Role         MessageRole     `json:"role"`
+	Content      string          `json:"content"`
+	Images       []ImageData     `json:"images,omitempty"`
+	ToolName     string          `json:"tool_name,omitempty"`
+	ToolCallID   string          `json:"tool_call_id,omitempty"`
+	ProviderMeta json.RawMessage `json:"provider_meta,omitempty"` // raw provider-specific data (e.g. Gemini model content with thought_signature)
+	CreatedAt    time.Time       `json:"created_at"`
 }
 
 type Surface string
