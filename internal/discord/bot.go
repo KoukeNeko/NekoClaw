@@ -42,6 +42,11 @@ type Bot struct {
 	// Per-channel message queues for sequential processing.
 	queues   map[string]chan messageJob
 	queuesMu sync.Mutex
+
+	// Per-channel active session tracking.
+	// Key: channelID, Value: current sessionID.
+	activeSessions   map[string]string
+	activeSessionsMu sync.RWMutex
 }
 
 // Config holds the configuration needed to create a Discord bot.
@@ -67,9 +72,10 @@ func New(svc *app.Service, cfg Config) (*Bot, error) {
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsMessageContent
 
 	return &Bot{
-		session: dg,
-		svc:     svc,
-		queues:  make(map[string]chan messageJob),
+		session:        dg,
+		svc:            svc,
+		queues:         make(map[string]chan messageJob),
+		activeSessions: make(map[string]string),
 	}, nil
 }
 
@@ -104,6 +110,31 @@ func (b *Bot) Stop() {
 	if b.cancel != nil {
 		b.cancel()
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Session management
+// ---------------------------------------------------------------------------
+
+// getSessionID returns the active session ID for the given channel.
+// Falls back to the default format if no active session is set.
+func (b *Bot) getSessionID(channelID string) string {
+	b.activeSessionsMu.RLock()
+	sid, ok := b.activeSessions[channelID]
+	b.activeSessionsMu.RUnlock()
+	if ok {
+		return sid
+	}
+	return fmt.Sprintf("discord:%s", channelID)
+}
+
+// resetSession creates a new session for the channel and returns its ID.
+func (b *Bot) resetSession(channelID string) string {
+	newID := fmt.Sprintf("discord:%s-%s", channelID, time.Now().Format("0102-150405"))
+	b.activeSessionsMu.Lock()
+	b.activeSessions[channelID] = newID
+	b.activeSessionsMu.Unlock()
+	return newID
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +220,11 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
+	// Handle slash commands before sending to AI.
+	if b.handleCommand(s, m, text) {
+		return
+	}
+
 	botID := s.State.User.ID
 
 	// Transition: 👀 → 🔄
@@ -198,7 +234,7 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// Show typing indicator while processing.
 	stopTyping := b.startTyping(s, m.ChannelID)
 
-	sessionID := fmt.Sprintf("discord:%s:%s", m.ChannelID, m.Author.ID)
+	sessionID := b.getSessionID(m.ChannelID)
 
 	resp, err := b.svc.HandleChat(b.ctx, core.ChatRequest{
 		SessionID:   sessionID,
@@ -232,6 +268,106 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	b.sendReply(s, m, reply)
+}
+
+// ---------------------------------------------------------------------------
+// Command handling
+// ---------------------------------------------------------------------------
+
+// handleCommand checks if the message is a bot command and processes it.
+// Returns true if the message was handled as a command.
+func (b *Bot) handleCommand(s *discordgo.Session, m *discordgo.MessageCreate, text string) bool {
+	// Remove the 👀 reaction for commands (no AI processing needed).
+	removeReceived := func() {
+		_ = s.MessageReactionRemove(m.ChannelID, m.ID, emojiReceived, s.State.User.ID)
+	}
+
+	lower := strings.ToLower(text)
+
+	switch {
+	case lower == "/reset":
+		removeReceived()
+		newID := b.resetSession(m.ChannelID)
+		log.Printf("event=discord_session_reset channel=%s new_session=%s", m.ChannelID, newID)
+		b.sendReply(s, m, "✅ 對話已重置，開始新的對話。")
+		return true
+
+	case lower == "/persona":
+		removeReceived()
+		b.handlePersonaList(s, m)
+		return true
+
+	case strings.HasPrefix(lower, "/persona "):
+		removeReceived()
+		arg := strings.TrimSpace(text[len("/persona "):])
+		b.handlePersonaSwitch(s, m, arg)
+		return true
+	}
+
+	return false
+}
+
+// handlePersonaList sends a list of available personas.
+func (b *Bot) handlePersonaList(s *discordgo.Session, m *discordgo.MessageCreate) {
+	personas := b.svc.ListPersonas()
+	if len(personas) == 0 {
+		b.sendReply(s, m, "📋 目前沒有可用的角色。")
+		return
+	}
+
+	active := b.svc.ActivePersona()
+
+	var sb strings.Builder
+	sb.WriteString("📋 **可用角色：**\n")
+	for _, p := range personas {
+		marker := "　"
+		if active != nil && active.DirName == p.DirName {
+			marker = "▶ "
+		}
+		sb.WriteString(fmt.Sprintf("%s**%s**", marker, p.Name))
+		if p.Description != "" {
+			sb.WriteString(fmt.Sprintf(" — %s", p.Description))
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\n使用 `/persona <名稱>` 切換，`/persona off` 停用。")
+
+	b.sendReply(s, m, sb.String())
+}
+
+// handlePersonaSwitch switches or clears the active persona.
+func (b *Bot) handlePersonaSwitch(s *discordgo.Session, m *discordgo.MessageCreate, arg string) {
+	lower := strings.ToLower(arg)
+
+	// Clear persona.
+	if lower == "off" || lower == "clear" || lower == "none" {
+		if err := b.svc.ClearActivePersona(); err != nil {
+			b.sendReply(s, m, "⚠️ "+err.Error())
+			return
+		}
+		b.sendReply(s, m, "✅ 已停用角色。")
+		return
+	}
+
+	// Find persona by name.
+	dirName, found := b.svc.FindPersonaByName(arg)
+	if !found {
+		b.sendReply(s, m, fmt.Sprintf("⚠️ 找不到名為「%s」的角色。使用 `/persona` 查看可用清單。", arg))
+		return
+	}
+
+	if err := b.svc.SetActivePersona(dirName); err != nil {
+		b.sendReply(s, m, "⚠️ "+err.Error())
+		return
+	}
+
+	// Get the display name for confirmation.
+	active := b.svc.ActivePersona()
+	name := dirName
+	if active != nil {
+		name = active.Name
+	}
+	b.sendReply(s, m, fmt.Sprintf("✅ 已切換為角色「%s」。", name))
 }
 
 // ---------------------------------------------------------------------------

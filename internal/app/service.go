@@ -231,6 +231,35 @@ func (s *Service) ReloadPersonas() error {
 	return s.personaManager.Reload()
 }
 
+// FindPersonaByName looks up a persona by display name or directory name.
+// Performs case-insensitive exact match first, then substring match.
+func (s *Service) FindPersonaByName(name string) (dirName string, found bool) {
+	if s.personaManager == nil {
+		return "", false
+	}
+	personas := s.personaManager.List()
+	target := strings.ToLower(strings.TrimSpace(name))
+	if target == "" {
+		return "", false
+	}
+
+	// Exact match (case-insensitive) on Name or DirName.
+	for _, p := range personas {
+		if strings.ToLower(p.Name) == target || strings.ToLower(p.DirName) == target {
+			return p.DirName, true
+		}
+	}
+
+	// Substring match on Name.
+	for _, p := range personas {
+		if strings.Contains(strings.ToLower(p.Name), target) {
+			return p.DirName, true
+		}
+	}
+
+	return "", false
+}
+
 // PersonaManager exposes the persona manager for direct access (e.g. rendering).
 func (s *Service) PersonaManager() *persona.Manager {
 	return s.personaManager

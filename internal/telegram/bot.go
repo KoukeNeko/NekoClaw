@@ -34,6 +34,11 @@ type Bot struct {
 	// Per-chat message queues for sequential processing.
 	queues   map[int64]chan messageJob
 	queuesMu sync.Mutex
+
+	// Per-chat active session tracking.
+	// Key: chatID, Value: current sessionID.
+	activeSessions   map[int64]string
+	activeSessionsMu sync.RWMutex
 }
 
 // Config holds the configuration needed to create a Telegram bot.
@@ -54,9 +59,10 @@ func New(svc *app.Service, cfg Config) (*Bot, error) {
 	}
 
 	return &Bot{
-		api:    api,
-		svc:    svc,
-		queues: make(map[int64]chan messageJob),
+		api:            api,
+		svc:            svc,
+		queues:         make(map[int64]chan messageJob),
+		activeSessions: make(map[int64]string),
 	}, nil
 }
 
@@ -110,15 +116,45 @@ func (b *Bot) Stop() {
 }
 
 // ---------------------------------------------------------------------------
+// Session management
+// ---------------------------------------------------------------------------
+
+// getSessionID returns the active session ID for the given chat.
+// Falls back to the default format if no active session is set.
+func (b *Bot) getSessionID(chatID int64) string {
+	b.activeSessionsMu.RLock()
+	sid, ok := b.activeSessions[chatID]
+	b.activeSessionsMu.RUnlock()
+	if ok {
+		return sid
+	}
+	return fmt.Sprintf("telegram:%d", chatID)
+}
+
+// resetSession creates a new session for the chat and returns its ID.
+func (b *Bot) resetSession(chatID int64) string {
+	newID := fmt.Sprintf("telegram:%d-%s", chatID, time.Now().Format("0102-150405"))
+	b.activeSessionsMu.Lock()
+	b.activeSessions[chatID] = newID
+	b.activeSessionsMu.Unlock()
+	return newID
+}
+
+// ---------------------------------------------------------------------------
 // Message handling
 // ---------------------------------------------------------------------------
 
 // shouldRespond checks whether the bot should respond to this message.
-// Responds to: DM, @mention, or reply to bot.
+// Responds to: DM, @mention, reply to bot, or command.
 func (b *Bot) shouldRespond(update tgbotapi.Update) bool {
 	msg := update.Message
 	if msg == nil || msg.From == nil || msg.From.IsBot {
 		return false
+	}
+
+	// Always respond to commands (even in groups without mention).
+	if msg.IsCommand() {
+		return true
 	}
 
 	// Always respond in private chats (DM).
@@ -175,6 +211,13 @@ func (b *Bot) chatWorker(ch <-chan messageJob) {
 
 func (b *Bot) handleMessage(update tgbotapi.Update) {
 	msg := update.Message
+
+	// Handle commands before sending to AI.
+	if msg.IsCommand() {
+		b.handleCommand(msg)
+		return
+	}
+
 	text := b.extractText(msg)
 	if text == "" {
 		return
@@ -190,7 +233,7 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 	// Show typing indicator while processing.
 	stopTyping := b.startTyping(chatID)
 
-	sessionID := fmt.Sprintf("telegram:%d:%d", chatID, msg.From.ID)
+	sessionID := b.getSessionID(chatID)
 
 	resp, err := b.svc.HandleChat(b.ctx, core.ChatRequest{
 		SessionID:   sessionID,
@@ -245,6 +288,96 @@ func (b *Bot) extractText(msg *tgbotapi.Message) string {
 	botMention := "@" + b.api.Self.UserName
 	text = strings.ReplaceAll(text, botMention, "")
 	return strings.TrimSpace(text)
+}
+
+// ---------------------------------------------------------------------------
+// Command handling
+// ---------------------------------------------------------------------------
+
+// handleCommand processes bot commands (/reset, /persona, etc.).
+func (b *Bot) handleCommand(msg *tgbotapi.Message) {
+	chatID := msg.Chat.ID
+
+	switch msg.Command() {
+	case "reset":
+		newID := b.resetSession(chatID)
+		log.Printf("event=telegram_session_reset chat=%d new_session=%s", chatID, newID)
+		b.sendReply(chatID, msg.MessageID, "✅ 對話已重置，開始新的對話。")
+
+	case "persona":
+		arg := strings.TrimSpace(msg.CommandArguments())
+		if arg == "" {
+			b.handlePersonaList(chatID, msg.MessageID)
+		} else {
+			b.handlePersonaSwitch(chatID, msg.MessageID, arg)
+		}
+
+	default:
+		// Unknown command — ignore silently.
+	}
+}
+
+// handlePersonaList sends a list of available personas.
+func (b *Bot) handlePersonaList(chatID int64, replyToID int) {
+	personas := b.svc.ListPersonas()
+	if len(personas) == 0 {
+		b.sendReply(chatID, replyToID, "📋 目前沒有可用的角色。")
+		return
+	}
+
+	active := b.svc.ActivePersona()
+
+	var sb strings.Builder
+	sb.WriteString("📋 可用角色：\n")
+	for _, p := range personas {
+		marker := "　"
+		if active != nil && active.DirName == p.DirName {
+			marker = "▶ "
+		}
+		sb.WriteString(fmt.Sprintf("%s%s", marker, p.Name))
+		if p.Description != "" {
+			sb.WriteString(fmt.Sprintf(" — %s", p.Description))
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\n使用 /persona <名稱> 切換，/persona off 停用。")
+
+	b.sendReply(chatID, replyToID, sb.String())
+}
+
+// handlePersonaSwitch switches or clears the active persona.
+func (b *Bot) handlePersonaSwitch(chatID int64, replyToID int, arg string) {
+	lower := strings.ToLower(arg)
+
+	// Clear persona.
+	if lower == "off" || lower == "clear" || lower == "none" {
+		if err := b.svc.ClearActivePersona(); err != nil {
+			b.sendReply(chatID, replyToID, "⚠️ "+err.Error())
+			return
+		}
+		b.sendReply(chatID, replyToID, "✅ 已停用角色。")
+		return
+	}
+
+	// Find persona by name.
+	dirName, found := b.svc.FindPersonaByName(arg)
+	if !found {
+		b.sendReply(chatID, replyToID, fmt.Sprintf("⚠️ 找不到名為「%s」的角色。使用 /persona 查看可用清單。", arg))
+		return
+	}
+
+	if err := b.svc.SetActivePersona(dirName); err != nil {
+		b.sendReply(chatID, replyToID, "⚠️ "+err.Error())
+		return
+	}
+
+	// Get the display name for confirmation.
+	active := b.svc.ActivePersona()
+	name := dirName
+	if active != nil {
+		name = active.Name
+	}
+	b.sendReply(chatID, replyToID, fmt.Sprintf("✅ 已切換為角色「%s」。", name))
 }
 
 // ---------------------------------------------------------------------------
