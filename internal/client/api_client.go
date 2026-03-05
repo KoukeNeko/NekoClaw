@@ -935,6 +935,34 @@ func (c *APIClient) ListModels(ctx context.Context, providerID, profileID string
 	return out, nil
 }
 
+func (c *APIClient) GetFallbacks(ctx context.Context) ([]core.FallbackEntry, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/fallbacks", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Fallbacks []core.FallbackEntry `json:"fallbacks"`
+	}
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return nil, err
+	}
+	return out.Fallbacks, nil
+}
+
+func (c *APIClient) SetFallbacks(ctx context.Context, entries []core.FallbackEntry) error {
+	payload, err := json.Marshal(map[string]any{"fallbacks": entries})
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/v1/fallbacks", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out struct{}
+	return c.doAndDecodeJSON(httpReq, &out)
+}
+
 func (c *APIClient) ListSessions(ctx context.Context) ([]SessionInfo, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/sessions", nil)
 	if err != nil {

@@ -174,6 +174,15 @@ func (sv *SettingsView) Update(msg tea.Msg) tea.Cmd {
 		return sv.provider.HandleModels(msg)
 	case ModelsListMsg:
 		return sv.provider.HandleModelsList(msg)
+	case FallbacksMsg:
+		sv.provider.HandleFallbacks(msg)
+		return nil
+	case FallbacksSavedMsg:
+		sv.provider.HandleFallbacksSaved(msg)
+		return nil
+	case FallbackModelsMsg:
+		sv.provider.HandleFallbackModels(msg)
+		return nil
 	case AuthStartMsg:
 		return sv.auth.HandleAuthStart(msg)
 	case AuthManualCompleteMsg:
@@ -265,7 +274,10 @@ func (sv *SettingsView) enterSection() tea.Cmd {
 	sv.initialized = true
 	switch sv.activeSection {
 	case SectionProvider:
-		return loadProvidersCmd(sv.apiClient)
+		return tea.Batch(
+			loadProvidersCmd(sv.apiClient),
+			loadFallbacksCmd(sv.apiClient),
+		)
 	case SectionPersona:
 		return tea.Batch(
 			listPersonasCmd(sv.apiClient),
@@ -297,7 +309,7 @@ func (sv *SettingsView) enterSection() tea.Cmd {
 func (sv *SettingsView) sectionHasActiveInput() bool {
 	switch sv.activeSection {
 	case SectionProvider:
-		return false
+		return sv.provider.HasActiveInput()
 	case SectionPersona:
 		return sv.persona.HasActiveInput()
 	case SectionAuth:

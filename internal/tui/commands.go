@@ -70,6 +70,37 @@ func listModelsCmd(apiClient *client.APIClient, providerID, profileID string) te
 }
 
 // ---------------------------------------------------------------------------
+// Fallbacks
+// ---------------------------------------------------------------------------
+
+func loadFallbacksCmd(apiClient *client.APIClient) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		entries, err := apiClient.GetFallbacks(ctx)
+		return FallbacksMsg{Fallbacks: entries, Err: err}
+	}
+}
+
+func saveFallbacksCmd(apiClient *client.APIClient, entries []core.FallbackEntry) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err := apiClient.SetFallbacks(ctx, entries)
+		return FallbacksSavedMsg{Err: err}
+	}
+}
+
+func loadFallbackModelsCmd(apiClient *client.APIClient, slotIndex int, providerID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		resp, err := apiClient.ListModels(ctx, strings.TrimSpace(providerID), "")
+		return FallbackModelsMsg{SlotIndex: slotIndex, Provider: providerID, Response: resp, Err: err}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Auth — Gemini OAuth
 // ---------------------------------------------------------------------------
 

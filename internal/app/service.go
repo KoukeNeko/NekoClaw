@@ -48,7 +48,8 @@ type Service struct {
 	memoryDir         string
 	searchIndex       *memory.SearchIndex
 	preferredProfiles map[string]string
-	fallbacks         map[string][]string // primary provider -> fallback provider IDs
+	fallbacks         []core.FallbackEntry // ordered fallback provider+model pairs
+	configDir         string               // directory for config.json persistence
 	toolRuntime       *tooling.Runtime
 	mcpManager        *mcp.Manager
 	personaManager    *persona.Manager
@@ -79,7 +80,6 @@ func NewService(opts ServiceOptions) *Service {
 		memoryDir:         opts.MemoryDir,
 		searchIndex:       opts.SearchIndex,
 		preferredProfiles: map[string]string{},
-		fallbacks:         map[string][]string{},
 	}
 	policy := tooling.DefaultPolicy(opts.WorkspaceRoot)
 	builtinExecutor := tooling.NewRuntimeExecutor(serviceToolBackend{svc: svc}, policy)
@@ -286,12 +286,40 @@ func (s *Service) RegisterPool(pool *core.AccountPool) {
 	s.pools[pool.Provider()] = pool
 }
 
-// RegisterFallback declares that when all accounts for primaryProvider are exhausted,
-// the system should attempt fallbackProvider before returning an error.
-func (s *Service) RegisterFallback(primaryProvider, fallbackProvider string) {
+// SetFallbacks replaces the global fallback chain with the given entries.
+// Each entry specifies a provider+model combination to try when the primary
+// provider's accounts are exhausted.
+func (s *Service) SetFallbacks(entries []core.FallbackEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.fallbacks[primaryProvider] = append(s.fallbacks[primaryProvider], fallbackProvider)
+	s.fallbacks = append([]core.FallbackEntry(nil), entries...)
+}
+
+// GetFallbacks returns a copy of the current fallback chain.
+func (s *Service) GetFallbacks() []core.FallbackEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]core.FallbackEntry(nil), s.fallbacks...)
+}
+
+// SetConfigDir sets the directory used for persisting config.json.
+func (s *Service) SetConfigDir(dir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.configDir = dir
+}
+
+// SaveFallbacks persists the given fallback entries to config.json and updates
+// the in-memory fallback chain atomically.
+func (s *Service) SaveFallbacks(entries []core.FallbackEntry) error {
+	s.mu.Lock()
+	configDir := s.configDir
+	s.fallbacks = append([]core.FallbackEntry(nil), entries...)
+	s.mu.Unlock()
+
+	cfg, _ := core.LoadConfig(configDir)
+	cfg.Fallbacks = entries
+	return core.SaveConfig(configDir, cfg)
 }
 
 func (s *Service) SetAuthIntegration(manager *auth.GeminiOAuthManager, store *auth.Store) {
@@ -2026,7 +2054,6 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 	if modelID == "" {
 		modelID = "default"
 	}
-	isDefaultModel := strings.EqualFold(modelID, "default")
 	sessionID := strings.TrimSpace(req.SessionID)
 	if sessionID == "" {
 		sessionID = "main"
@@ -2048,28 +2075,30 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		return core.ChatResponse{}, fmt.Errorf("message is required")
 	}
 
-	// Build provider chain: primary first, then registered fallbacks.
-	s.mu.RLock()
-	chain := []string{providerID}
-	if runID == "" {
-		chain = append(chain, s.fallbacks[providerID]...)
+	// Build provider+model chain: primary first, then configured fallbacks.
+	type fallbackCandidate struct {
+		provider string
+		model    string
 	}
-	s.mu.RUnlock()
+	chain := []fallbackCandidate{{provider: providerID, model: modelID}}
+	if runID == "" {
+		s.mu.RLock()
+		for _, fb := range s.fallbacks {
+			chain = append(chain, fallbackCandidate{provider: fb.Provider, model: fb.Model})
+		}
+		s.mu.RUnlock()
+	}
 
 	var lastErr error
-	for i, candidateProvider := range chain {
+	for i, candidate := range chain {
 		isFallback := i > 0
-
-		// For fallback providers with "default" model, re-resolve per provider.
-		candidateModel := modelID
-		if isFallback && isDefaultModel {
-			candidateModel = "default"
-		}
+		candidateModel := candidate.model
+		candidateIsDefault := strings.EqualFold(candidateModel, "default")
 
 		resp, err := s.attemptSingleProvider(ctx, attemptSingleProviderParams{
-			providerID:     candidateProvider,
+			providerID:     candidate.provider,
 			modelID:        candidateModel,
-			isDefaultModel: isDefaultModel || (isFallback && strings.EqualFold(candidateModel, "default")),
+			isDefaultModel: candidateIsDefault,
 			sessionID:      sessionID,
 			prompt:         prompt,
 			images:         req.Images,
@@ -2081,8 +2110,8 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		if err == nil {
 			if isFallback {
 				log.Printf(
-					"event=fallback_success primary_provider=%s fallback_provider=%s model=%s",
-					providerID, candidateProvider, resp.Model,
+					"event=fallback_success primary_provider=%s fallback_provider=%s fallback_model=%s actual_model=%s",
+					providerID, candidate.provider, candidateModel, resp.Model,
 				)
 			}
 			return resp, nil
@@ -2096,8 +2125,8 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		}
 		if isFallback {
 			log.Printf(
-				"event=fallback_exhausted primary_provider=%s fallback_provider=%s error=%q",
-				providerID, candidateProvider, err,
+				"event=fallback_exhausted primary_provider=%s fallback_provider=%s fallback_model=%s error=%q",
+				providerID, candidate.provider, candidateModel, err,
 			)
 		}
 	}

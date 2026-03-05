@@ -46,6 +46,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/auth/ai-studio/use", s.handleAIStudioUse)
 	mux.HandleFunc("/v1/auth/ai-studio/delete", s.handleAIStudioDelete)
 	mux.HandleFunc("/v1/models", s.handleListModels)
+	mux.HandleFunc("/v1/fallbacks", s.handleFallbacks)
 	mux.HandleFunc("/v1/ai-studio/models", s.handleAIStudioModels)
 	mux.HandleFunc("/v1/auth/anthropic/add-token", s.handleAnthropicAddToken)
 	mux.HandleFunc("/v1/auth/anthropic/add-api-key", s.handleAnthropicAddAPIKey)
@@ -1220,6 +1221,33 @@ func (s *Server) resolveGeminiProviderAndAccount(providerID, accountID string) (
 		return nil, core.Account{}, fmt.Errorf("provider %q has no available accounts", providerID)
 	}
 	return geminiProvider, account, nil
+}
+
+func (s *Server) handleFallbacks(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		entries := s.svc.GetFallbacks()
+		respondJSON(w, http.StatusOK, map[string]any{"fallbacks": entries})
+	case http.MethodPut:
+		var body struct {
+			Fallbacks []core.FallbackEntry `json:"fallbacks"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		if len(body.Fallbacks) > 3 {
+			respondError(w, http.StatusBadRequest, "maximum 3 fallback entries")
+			return
+		}
+		if err := s.svc.SaveFallbacks(body.Fallbacks); err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]any{"fallbacks": s.svc.GetFallbacks()})
+	default:
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
 }
 
 func respondJSON(w http.ResponseWriter, status int, payload any) {

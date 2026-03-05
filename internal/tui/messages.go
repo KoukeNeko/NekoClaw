@@ -85,6 +85,23 @@ type ModelsListMsg struct {
 	Err      error
 }
 
+// FallbacksMsg carries the loaded fallback configuration.
+type FallbacksMsg struct {
+	Fallbacks []core.FallbackEntry
+	Err       error
+}
+
+// FallbacksSavedMsg indicates whether saving fallbacks succeeded.
+type FallbacksSavedMsg struct{ Err error }
+
+// FallbackModelsMsg carries model list for a specific fallback slot.
+type FallbackModelsMsg struct {
+	SlotIndex int
+	Provider  string
+	Response  client.ModelsResponse
+	Err       error
+}
+
 // ---------------------------------------------------------------------------
 // Auth messages
 // ---------------------------------------------------------------------------

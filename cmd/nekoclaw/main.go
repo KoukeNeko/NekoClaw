@@ -326,9 +326,26 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		svc.RegisterPool(core.NewAccountPool("openai-codex", nil, nil, core.DefaultCooldownConfig()))
 	}
 
-	// When all google-gemini-cli accounts are exhausted, try google-ai-studio.
-	// Reverse fallback is not registered because gemini-cli requires OAuth + project discovery.
-	svc.RegisterFallback("google-gemini-cli", "google-ai-studio")
+	// Load user-configured fallback chain from config.json.
+	// Falls back to a sensible default (google-ai-studio) if not configured.
+	configDir := ""
+	if home, homeErr := os.UserHomeDir(); homeErr == nil && strings.TrimSpace(home) != "" {
+		configDir = filepath.Join(home, ".nekoclaw")
+	}
+	svc.SetConfigDir(configDir)
+
+	appConfig, configErr := core.LoadConfig(configDir)
+	if configErr != nil {
+		log.Printf("event=config_load_error error=%q", configErr)
+	}
+	if len(appConfig.Fallbacks) > 0 {
+		svc.SetFallbacks(appConfig.Fallbacks)
+	} else {
+		// Default fallback: when primary accounts are exhausted, try google-ai-studio.
+		svc.SetFallbacks([]core.FallbackEntry{
+			{Provider: "google-ai-studio", Model: "default"},
+		})
+	}
 
 	authStore, err := auth.NewStore(auth.StoreOptions{BaseDir: strings.TrimSpace(opts.AuthDir)})
 	if err != nil {

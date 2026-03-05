@@ -89,6 +89,12 @@ type ToolEvent struct {
 	Error         string    `json:"error,omitempty"`
 }
 
+// FallbackEntry defines one fallback provider+model combination.
+type FallbackEntry struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
 type ChatRequest struct {
 	SessionID     string                 `json:"session_id"`
 	Surface       Surface                `json:"surface"`
