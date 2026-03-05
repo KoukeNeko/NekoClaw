@@ -89,6 +89,7 @@ func (b *Bot) Start(ctx context.Context) error {
 		return fmt.Errorf("open discord gateway: %w", err)
 	}
 	log.Printf("event=discord_bot_started user=%s", b.session.State.User.Username)
+	b.logToConsole(b.session, fmt.Sprintf("[啟動] Discord Bot 已上線 (%s)", b.session.State.User.Username))
 
 	// Block until context is done.
 	<-b.ctx.Done()
@@ -254,6 +255,7 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if err != nil {
 		log.Printf("event=discord_chat_error channel=%s user=%s error=%q", m.ChannelID, m.Author.ID, err)
 		b.sendReply(s, m, "⚠️ "+err.Error())
+		b.logToConsole(s, fmt.Sprintf("[錯誤] <#%s> %s: %s", m.ChannelID, m.Author.Username, err.Error()))
 		return
 	}
 
@@ -290,6 +292,7 @@ func (b *Bot) handleCommand(s *discordgo.Session, m *discordgo.MessageCreate, te
 		newID := b.resetSession(m.ChannelID)
 		log.Printf("event=discord_session_reset channel=%s new_session=%s", m.ChannelID, newID)
 		b.sendReply(s, m, "✅ 對話已重置，開始新的對話。")
+		b.logToConsole(s, fmt.Sprintf("[重置] <#%s> 對話已重置 → %s (by %s)", m.ChannelID, newID, m.Author.Username))
 		return true
 
 	case lower == "/persona":
@@ -346,6 +349,7 @@ func (b *Bot) handlePersonaSwitch(s *discordgo.Session, m *discordgo.MessageCrea
 			return
 		}
 		b.sendReply(s, m, "✅ 已停用角色。")
+		b.logToConsole(s, fmt.Sprintf("[角色] 已停用角色 (by %s)", m.Author.Username))
 		return
 	}
 
@@ -368,6 +372,7 @@ func (b *Bot) handlePersonaSwitch(s *discordgo.Session, m *discordgo.MessageCrea
 		name = active.Name
 	}
 	b.sendReply(s, m, fmt.Sprintf("✅ 已切換為角色「%s」。", name))
+	b.logToConsole(s, fmt.Sprintf("[角色] 切換至「%s」(by %s)", name, m.Author.Username))
 }
 
 // ---------------------------------------------------------------------------
@@ -405,11 +410,18 @@ func (b *Bot) startTyping(s *discordgo.Session, channelID string) func() {
 // ---------------------------------------------------------------------------
 
 // sendReply sends a reply to the original message, splitting if needed.
+// Respects the ReplyToOriginal config setting.
 func (b *Bot) sendReply(s *discordgo.Session, m *discordgo.MessageCreate, content string) {
-	ref := &discordgo.MessageReference{
-		MessageID: m.ID,
-		ChannelID: m.ChannelID,
-		GuildID:   m.GuildID,
+	cfg := b.svc.GetDiscordConfig()
+	shouldReply := cfg.ShouldReplyToOriginal()
+
+	var ref *discordgo.MessageReference
+	if shouldReply {
+		ref = &discordgo.MessageReference{
+			MessageID: m.ID,
+			ChannelID: m.ChannelID,
+			GuildID:   m.GuildID,
+		}
 	}
 
 	chunks := splitMessage(content, discordMessageLimit)
@@ -417,14 +429,28 @@ func (b *Bot) sendReply(s *discordgo.Session, m *discordgo.MessageCreate, conten
 		msg := &discordgo.MessageSend{
 			Content: chunk,
 		}
-		// Only first chunk references the original message.
-		if i == 0 {
+		// Only first chunk references the original message (if reply mode is on).
+		if i == 0 && ref != nil {
 			msg.Reference = ref
 		}
 		if _, err := s.ChannelMessageSendComplex(m.ChannelID, msg); err != nil {
 			log.Printf("event=discord_send_error channel=%s error=%q", m.ChannelID, err)
 			return
 		}
+	}
+}
+
+// logToConsole sends a log message to the configured console channel.
+// Silently returns if no console channel is configured.
+func (b *Bot) logToConsole(s *discordgo.Session, message string) {
+	cfg := b.svc.GetDiscordConfig()
+	channelID := strings.TrimSpace(cfg.ConsoleChannel)
+	if channelID == "" {
+		return
+	}
+	text := "```\n" + message + "\n```"
+	if _, err := s.ChannelMessageSend(channelID, text); err != nil {
+		log.Printf("event=discord_console_send_error channel=%s error=%q", channelID, err)
 	}
 }
 

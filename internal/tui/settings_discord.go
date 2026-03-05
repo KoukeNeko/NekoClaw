@@ -9,9 +9,22 @@ import (
 	"github.com/doeshing/nekoclaw/internal/core"
 )
 
-// DiscordSection manages Discord bot configuration (token only).
+// Discord settings field indices.
+const (
+	discordFieldToken = iota
+	discordFieldReply
+	discordFieldConsole
+	discordFieldCount
+)
+
+// DiscordSection manages Discord bot configuration.
 type DiscordSection struct {
-	tokenInput textinput.Model
+	tokenInput   textinput.Model
+	consoleInput textinput.Model
+
+	replyToOriginal bool // toggle field
+
+	focusField int
 	loaded     bool
 	statusMsg  string
 }
@@ -24,8 +37,15 @@ func NewDiscordSection() DiscordSection {
 	token.EchoMode = textinput.EchoPassword
 	token.EchoCharacter = '•'
 
+	console := textinput.New()
+	console.CharLimit = 30
+	console.Prompt = "› "
+	console.Placeholder = "Channel ID"
+
 	return DiscordSection{
-		tokenInput: token,
+		tokenInput:      token,
+		consoleInput:    console,
+		replyToOriginal: true, // default: reply to original
 	}
 }
 
@@ -35,8 +55,11 @@ func (ds *DiscordSection) HandleConfig(msg DiscordConfigMsg) tea.Cmd {
 		return nil
 	}
 	ds.tokenInput.SetValue(msg.Config.BotToken)
+	ds.replyToOriginal = msg.Config.ShouldReplyToOriginal()
+	ds.consoleInput.SetValue(msg.Config.ConsoleChannel)
 	ds.loaded = true
-	ds.tokenInput.Focus()
+	ds.focusField = discordFieldToken
+	ds.updateInputFocus()
 	return nil
 }
 
@@ -49,25 +72,73 @@ func (ds *DiscordSection) HandleSave(msg DiscordSaveMsg) tea.Cmd {
 	return nil
 }
 
-func (ds *DiscordSection) HasActiveInput() bool { return true }
+func (ds *DiscordSection) HasActiveInput() bool {
+	return ds.focusField == discordFieldToken || ds.focusField == discordFieldConsole
+}
 
 func (ds *DiscordSection) Update(msg tea.KeyMsg, apiClient *client.APIClient) tea.Cmd {
 	k := msg.String()
 
-	if k == "enter" {
+	switch k {
+	case "up":
+		if ds.focusField > 0 {
+			ds.focusField--
+			ds.updateInputFocus()
+		}
+		return nil
+	case "down":
+		if ds.focusField < discordFieldCount-1 {
+			ds.focusField++
+			ds.updateInputFocus()
+		}
+		return nil
+	case "enter":
+		if ds.focusField == discordFieldReply {
+			// Toggle reply mode.
+			ds.replyToOriginal = !ds.replyToOriginal
+			ds.statusMsg = ""
+			return ds.save(apiClient)
+		}
+		// Save on enter for text fields.
 		ds.statusMsg = ""
 		return ds.save(apiClient)
 	}
 
-	var cmd tea.Cmd
-	ds.tokenInput, cmd = ds.tokenInput.Update(msg)
-	return cmd
+	// Delegate to the active text input.
+	switch ds.focusField {
+	case discordFieldToken:
+		var cmd tea.Cmd
+		ds.tokenInput, cmd = ds.tokenInput.Update(msg)
+		return cmd
+	case discordFieldConsole:
+		var cmd tea.Cmd
+		ds.consoleInput, cmd = ds.consoleInput.Update(msg)
+		return cmd
+	}
+
+	return nil
+}
+
+func (ds *DiscordSection) updateInputFocus() {
+	ds.tokenInput.Blur()
+	ds.consoleInput.Blur()
+
+	switch ds.focusField {
+	case discordFieldToken:
+		ds.tokenInput.Focus()
+	case discordFieldConsole:
+		ds.consoleInput.Focus()
+	}
 }
 
 func (ds *DiscordSection) save(apiClient *client.APIClient) tea.Cmd {
 	token := strings.TrimSpace(ds.tokenInput.Value())
+	console := strings.TrimSpace(ds.consoleInput.Value())
+	reply := ds.replyToOriginal
 	return saveDiscordConfigCmd(apiClient, core.DiscordConfig{
-		BotToken: token,
+		BotToken:        token,
+		ReplyToOriginal: &reply,
+		ConsoleChannel:  console,
 	})
 }
 
@@ -81,8 +152,40 @@ func (ds DiscordSection) View(width, height int) string {
 		return strings.Join(lines, "\n")
 	}
 
-	lines = append(lines, theme.SectionStyle.Render("› Bot Token"))
+	// Field 0: Bot Token
+	label := "Bot Token"
+	if ds.focusField == discordFieldToken {
+		label = "› " + label
+	} else {
+		label = "  " + label
+	}
+	lines = append(lines, theme.SectionStyle.Render(label))
 	lines = append(lines, "  "+ds.tokenInput.View())
+	lines = append(lines, "")
+
+	// Field 1: Reply Mode (toggle)
+	replyLabel := "回覆原始訊息"
+	replyValue := "✅ 開啟"
+	if !ds.replyToOriginal {
+		replyValue = "❌ 關閉"
+	}
+	if ds.focusField == discordFieldReply {
+		replyLabel = "› " + replyLabel
+	} else {
+		replyLabel = "  " + replyLabel
+	}
+	lines = append(lines, theme.SectionStyle.Render(replyLabel)+"  "+replyValue)
+	lines = append(lines, "")
+
+	// Field 2: Console Channel
+	consoleLabel := "Console Channel"
+	if ds.focusField == discordFieldConsole {
+		consoleLabel = "› " + consoleLabel
+	} else {
+		consoleLabel = "  " + consoleLabel
+	}
+	lines = append(lines, theme.SectionStyle.Render(consoleLabel))
+	lines = append(lines, "  "+ds.consoleInput.View())
 	lines = append(lines, "")
 
 	// Status

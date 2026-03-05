@@ -15,7 +15,18 @@ const (
 
 // DiscordConfig holds Discord bot settings.
 type DiscordConfig struct {
-	BotToken string `json:"bot_token,omitempty"`
+	BotToken        string `json:"bot_token,omitempty"`
+	ReplyToOriginal *bool  `json:"reply_to_original,omitempty"` // nil = default true
+	ConsoleChannel  string `json:"console_channel,omitempty"`   // channel ID for log output
+}
+
+// ShouldReplyToOriginal returns whether the bot should reply to the original message.
+// Defaults to true when not explicitly configured.
+func (c DiscordConfig) ShouldReplyToOriginal() bool {
+	if c.ReplyToOriginal == nil {
+		return true
+	}
+	return *c.ReplyToOriginal
 }
 
 // TelegramConfig holds Telegram bot settings.
