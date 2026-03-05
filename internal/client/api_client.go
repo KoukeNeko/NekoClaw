@@ -1049,6 +1049,32 @@ func (c *APIClient) SetTelegramConfig(ctx context.Context, cfg core.TelegramConf
 	return c.doAndDecodeJSON(httpReq, &out)
 }
 
+func (c *APIClient) GetToolsConfig(ctx context.Context) (core.ToolsConfig, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/tools/config", nil)
+	if err != nil {
+		return core.ToolsConfig{}, err
+	}
+	var out core.ToolsConfig
+	if err := c.doAndDecodeJSON(httpReq, &out); err != nil {
+		return core.ToolsConfig{}, err
+	}
+	return out, nil
+}
+
+func (c *APIClient) SetToolsConfig(ctx context.Context, cfg core.ToolsConfig) error {
+	payload, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/v1/tools/config", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	var out struct{}
+	return c.doAndDecodeJSON(httpReq, &out)
+}
+
 func (c *APIClient) ListSessions(ctx context.Context) ([]SessionInfo, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/sessions", nil)
 	if err != nil {

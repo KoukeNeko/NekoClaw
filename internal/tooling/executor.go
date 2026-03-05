@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,12 +17,20 @@ import (
 )
 
 type RuntimeExecutor struct {
-	backend Backend
-	policy  Policy
-	specs   map[string]ToolSpec
+	backend        Backend
+	policy         Policy
+	specs          map[string]ToolSpec
+	httpClient     *http.Client // shared by web_search, web_fetch
+	braveSearchKey string       // Brave Search API key (empty = web_search disabled)
 }
 
-func NewRuntimeExecutor(backend Backend, policy Policy) *RuntimeExecutor {
+// ExecutorConfig holds optional configuration for tools that need external
+// services (e.g. web search API keys).
+type ExecutorConfig struct {
+	BraveSearchAPIKey string
+}
+
+func NewRuntimeExecutor(backend Backend, policy Policy, cfg ExecutorConfig) *RuntimeExecutor {
 	specs := map[string]ToolSpec{
 		"file_list":      {Definition: toolDef("file_list", "List files in the workspace.", `{"type":"object","properties":{"path":{"type":"string"},"recursive":{"type":"boolean"},"max_entries":{"type":"integer","minimum":1}}}`)},
 		"file_read":      {Definition: toolDef("file_read", "Read file content.", `{"type":"object","required":["path"],"properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1}}}`)},
@@ -40,8 +49,26 @@ func NewRuntimeExecutor(backend Backend, policy Policy) *RuntimeExecutor {
 		"git_add":        {Definition: toolDef("git_add", "Run git add.", `{"type":"object","required":["pathspecs"],"properties":{"pathspecs":{"type":"array","items":{"type":"string"}}}}`), Mutating: true},
 		"git_restore":    {Definition: toolDef("git_restore", "Run git restore.", `{"type":"object","required":["pathspecs"],"properties":{"pathspecs":{"type":"array","items":{"type":"string"}},"staged":{"type":"boolean"}}}`), Mutating: true},
 		"git_commit":     {Definition: toolDef("git_commit", "Run git commit.", `{"type":"object","required":["message"],"properties":{"message":{"type":"string"}}}`), Mutating: true},
+		// AI assistant tools — always available, no external dependencies.
+		"datetime":  {Definition: toolDef("datetime", "Get current date, time, timezone, and unix timestamp.", `{"type":"object","properties":{}}`)},
+		"web_fetch": {Definition: toolDef("web_fetch", "Fetch a web page and return its text content. Useful for reading articles, documentation, or URLs shared by the user.", `{"type":"object","required":["url"],"properties":{"url":{"type":"string"},"max_chars":{"type":"integer","minimum":100}}}`)},
 	}
-	return &RuntimeExecutor{backend: backend, policy: policy, specs: specs}
+
+	// web_search requires an API key; only register when configured.
+	braveKey := strings.TrimSpace(cfg.BraveSearchAPIKey)
+	if braveKey != "" {
+		specs["web_search"] = ToolSpec{Definition: toolDef("web_search",
+			"Search the web using Brave Search. Returns titles, URLs, and snippets.",
+			`{"type":"object","required":["query"],"properties":{"query":{"type":"string"},"count":{"type":"integer","minimum":1,"maximum":20}}}`)}
+	}
+
+	return &RuntimeExecutor{
+		backend:        backend,
+		policy:         policy,
+		specs:          specs,
+		httpClient:     &http.Client{Timeout: 15 * time.Second},
+		braveSearchKey: braveKey,
+	}
 }
 
 func toolDef(name, description, schema string) provider.ToolDefinition {
@@ -129,6 +156,12 @@ func (e *RuntimeExecutor) Run(ctx context.Context, call provider.ToolCall) (stri
 		return e.runGitRestore(ctx, call.Arguments)
 	case "git_commit":
 		return e.runGitCommit(ctx, call.Arguments)
+	case "datetime":
+		return e.runDatetime()
+	case "web_fetch":
+		return e.runWebFetch(call.Arguments)
+	case "web_search":
+		return e.runWebSearch(call.Arguments)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", call.Name)
 	}

@@ -34,11 +34,17 @@ type TelegramConfig struct {
 	BotToken string `json:"bot_token,omitempty"`
 }
 
+// ToolsConfig holds settings for built-in AI assistant tools.
+type ToolsConfig struct {
+	BraveSearchAPIKey string `json:"brave_search_api_key,omitempty"`
+}
+
 // AppConfig holds user-configurable settings persisted to config.json.
 type AppConfig struct {
 	Fallbacks []FallbackEntry `json:"fallbacks,omitempty"`
 	Discord   DiscordConfig   `json:"discord,omitempty"`
 	Telegram  TelegramConfig  `json:"telegram,omitempty"`
+	Tools     ToolsConfig     `json:"tools,omitempty"`
 }
 
 // LoadConfig reads config.json from configDir.

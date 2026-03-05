@@ -383,6 +383,18 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		}
 	}
 
+	// Resolve config directory early — needed for tool settings and later for
+	// fallback chain / Discord / Telegram config.
+	configDir := ""
+	if home, homeErr := os.UserHomeDir(); homeErr == nil && strings.TrimSpace(home) != "" {
+		configDir = filepath.Join(home, ".nekoclaw")
+	}
+
+	appConfig, configErr := core.LoadConfig(configDir)
+	if configErr != nil {
+		logSystem.Errorf("config load: %v", configErr)
+	}
+
 	svc := app.NewService(app.ServiceOptions{
 		SessionStore:  sessionStore,
 		Lifecycle:     lifecycle,
@@ -392,6 +404,7 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		ToolRunTTL:    envOrDuration("NEKOCLAW_TOOL_RUN_TTL", 10*time.Minute),
 		MCPConfigDir:  mcpDir,
 		PersonasDir:   personasDir,
+		ToolsConfig:   appConfig.Tools,
 	})
 
 	mockProvider := provider.NewMockProvider()
@@ -468,20 +481,11 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		svc.RegisterPool(core.NewAccountPool("openai-codex", nil, nil, core.DefaultCooldownConfig()))
 	}
 
-	// Load user-configured fallback chain from config.json.
-	// Falls back to a sensible default (google-ai-studio) if not configured.
-	configDir := ""
-	if home, homeErr := os.UserHomeDir(); homeErr == nil && strings.TrimSpace(home) != "" {
-		configDir = filepath.Join(home, ".nekoclaw")
-	}
+	// Apply remaining config (fallbacks, Discord, Telegram) from the earlier load.
 	svc.SetConfigDir(configDir)
-
-	appConfig, configErr := core.LoadConfig(configDir)
-	if configErr != nil {
-		logSystem.Errorf("config load: %v", configErr)
-	}
 	svc.SetDiscordConfig(appConfig.Discord)
 	svc.SetTelegramConfig(appConfig.Telegram)
+	svc.SetToolsConfig(appConfig.Tools)
 
 	if len(appConfig.Fallbacks) > 0 {
 		svc.SetFallbacks(appConfig.Fallbacks)

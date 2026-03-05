@@ -22,9 +22,10 @@ const (
 	SectionMCP
 	SectionDiscord
 	SectionTelegram
+	SectionTools
 )
 
-var sectionNames = []string{"Provider", "Persona", "Auth", "Sessions", "Memory", "Usage", "MCP", "Discord", "Telegram"}
+var sectionNames = []string{"Provider", "Persona", "Auth", "Sessions", "Memory", "Usage", "MCP", "Discord", "Telegram", "Tools"}
 
 // SettingsView is a modal overlay with tabbed navigation.
 type SettingsView struct {
@@ -41,6 +42,7 @@ type SettingsView struct {
 	mcp      MCPSection
 	discord  DiscordSection
 	telegram TelegramSection
+	tools    ToolsSection
 
 	// Shared state from parent
 	apiClient     *client.APIClient
@@ -64,6 +66,7 @@ func NewSettingsView(apiClient *client.APIClient, providerID, modelID, sessionID
 		mcp:           NewMCPSection(),
 		discord:       NewDiscordSection(),
 		telegram:      NewTelegramSection(),
+		tools:         NewToolsSection(),
 		apiClient:     apiClient,
 		providerID:    providerID,
 		modelID:       modelID,
@@ -271,6 +274,10 @@ func (sv *SettingsView) Update(msg tea.Msg) tea.Cmd {
 		return sv.telegram.HandleConfig(msg)
 	case TelegramSaveMsg:
 		return sv.telegram.HandleSave(msg)
+	case ToolsConfigMsg:
+		return sv.tools.HandleConfig(msg)
+	case ToolsSaveMsg:
+		return sv.tools.HandleSave(msg)
 	case PersonaClearMsg:
 		cmd := sv.persona.HandlePersonaClear(msg)
 		if msg.Err == nil {
@@ -320,6 +327,8 @@ func (sv *SettingsView) enterSection() tea.Cmd {
 		return loadDiscordConfigCmd(sv.apiClient)
 	case SectionTelegram:
 		return loadTelegramConfigCmd(sv.apiClient)
+	case SectionTools:
+		return loadToolsConfigCmd(sv.apiClient)
 	}
 	return nil
 }
@@ -344,6 +353,8 @@ func (sv *SettingsView) sectionHasActiveInput() bool {
 		return sv.discord.HasActiveInput()
 	case SectionTelegram:
 		return sv.telegram.HasActiveInput()
+	case SectionTools:
+		return sv.tools.HasActiveInput()
 	}
 	return false
 }
@@ -368,6 +379,8 @@ func (sv *SettingsView) delegateToSection(msg tea.KeyMsg) tea.Cmd {
 		return sv.discord.Update(msg, sv.apiClient)
 	case SectionTelegram:
 		return sv.telegram.Update(msg, sv.apiClient)
+	case SectionTools:
+		return sv.tools.Update(msg, sv.apiClient)
 	}
 	return nil
 }
@@ -430,6 +443,8 @@ func (sv SettingsView) RenderOverlay(chatBg string, width, height int) string {
 		sectionContent = sv.discord.View(textW, maxContentLines)
 	case SectionTelegram:
 		sectionContent = sv.telegram.View(textW, maxContentLines)
+	case SectionTools:
+		sectionContent = sv.tools.View(textW, maxContentLines)
 	}
 
 	var lines []string
@@ -496,6 +511,8 @@ func (sv SettingsView) sectionHintText() string {
 	case SectionDiscord:
 		return "↑↓ 切換欄位  ·  Enter 儲存  ·  Tab 分頁  ·  Esc 關閉"
 	case SectionTelegram:
+		return "Enter 儲存  ·  Tab 分頁  ·  Esc 關閉"
+	case SectionTools:
 		return "Enter 儲存  ·  Tab 分頁  ·  Esc 關閉"
 	default:
 		return "↑↓ 選擇  ·  Enter 確認  ·  Tab 分頁  ·  Esc 關閉"

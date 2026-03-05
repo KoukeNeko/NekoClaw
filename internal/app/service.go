@@ -53,6 +53,7 @@ type Service struct {
 	fallbacks         []core.FallbackEntry // ordered fallback provider+model pairs
 	discordConfig     core.DiscordConfig   // persisted Discord bot settings
 	telegramConfig    core.TelegramConfig  // persisted Telegram bot settings
+	toolsConfig       core.ToolsConfig     // persisted tool settings (web_search API key, etc.)
 	defaultProvider   string               // current default provider (synced from TUI)
 	defaultModel      string               // current default model (synced from TUI)
 	configDir         string               // directory for config.json persistence
@@ -73,6 +74,7 @@ type ServiceOptions struct {
 	ToolRunTTL    time.Duration
 	MCPConfigDir  string
 	PersonasDir   string
+	ToolsConfig   core.ToolsConfig // web_search API key, etc.
 }
 
 func NewService(opts ServiceOptions) *Service {
@@ -90,7 +92,10 @@ func NewService(opts ServiceOptions) *Service {
 		preferredProfiles: map[string]string{},
 	}
 	policy := tooling.DefaultPolicy(opts.WorkspaceRoot)
-	builtinExecutor := tooling.NewRuntimeExecutor(serviceToolBackend{svc: svc}, policy)
+	execCfg := tooling.ExecutorConfig{
+		BraveSearchAPIKey: opts.ToolsConfig.BraveSearchAPIKey,
+	}
+	builtinExecutor := tooling.NewRuntimeExecutor(serviceToolBackend{svc: svc}, policy, execCfg)
 
 	// If MCP config directory is provided, create a Manager and wrap with CompositeExecutor.
 	var executor tooling.Executor = builtinExecutor
@@ -427,6 +432,32 @@ func (s *Service) SetTelegramConfig(cfg core.TelegramConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.telegramConfig = cfg
+}
+
+// GetToolsConfig returns a copy of the current tools configuration.
+func (s *Service) GetToolsConfig() core.ToolsConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.toolsConfig
+}
+
+// SaveToolsConfig persists tool settings to config.json and updates in-memory state.
+func (s *Service) SaveToolsConfig(cfg core.ToolsConfig) error {
+	s.mu.Lock()
+	configDir := s.configDir
+	s.toolsConfig = cfg
+	s.mu.Unlock()
+
+	appCfg, _ := core.LoadConfig(configDir)
+	appCfg.Tools = cfg
+	return core.SaveConfig(configDir, appCfg)
+}
+
+// SetToolsConfig sets the in-memory tools config (used during startup).
+func (s *Service) SetToolsConfig(cfg core.ToolsConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.toolsConfig = cfg
 }
 
 // GetDefaultProvider returns the current default provider ID.

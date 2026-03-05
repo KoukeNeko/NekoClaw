@@ -374,3 +374,14 @@ type TelegramConfigMsg struct {
 type TelegramSaveMsg struct {
 	Err error
 }
+
+// ToolsConfigMsg carries the loaded tools configuration.
+type ToolsConfigMsg struct {
+	Config core.ToolsConfig
+	Err    error
+}
+
+// ToolsSaveMsg carries the result of saving tools config.
+type ToolsSaveMsg struct {
+	Err error
+}

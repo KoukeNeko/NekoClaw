@@ -177,6 +177,28 @@ func saveTelegramConfigCmd(apiClient *client.APIClient, cfg core.TelegramConfig)
 }
 
 // ---------------------------------------------------------------------------
+// Tools config
+// ---------------------------------------------------------------------------
+
+func loadToolsConfigCmd(apiClient *client.APIClient) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cfg, err := apiClient.GetToolsConfig(ctx)
+		return ToolsConfigMsg{Config: cfg, Err: err}
+	}
+}
+
+func saveToolsConfigCmd(apiClient *client.APIClient, cfg core.ToolsConfig) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		err := apiClient.SetToolsConfig(ctx, cfg)
+		return ToolsSaveMsg{Err: err}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Auth — Gemini OAuth
 // ---------------------------------------------------------------------------
 
