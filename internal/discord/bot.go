@@ -253,6 +253,20 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	sessionID := b.getSessionID(m.ChannelID)
 
+	// Send placeholder message and start tool status polling.
+	placeholder := &discordgo.MessageSend{
+		Content: "🔄 處理中...",
+		Reference: &discordgo.MessageReference{
+			MessageID: m.ID,
+			ChannelID: m.ChannelID,
+			GuildID:   m.GuildID,
+		},
+	}
+	placeholderMsg, placeholderErr := s.ChannelMessageSendComplex(m.ChannelID, placeholder)
+
+	// Poll tool status and update placeholder while waiting for response.
+	stopToolStatus := b.startToolStatusPolling(s, m.ChannelID, placeholderMsg, placeholderErr, sessionID)
+
 	resp, err := b.svc.HandleChat(b.ctx, core.ChatRequest{
 		SessionID:   sessionID,
 		Surface:     core.SurfaceDiscord,
@@ -263,6 +277,7 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		EnableTools: true,
 	})
 
+	stopToolStatus()
 	stopTyping()
 
 	// Transition: 🔄 → ✅
@@ -271,25 +286,47 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	if err != nil {
 		log.Printf("event=discord_chat_error channel=%s user=%s error=%q", m.ChannelID, m.Author.ID, err)
-		b.sendReply(s, m, "⚠️ "+err.Error())
+		errText := "⚠️ " + err.Error()
+		if placeholderErr == nil {
+			b.editMessage(s, m.ChannelID, placeholderMsg.ID, errText)
+		} else {
+			b.sendReply(s, m, errText)
+		}
 		b.logToConsole(s, fmt.Sprintf("[錯誤] <#%s> %s: %s", m.ChannelID, m.Author.Username, err.Error()))
 		return
 	}
+
+	elapsed := time.Since(startTime)
 
 	reply := strings.TrimSpace(resp.Reply)
 	if reply == "" {
 		reply = "（無回應）"
 	}
 
-	// Append tool summary if tools were used.
+	// Append usage stats and tool summary (Discord -# small text).
+	var footer []string
+	if stats := formatUsageStats(resp.Usage, elapsed); stats != "" {
+		footer = append(footer, "-# "+stats)
+	}
 	if summary := formatToolSummary(resp.ToolEvents); summary != "" {
-		reply += "\n\n" + summary
+		footer = append(footer, summary)
+	}
+	if len(footer) > 0 {
+		reply += "\n\n" + strings.Join(footer, "\n")
 	}
 
-	b.sendReply(s, m, reply)
+	// Edit placeholder with final reply; send remaining chunks as new messages.
+	if placeholderErr == nil {
+		chunks := splitMessage(reply, discordMessageLimit)
+		b.editMessage(s, m.ChannelID, placeholderMsg.ID, chunks[0])
+		for i := 1; i < len(chunks); i++ {
+			b.sendReply(s, m, chunks[i])
+		}
+	} else {
+		b.sendReply(s, m, reply)
+	}
 
 	// Log detailed traffic to console channel.
-	elapsed := time.Since(startTime)
 	b.logTraffic(s, m, resp, len(images), elapsed)
 }
 
@@ -427,6 +464,66 @@ func (b *Bot) startTyping(s *discordgo.Session, channelID string) func() {
 }
 
 // ---------------------------------------------------------------------------
+// Tool status polling
+// ---------------------------------------------------------------------------
+
+// toolStatusInterval controls how often tool status is polled.
+const toolStatusInterval = 800 * time.Millisecond
+
+// startToolStatusPolling periodically checks active tool status and updates the placeholder message.
+// Returns a stop function. Safe to call even if placeholderMsg is nil (no-op).
+func (b *Bot) startToolStatusPolling(s *discordgo.Session, channelID string, placeholderMsg *discordgo.Message, placeholderErr error, sessionID string) func() {
+	if placeholderErr != nil || placeholderMsg == nil {
+		return func() {} // no placeholder to update
+	}
+
+	ctx, cancel := context.WithCancel(b.ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		lastText := ""
+		ticker := time.NewTicker(toolStatusInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				toolName := b.svc.GetActiveToolStatus(sessionID)
+				var display string
+				if toolName != "" {
+					displayName := toolName
+					if serverName, tn, isMCP := mcp.ParseNamespacedTool(toolName); isMCP {
+						displayName = serverName + "/" + tn
+					}
+					display = "🔧 正在使用 " + displayName + "..."
+				} else {
+					display = "🔄 處理中..."
+				}
+				if display != lastText {
+					b.editMessage(s, channelID, placeholderMsg.ID, display)
+					lastText = display
+				}
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+// editMessage edits an existing Discord message.
+func (b *Bot) editMessage(s *discordgo.Session, channelID, messageID, content string) {
+	if len(content) > discordMessageLimit {
+		content = content[:discordMessageLimit]
+	}
+	if _, err := s.ChannelMessageEdit(channelID, messageID, content); err != nil {
+		log.Printf("event=discord_edit_error channel=%s message=%s error=%q", channelID, messageID, err)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Reply formatting
 // ---------------------------------------------------------------------------
 
@@ -514,6 +611,54 @@ func (b *Bot) logTraffic(s *discordgo.Session, m *discordgo.MessageCreate, resp 
 	sb.WriteString(fmt.Sprintf("  耗時: %s", elapsed.Round(time.Millisecond)))
 
 	b.logToConsole(s, sb.String())
+}
+
+// formatUsageStats builds a TUI-style usage summary: ⏱ 2.3s · ↑1.2K ↓567 · 245 tok/s
+func formatUsageStats(usage core.UsageInfo, elapsed time.Duration) string {
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 && elapsed == 0 {
+		return ""
+	}
+
+	var parts []string
+
+	// Elapsed time.
+	if elapsed > 0 {
+		secs := elapsed.Seconds()
+		switch {
+		case secs >= 60:
+			parts = append(parts, fmt.Sprintf("⏱ %s", elapsed.Truncate(time.Second)))
+		case secs >= 10:
+			parts = append(parts, fmt.Sprintf("⏱ %.1fs", secs))
+		default:
+			parts = append(parts, fmt.Sprintf("⏱ %.2fs", secs))
+		}
+	}
+
+	// Token counts.
+	if usage.InputTokens > 0 || usage.OutputTokens > 0 {
+		parts = append(parts, fmt.Sprintf("↑%s ↓%s",
+			formatTokenCount(usage.InputTokens), formatTokenCount(usage.OutputTokens)))
+	}
+
+	// Throughput.
+	if usage.OutputTokens > 0 && elapsed > 0 {
+		tokPerSec := float64(usage.OutputTokens) / elapsed.Seconds()
+		parts = append(parts, fmt.Sprintf("%.0f tok/s", tokPerSec))
+	}
+
+	return strings.Join(parts, " · ")
+}
+
+// formatTokenCount formats a token count with K/M suffixes.
+func formatTokenCount(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fK", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }
 
 // formatToolSummary builds a short summary of executed tools.

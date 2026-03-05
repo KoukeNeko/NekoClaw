@@ -213,6 +213,7 @@ func (b *Bot) chatWorker(ch <-chan messageJob) {
 }
 
 func (b *Bot) handleMessage(update tgbotapi.Update) {
+	startTime := time.Now()
 	msg := update.Message
 
 	// Handle commands before sending to AI.
@@ -248,6 +249,9 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 
 	sessionID := b.getSessionID(chatID)
 
+	// Poll tool status and update placeholder while waiting for response.
+	stopToolStatus := b.startToolStatusPolling(chatID, placeholderMsg.MessageID, placeholderErr, sessionID)
+
 	resp, err := b.svc.HandleChat(b.ctx, core.ChatRequest{
 		SessionID:   sessionID,
 		Surface:     core.SurfaceTelegram,
@@ -258,6 +262,7 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 		EnableTools: true,
 	})
 
+	stopToolStatus()
 	stopTyping()
 
 	if err != nil {
@@ -271,14 +276,23 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 		return
 	}
 
+	elapsed := time.Since(startTime)
+
 	reply := strings.TrimSpace(resp.Reply)
 	if reply == "" {
 		reply = "（無回應）"
 	}
 
-	// Append tool summary if tools were used.
+	// Append usage stats and tool summary.
+	var footer []string
+	if stats := formatUsageStats(resp.Usage, elapsed); stats != "" {
+		footer = append(footer, stats)
+	}
 	if summary := formatToolSummary(resp.ToolEvents); summary != "" {
-		reply += "\n\n" + summary
+		footer = append(footer, summary)
+	}
+	if len(footer) > 0 {
+		reply += "\n\n" + strings.Join(footer, "\n")
 	}
 
 	// Edit the placeholder with the first chunk; send remaining chunks as new messages.
@@ -498,6 +512,56 @@ func (b *Bot) startTyping(chatID int64) func() {
 }
 
 // ---------------------------------------------------------------------------
+// Tool status polling
+// ---------------------------------------------------------------------------
+
+// toolStatusInterval controls how often tool status is polled.
+const toolStatusInterval = 800 * time.Millisecond
+
+// startToolStatusPolling periodically checks active tool status and updates the placeholder message.
+// Returns a stop function. Safe to call even if placeholder send failed.
+func (b *Bot) startToolStatusPolling(chatID int64, placeholderMsgID int, placeholderErr error, sessionID string) func() {
+	if placeholderErr != nil || placeholderMsgID == 0 {
+		return func() {}
+	}
+
+	ctx, cancel := context.WithCancel(b.ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		lastText := ""
+		ticker := time.NewTicker(toolStatusInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				toolName := b.svc.GetActiveToolStatus(sessionID)
+				var display string
+				if toolName != "" {
+					displayName := toolName
+					if serverName, tn, isMCP := mcp.ParseNamespacedTool(toolName); isMCP {
+						displayName = serverName + "/" + tn
+					}
+					display = "🔧 正在使用 " + displayName + "..."
+				} else {
+					display = "🔄 處理中..."
+				}
+				if display != lastText {
+					b.editMessage(chatID, placeholderMsgID, display)
+					lastText = display
+				}
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Reply helpers
 // ---------------------------------------------------------------------------
 
@@ -523,6 +587,58 @@ func (b *Bot) sendReply(chatID int64, replyToID int, content string) {
 			log.Printf("event=telegram_send_error chat=%d error=%q", chatID, err)
 			return
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Usage stats
+// ---------------------------------------------------------------------------
+
+// formatUsageStats builds a TUI-style usage summary: ⏱ 2.3s · ↑1.2K ↓567 · 245 tok/s
+func formatUsageStats(usage core.UsageInfo, elapsed time.Duration) string {
+	if usage.InputTokens == 0 && usage.OutputTokens == 0 && elapsed == 0 {
+		return ""
+	}
+
+	var parts []string
+
+	// Elapsed time.
+	if elapsed > 0 {
+		secs := elapsed.Seconds()
+		switch {
+		case secs >= 60:
+			parts = append(parts, fmt.Sprintf("⏱ %s", elapsed.Truncate(time.Second)))
+		case secs >= 10:
+			parts = append(parts, fmt.Sprintf("⏱ %.1fs", secs))
+		default:
+			parts = append(parts, fmt.Sprintf("⏱ %.2fs", secs))
+		}
+	}
+
+	// Token counts.
+	if usage.InputTokens > 0 || usage.OutputTokens > 0 {
+		parts = append(parts, fmt.Sprintf("↑%s ↓%s",
+			formatTokenCount(usage.InputTokens), formatTokenCount(usage.OutputTokens)))
+	}
+
+	// Throughput.
+	if usage.OutputTokens > 0 && elapsed > 0 {
+		tokPerSec := float64(usage.OutputTokens) / elapsed.Seconds()
+		parts = append(parts, fmt.Sprintf("%.0f tok/s", tokPerSec))
+	}
+
+	return strings.Join(parts, " · ")
+}
+
+// formatTokenCount formats a token count with K/M suffixes.
+func formatTokenCount(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fK", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
 	}
 }
 
