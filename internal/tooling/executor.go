@@ -38,6 +38,7 @@ func NewRuntimeExecutor(backend Backend, policy Policy, cfg ExecutorConfig) *Run
 		"sessions_list":  {Definition: toolDef("sessions_list", "List chat sessions.", `{"type":"object","properties":{"limit":{"type":"integer","minimum":1}}}`)},
 		"memory_search":  {Definition: toolDef("memory_search", "Search memory index.", `{"type":"object","required":["query"],"properties":{"query":{"type":"string"},"limit":{"type":"integer","minimum":1}}}`)},
 		"memory_get":     {Definition: toolDef("memory_get", "Read a memory file by relative path. Optionally specify line range.", `{"type":"object","required":["path"],"properties":{"path":{"type":"string","description":"Relative path to memory file (e.g. MEMORY.md, memory/2026-03-06-auth.md)"},"from":{"type":"integer","description":"Starting line number (1-based)","minimum":1},"lines":{"type":"integer","description":"Number of lines to read","minimum":1}}}`)},
+		"memory_save":    {Definition: toolDef("memory_save", "Save a note to the daily memory log. Use this when the user asks you to remember something.", `{"type":"object","required":["content"],"properties":{"content":{"type":"string","description":"The content to save to memory"}}}`), Mutating: true},
 		"providers_list": {Definition: toolDef("providers_list", "List providers.", `{"type":"object","properties":{}}`)},
 		"accounts_list":  {Definition: toolDef("accounts_list", "List provider accounts.", `{"type":"object","required":["provider"],"properties":{"provider":{"type":"string"}}}`)},
 		"git_status":     {Definition: toolDef("git_status", "Run git status.", `{"type":"object","properties":{}}`)},
@@ -135,6 +136,8 @@ func (e *RuntimeExecutor) Run(ctx context.Context, call provider.ToolCall) (stri
 		return e.runMemorySearch(call.Arguments)
 	case "memory_get":
 		return e.runMemoryGet(call.Arguments)
+	case "memory_save":
+		return e.runMemorySave(call.Arguments)
 	case "providers_list":
 		return e.runProvidersList()
 	case "accounts_list":
@@ -366,6 +369,23 @@ func (e *RuntimeExecutor) runMemoryGet(raw json.RawMessage) (string, error) {
 		return "", err
 	}
 	return content, nil
+}
+
+func (e *RuntimeExecutor) runMemorySave(raw json.RawMessage) (string, error) {
+	var args struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return "", err
+	}
+	content := strings.TrimSpace(args.Content)
+	if content == "" {
+		return "", fmt.Errorf("content is required")
+	}
+	if err := e.backend.SaveMemory(content); err != nil {
+		return "", err
+	}
+	return "Saved to memory.", nil
 }
 
 func (e *RuntimeExecutor) runProvidersList() (string, error) {

@@ -11,6 +11,7 @@ type Backend interface {
 	ListSessions() []core.SessionMetadata
 	SearchMemory(query string, limit int) ([]MemoryResult, error)
 	ReadMemoryFile(relPath string, from, lines int) (string, error)
+	SaveMemory(content string) error
 	Providers() []string
 	Accounts(providerID string) []core.AccountSnapshot
 }
