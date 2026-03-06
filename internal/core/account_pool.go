@@ -45,6 +45,14 @@ const circuitBreakerThreshold = 3
 // circuit breaker trips (consecutive capacity failures ≥ threshold).
 const circuitBreakerCooldown = 5 * time.Minute
 
+// rateLimitDefaultCooldown is used when the server does not provide a
+// Retry-After header. Kept short because rate limits are typically transient.
+const rateLimitDefaultCooldown = 15 * time.Second
+
+// rateLimitMaxCooldown caps per-account rate limit cooldowns to prevent a
+// single large Retry-After value from blocking an account indefinitely.
+const rateLimitMaxCooldown = 2 * time.Minute
+
 type AccountPool struct {
 	mu                  sync.Mutex
 	provider            string
@@ -221,6 +229,19 @@ func (p *AccountPool) MarkFailureWithRetryHint(accountID string, reason FailureR
 		p.consecutiveCapacityFailures = 0 // break capacity streak
 		// Timeout is a network/infrastructure issue, not an account-level problem.
 		// Track error count for diagnostics but do NOT set cooldown.
+	case FailureRateLimit:
+		p.consecutiveCapacityFailures = 0 // break capacity streak
+		// Rate limits are per-account and typically short-lived. Respect the
+		// server's Retry-After hint directly instead of the aggressive auth
+		// cooldown escalation (1m → 5m → 25m → 1h).
+		cooldownFor := rateLimitDefaultCooldown
+		if retryHint > 0 {
+			cooldownFor = retryHint
+		}
+		if cooldownFor > rateLimitMaxCooldown {
+			cooldownFor = rateLimitMaxCooldown
+		}
+		stats.CooldownUntil = keepActiveWindowOrRecompute(stats.CooldownUntil, now, now.Add(cooldownFor))
 	case FailureModelCapacity:
 		// Model-wide capacity problem: apply global cooldown to all accounts.
 		// Individual account cooldown is not set since the issue is model-level.

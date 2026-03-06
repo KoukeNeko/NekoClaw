@@ -1004,12 +1004,16 @@ func classifyStatus(status int, body string) core.FailureReason {
 	return core.FailureUnknown
 }
 
-func isTransientStatus(status int) bool {
-	return status == http.StatusTooManyRequests || status == http.StatusRequestTimeout || status >= 500
+// isEndpointTransient identifies HTTP status codes caused by endpoint-level
+// infrastructure problems (not account-level). 429 is intentionally excluded
+// because rate limits apply per-account — falling back to another endpoint
+// with the same token would just waste round-trips.
+func isEndpointTransient(status int) bool {
+	return status == http.StatusRequestTimeout || status >= 500
 }
 
 func shouldFallbackEndpoint(status int, body []byte) bool {
-	if isTransientStatus(status) {
+	if isEndpointTransient(status) {
 		return true
 	}
 	if status != http.StatusForbidden {

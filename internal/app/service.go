@@ -1340,7 +1340,7 @@ func fallbackModels(providerID string) []string {
 	case "google-ai-studio":
 		return []string{"gemini-2.5-pro", "gemini-2.5-flash"}
 	case "google-gemini-cli":
-		return []string{"gemini-3-pro-preview", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-2.5-flash"}
+		return []string{"gemini-3.1-pro-preview", "gemini-3-pro-preview", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-2.5-flash"}
 	default:
 		return nil
 	}
@@ -2306,6 +2306,7 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 			isDefaultModel:    candidateIsDefault,
 			sessionID:         sessionID,
 			disableSession:    disableSession,
+			isFallback:        isFallback,
 			ephemeralMessages: ephemeralMessages,
 			prompt:            prompt,
 			images:            req.Images,
@@ -2350,6 +2351,7 @@ type attemptSingleProviderParams struct {
 	isDefaultModel    bool
 	sessionID         string
 	disableSession    bool
+	isFallback        bool // true when this is a fallback provider, not the primary
 	ephemeralMessages []core.Message
 	prompt            string
 	images            []core.ImageData
@@ -2419,42 +2421,49 @@ func (s *Service) attemptSingleProvider(
 		memoryCh <- memoryResult{}
 	}
 
-	// Pre-compaction memory flush: extract durable notes before messages are dropped.
-	if !params.disableSession && s.memoryDir != "" {
-		flusher := compaction.NewMemoryFlusher(prov, modelID, core.Account{}, s.memoryDir)
-		if flusher.ShouldFlush(estimatedTokens, contextWindow, compaction.DefaultReserveTokens) {
-			if _, flushErr := flusher.Flush(ctx, entries); flushErr != nil {
-				logService.Errorf("memory flush: session_id=%s error=%q", sessionID, flushErr)
+	// LLM compaction and memory flush are skipped during fallback attempts.
+	// Fallback providers typically have smaller context windows; running
+	// persistent compaction here would permanently discard messages that the
+	// primary provider (with a larger window) can still use. The non-destructive
+	// sliding window below handles the size reduction for the fallback call.
+	if !params.isFallback {
+		// Pre-compaction memory flush: extract durable notes before messages are dropped.
+		if !params.disableSession && s.memoryDir != "" {
+			flusher := compaction.NewMemoryFlusher(prov, modelID, core.Account{}, s.memoryDir)
+			if flusher.ShouldFlush(estimatedTokens, contextWindow, compaction.DefaultReserveTokens) {
+				if _, flushErr := flusher.Flush(ctx, entries); flushErr != nil {
+					logService.Errorf("memory flush: session_id=%s error=%q", sessionID, flushErr)
+				}
 			}
 		}
-	}
 
-	compactBudget := contextWindow - compaction.DefaultReserveTokens
-	if !params.disableSession && compactBudget > 0 && estimatedTokens > compactBudget {
-		compactor := compaction.NewCompactor(prov, modelID, core.Account{})
-		result, compactErr := compactor.Compact(ctx, compaction.CompactionRequest{
-			Entries:       entries,
-			ContextWindow: contextWindow,
-			ReserveTokens: compaction.DefaultReserveTokens,
-		})
-		if compactErr == nil && result.DroppedCount > 0 {
-			s.sessions.Append(sessionID, result.CompactionEntry)
-			compressedMessages = entriesToMessages(result.KeptEntries)
-			if len(params.ephemeralMessages) > 0 {
-				compressedMessages = append(compressedMessages, params.ephemeralMessages...)
+		compactBudget := contextWindow - compaction.DefaultReserveTokens
+		if !params.disableSession && compactBudget > 0 && estimatedTokens > compactBudget {
+			compactor := compaction.NewCompactor(prov, modelID, core.Account{})
+			result, compactErr := compactor.Compact(ctx, compaction.CompactionRequest{
+				Entries:       entries,
+				ContextWindow: contextWindow,
+				ReserveTokens: compaction.DefaultReserveTokens,
+			})
+			if compactErr == nil && result.DroppedCount > 0 {
+				s.sessions.Append(sessionID, result.CompactionEntry)
+				compressedMessages = entriesToMessages(result.KeptEntries)
+				if len(params.ephemeralMessages) > 0 {
+					compressedMessages = append(compressedMessages, params.ephemeralMessages...)
+				}
+				if hasUserMessage {
+					compressedMessages = append(compressedMessages, userMessage)
+				}
+				compressionMeta = core.CompressionMeta{
+					OriginalTokens:   estimatedTokens,
+					CompressedTokens: compaction.EstimateEntriesTokens(result.KeptEntries) + result.SummaryTokens,
+					DroppedMessages:  result.DroppedCount,
+				}
+				compressed = true
+				logService.Logf("llm compaction: session_id=%s dropped=%d", sessionID, result.DroppedCount)
+			} else if compactErr != nil {
+				logService.Warnf("llm compaction fallback: session_id=%s error=%q", sessionID, compactErr)
 			}
-			if hasUserMessage {
-				compressedMessages = append(compressedMessages, userMessage)
-			}
-			compressionMeta = core.CompressionMeta{
-				OriginalTokens:   estimatedTokens,
-				CompressedTokens: compaction.EstimateEntriesTokens(result.KeptEntries) + result.SummaryTokens,
-				DroppedMessages:  result.DroppedCount,
-			}
-			compressed = true
-			logService.Logf("llm compaction: session_id=%s dropped=%d", sessionID, result.DroppedCount)
-		} else if compactErr != nil {
-			logService.Warnf("llm compaction fallback: session_id=%s error=%q", sessionID, compactErr)
 		}
 	}
 
@@ -2488,7 +2497,7 @@ func (s *Service) attemptSingleProvider(
 	// Inject system prompt: persona template (with embedded memory) or plain memory.
 	var generationParams *provider.GenerationParams
 	if activePersona := s.activePersona(); activePersona != nil {
-		rendered, renderErr := persona.RenderSystemPrompt(activePersona, memoryPrompt)
+		rendered, renderErr := persona.RenderSystemPrompt(activePersona, memoryPrompt, providerID)
 		if renderErr != nil {
 			logService.Errorf("persona render: persona=%s error=%q", activePersona.DirName, renderErr)
 		} else {

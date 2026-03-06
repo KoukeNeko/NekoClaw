@@ -2,6 +2,7 @@ package core
 
 import (
 	"testing"
+	"time"
 )
 
 func TestAccountPoolSkipsCooldownAccount(t *testing.T) {
@@ -54,6 +55,44 @@ func TestRateLimitSetsCooldownNotDisabled(t *testing.T) {
 	}
 	if stats.DisabledReason != "" {
 		t.Fatalf("expected no disabled reason for rate-limit")
+	}
+}
+
+func TestRateLimitCooldownRespectsRetryHint(t *testing.T) {
+	pool := NewAccountPool("google-gemini-cli", []Account{
+		{ID: "a1", Provider: "google-gemini-cli", Type: AccountOAuth, Token: "t1"},
+	}, nil, DefaultCooldownConfig())
+
+	// Rate limit with 10s Retry-After → cooldown should be ~10s, not 1 minute.
+	pool.MarkFailureWithRetryHint("a1", FailureRateLimit, 10*time.Second)
+	stats := pool.Snapshot()[0].Usage
+	if stats == nil || stats.CooldownUntil.IsZero() {
+		t.Fatalf("expected cooldown for rate limit")
+	}
+	remaining := time.Until(stats.CooldownUntil)
+	if remaining > 15*time.Second {
+		t.Fatalf("rate limit cooldown too long: %s (expected ≤15s with 10s hint)", remaining.Round(time.Second))
+	}
+}
+
+func TestRateLimitCooldownDefaultsWhenNoHint(t *testing.T) {
+	pool := NewAccountPool("google-gemini-cli", []Account{
+		{ID: "a1", Provider: "google-gemini-cli", Type: AccountOAuth, Token: "t1"},
+	}, nil, DefaultCooldownConfig())
+
+	// Rate limit without Retry-After → should use rateLimitDefaultCooldown (15s).
+	pool.MarkFailureWithRetryHint("a1", FailureRateLimit, 0)
+	stats := pool.Snapshot()[0].Usage
+	if stats == nil || stats.CooldownUntil.IsZero() {
+		t.Fatalf("expected cooldown for rate limit")
+	}
+	remaining := time.Until(stats.CooldownUntil)
+	if remaining > 20*time.Second {
+		t.Fatalf("rate limit default cooldown too long: %s (expected ≤20s)", remaining.Round(time.Second))
+	}
+	// Should not be near 1 minute (the old auth-based escalation).
+	if remaining > 30*time.Second {
+		t.Fatalf("rate limit cooldown should be short, not auth-escalated: %s", remaining.Round(time.Second))
 	}
 }
 
