@@ -130,6 +130,13 @@ func (b *Bot) Start(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
+
+			// Handle inline keyboard button presses.
+			if update.CallbackQuery != nil {
+				b.handleCallbackQuery(update.CallbackQuery)
+				continue
+			}
+
 			if update.Message == nil {
 				continue
 			}
@@ -602,7 +609,7 @@ func (b *Bot) handleCommand(msg *tgbotapi.Message) {
 	}
 }
 
-// handlePersonaList sends a list of available personas.
+// handlePersonaList sends an inline keyboard with available personas.
 func (b *Bot) handlePersonaList(chatID int64, replyToID int) {
 	personas := b.svc.ListPersonas()
 	if len(personas) == 0 {
@@ -612,6 +619,7 @@ func (b *Bot) handlePersonaList(chatID int64, replyToID int) {
 
 	active := b.svc.ActivePersona()
 
+	// Build description text with persona details.
 	var sb strings.Builder
 	sb.WriteString("📋 可用角色：\n")
 	for _, p := range personas {
@@ -625,9 +633,127 @@ func (b *Bot) handlePersonaList(chatID int64, replyToID int) {
 		}
 		sb.WriteString("\n")
 	}
-	sb.WriteString("\n使用 /persona <名稱> 切換，/persona off 停用。")
 
-	b.sendReply(chatID, replyToID, sb.String())
+	// Build inline keyboard buttons for selection.
+	var rows [][]tgbotapi.InlineKeyboardButton
+	for _, p := range personas {
+		label := p.Name
+		if active != nil && active.DirName == p.DirName {
+			label = "▶ " + label
+		}
+		callbackData := "persona:" + p.DirName
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(label, callbackData),
+		))
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("❌ 停用角色", "persona:off"),
+	))
+
+	msg := tgbotapi.NewMessage(chatID, sb.String())
+	msg.ReplyToMessageID = replyToID
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
+	if _, err := b.api.Send(msg); err != nil {
+		logTelegram.Errorf("send persona list: chat=%d error=%v", chatID, err)
+	}
+}
+
+// handleCallbackQuery processes inline keyboard button presses.
+func (b *Bot) handleCallbackQuery(cq *tgbotapi.CallbackQuery) {
+	data := cq.Data
+
+	// Acknowledge the callback to dismiss the loading spinner.
+	callback := tgbotapi.NewCallback(cq.ID, "")
+
+	if !strings.HasPrefix(data, "persona:") {
+		callback.Text = "⚠️ 未知操作"
+		b.api.Request(callback)
+		return
+	}
+
+	arg := strings.TrimPrefix(data, "persona:")
+
+	if arg == "off" {
+		if err := b.svc.ClearActivePersona(); err != nil {
+			callback.Text = "⚠️ " + err.Error()
+			b.api.Request(callback)
+			return
+		}
+		callback.Text = "✅ 已停用角色"
+		b.api.Request(callback)
+		b.editPersonaListMessage(cq)
+		return
+	}
+
+	if err := b.svc.SetActivePersona(arg); err != nil {
+		callback.Text = "⚠️ " + err.Error()
+		b.api.Request(callback)
+		return
+	}
+
+	active := b.svc.ActivePersona()
+	name := arg
+	if active != nil {
+		name = active.Name
+	}
+	callback.Text = "✅ 已切換為「" + name + "」"
+	b.api.Request(callback)
+
+	// Update the inline keyboard to reflect the new selection.
+	b.editPersonaListMessage(cq)
+}
+
+// editPersonaListMessage updates both the description text and keyboard buttons.
+func (b *Bot) editPersonaListMessage(cq *tgbotapi.CallbackQuery) {
+	if cq.Message == nil {
+		return
+	}
+
+	personas := b.svc.ListPersonas()
+	active := b.svc.ActivePersona()
+
+	// Rebuild description text.
+	var sb strings.Builder
+	sb.WriteString("📋 可用角色：\n")
+	for _, p := range personas {
+		marker := "　"
+		if active != nil && active.DirName == p.DirName {
+			marker = "▶ "
+		}
+		sb.WriteString(fmt.Sprintf("%s%s", marker, p.Name))
+		if p.Description != "" {
+			sb.WriteString(fmt.Sprintf(" — %s", p.Description))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Rebuild buttons.
+	var rows [][]tgbotapi.InlineKeyboardButton
+	for _, p := range personas {
+		label := p.Name
+		if active != nil && active.DirName == p.DirName {
+			label = "▶ " + label
+		}
+		callbackData := "persona:" + p.DirName
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(label, callbackData),
+		))
+	}
+	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData("❌ 停用角色", "persona:off"),
+	))
+
+	text := sb.String()
+	markup := tgbotapi.NewInlineKeyboardMarkup(rows...)
+	edit := tgbotapi.NewEditMessageTextAndMarkup(
+		cq.Message.Chat.ID,
+		cq.Message.MessageID,
+		text,
+		markup,
+	)
+	if _, err := b.api.Request(edit); err != nil {
+		logTelegram.Warnf("edit persona list: %v", err)
+	}
 }
 
 // handlePersonaSwitch switches or clears the active persona.
