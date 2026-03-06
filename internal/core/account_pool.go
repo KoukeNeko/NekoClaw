@@ -36,6 +36,15 @@ func DefaultCooldownConfig() CooldownConfig {
 // itself has no capacity (distinct from per-account rate limits).
 const globalCapacityCooldown = 90 * time.Second
 
+// circuitBreakerThreshold is the number of consecutive model capacity
+// failures required to trip the circuit breaker. Once tripped, the global
+// cooldown is extended significantly to avoid hammering an overloaded server.
+const circuitBreakerThreshold = 3
+
+// circuitBreakerCooldown is the extended global cooldown applied when the
+// circuit breaker trips (consecutive capacity failures ≥ threshold).
+const circuitBreakerCooldown = 5 * time.Minute
+
 type AccountPool struct {
 	mu                  sync.Mutex
 	provider            string
@@ -44,6 +53,12 @@ type AccountPool struct {
 	usage               map[string]*ProfileUsageStats
 	cooldown            CooldownConfig
 	globalCooldownUntil time.Time // blocks ALL accounts when model has no capacity
+
+	// Circuit breaker: tracks consecutive model capacity failures across all
+	// accounts. After circuitBreakerThreshold consecutive failures, the global
+	// cooldown is extended to circuitBreakerCooldown to avoid hammering an
+	// overloaded server. Reset on any successful request (MarkUsed).
+	consecutiveCapacityFailures int
 }
 
 type AccountSnapshot struct {
@@ -147,6 +162,8 @@ func (p *AccountPool) MarkUsed(accountID string) {
 	stats.DisabledUntil = time.Time{}
 	stats.DisabledReason = ""
 	stats.FailureCounts = nil
+	// Reset circuit breaker on any successful request.
+	p.consecutiveCapacityFailures = 0
 }
 
 // MarkFailure records a failure without server retry hint. Delegates to MarkFailureWithRetryHint.
@@ -195,21 +212,31 @@ func (p *AccountPool) MarkFailureWithRetryHint(accountID string, reason FailureR
 
 	switch reason {
 	case FailureBilling, FailureAuthPermanent:
+		p.consecutiveCapacityFailures = 0 // break capacity streak
 		count := stats.FailureCounts[reason]
 		disableFor := calculateBillingDisableDuration(count, p.cooldown)
 		stats.DisabledUntil = keepActiveWindowOrRecompute(stats.DisabledUntil, now, now.Add(disableFor))
 		stats.DisabledReason = reason
 	case FailureTimeout:
+		p.consecutiveCapacityFailures = 0 // break capacity streak
 		// Timeout is a network/infrastructure issue, not an account-level problem.
 		// Track error count for diagnostics but do NOT set cooldown.
 	case FailureModelCapacity:
 		// Model-wide capacity problem: apply global cooldown to all accounts.
 		// Individual account cooldown is not set since the issue is model-level.
-		globalUntil := now.Add(globalCapacityCooldown)
-		if p.globalCooldownUntil.IsZero() || !now.Before(p.globalCooldownUntil) {
-			p.globalCooldownUntil = globalUntil
+		p.consecutiveCapacityFailures++
+		if p.consecutiveCapacityFailures >= circuitBreakerThreshold {
+			// Circuit breaker tripped: forcefully extend cooldown to prevent
+			// hammering an overloaded server.
+			p.globalCooldownUntil = now.Add(circuitBreakerCooldown)
+		} else {
+			globalUntil := now.Add(globalCapacityCooldown)
+			if p.globalCooldownUntil.IsZero() || !now.Before(p.globalCooldownUntil) {
+				p.globalCooldownUntil = globalUntil
+			}
 		}
 	default:
+		p.consecutiveCapacityFailures = 0 // break capacity streak
 		// Use max(escalated, serverHint) capped at maxServerHintCooldown.
 		cooldownFor := calculateAuthCooldown(nextErrorCount)
 		if retryHint > cooldownFor {
@@ -713,6 +740,13 @@ func accountTypeScore(accountType AccountType) int {
 	default:
 		return 3
 	}
+}
+
+// globalCooldownUntilForTest exposes globalCooldownUntil for unit tests.
+func (p *AccountPool) globalCooldownUntilForTest() time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.globalCooldownUntil
 }
 
 func isOpenRouterProvider(provider string) bool {

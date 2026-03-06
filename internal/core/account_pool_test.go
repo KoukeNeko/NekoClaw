@@ -126,6 +126,75 @@ func TestTimeoutDoesNotSetCooldown(t *testing.T) {
 	}
 }
 
+func TestCircuitBreakerExtendsGlobalCooldown(t *testing.T) {
+	pool := NewAccountPool("google-gemini-cli", []Account{
+		{ID: "a1", Provider: "google-gemini-cli", Type: AccountOAuth, Token: "t1"},
+		{ID: "a2", Provider: "google-gemini-cli", Type: AccountOAuth, Token: "t2"},
+	}, nil, DefaultCooldownConfig())
+
+	// First two capacity failures: normal global cooldown (90s).
+	pool.MarkFailure("a1", FailureModelCapacity)
+	pool.MarkFailure("a2", FailureModelCapacity)
+
+	soonest := pool.SoonestAvailableAt()
+	if soonest.IsZero() {
+		t.Fatalf("expected global cooldown after capacity failures")
+	}
+
+	// Third capacity failure trips the circuit breaker (threshold = 3).
+	pool.MarkFailure("a1", FailureModelCapacity)
+	soonestAfter := pool.SoonestAvailableAt()
+	if soonestAfter.IsZero() {
+		t.Fatalf("expected extended global cooldown after circuit breaker trips")
+	}
+	// Circuit breaker cooldown (5min) should be longer than normal (90s).
+	if !soonestAfter.After(soonest) {
+		t.Fatalf("circuit breaker should extend cooldown beyond normal: got %v, baseline %v", soonestAfter, soonest)
+	}
+}
+
+func TestCircuitBreakerResetsOnSuccess(t *testing.T) {
+	pool := NewAccountPool("google-gemini-cli", []Account{
+		{ID: "a1", Provider: "google-gemini-cli", Type: AccountOAuth, Token: "t1"},
+	}, nil, DefaultCooldownConfig())
+
+	// Accumulate capacity failures near threshold.
+	pool.MarkFailure("a1", FailureModelCapacity)
+	pool.MarkFailure("a1", FailureModelCapacity)
+
+	// Success resets the circuit breaker counter.
+	pool.MarkUsed("a1")
+
+	// Next capacity failure should NOT trip the breaker (counter was reset).
+	pool.MarkFailure("a1", FailureModelCapacity)
+	soonest := pool.SoonestAvailableAt()
+	if soonest.IsZero() {
+		t.Fatalf("expected global cooldown")
+	}
+	// Should be near normal cooldown (90s), not extended (5min).
+	// The global cooldown should be within 2 minutes of now.
+	remaining := soonest.Sub(pool.globalCooldownUntilForTest())
+	if remaining != 0 {
+		t.Fatalf("unexpected: soonest != globalCooldownUntil")
+	}
+}
+
+func TestCircuitBreakerResetsOnNonCapacityFailure(t *testing.T) {
+	pool := NewAccountPool("google-gemini-cli", []Account{
+		{ID: "a1", Provider: "google-gemini-cli", Type: AccountOAuth, Token: "t1"},
+	}, nil, DefaultCooldownConfig())
+
+	pool.MarkFailure("a1", FailureModelCapacity)
+	pool.MarkFailure("a1", FailureModelCapacity)
+
+	// A non-capacity failure breaks the consecutive streak.
+	pool.MarkFailure("a1", FailureRateLimit)
+
+	// Next capacity failure should NOT trip the breaker.
+	pool.MarkFailure("a1", FailureModelCapacity)
+	// Counter is at 1 (reset to 0 by rate_limit, then +1), not ≥ 3.
+}
+
 func TestOpenRouterBypassesCooldownTracking(t *testing.T) {
 	pool := NewAccountPool("openrouter", []Account{
 		{ID: "or1", Provider: "openrouter", Type: AccountAPIKey, Token: "sk-or"},
