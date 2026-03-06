@@ -38,10 +38,11 @@ func DefaultRetryConfig() RetryConfig {
 const retryAfterCap = 60 * time.Second
 
 // isRetriableStatus returns true for HTTP status codes that are safe to retry.
+// 429 (TooManyRequests) is intentionally excluded — rate limits are handled at
+// the account pool and fallback chain level, not via HTTP-level retries.
 func isRetriableStatus(statusCode int) bool {
 	switch statusCode {
-	case http.StatusTooManyRequests,   // 429
-		http.StatusRequestTimeout,      // 408
+	case http.StatusRequestTimeout,      // 408
 		http.StatusInternalServerError, // 500
 		http.StatusBadGateway,          // 502
 		http.StatusServiceUnavailable,  // 503

@@ -71,14 +71,15 @@ func TestComputeDelayJitter(t *testing.T) {
 }
 
 func TestIsRetriableStatus(t *testing.T) {
-	retriable := []int{408, 429, 500, 502, 503, 504}
+	retriable := []int{408, 500, 502, 503, 504}
 	for _, code := range retriable {
 		if !isRetriableStatus(code) {
 			t.Errorf("isRetriableStatus(%d) = false, want true", code)
 		}
 	}
 
-	nonRetriable := []int{200, 201, 400, 401, 403, 404, 405, 422}
+	// 429 is handled at account pool / fallback chain level, not HTTP retry.
+	nonRetriable := []int{200, 201, 400, 401, 403, 404, 405, 422, 429}
 	for _, code := range nonRetriable {
 		if isRetriableStatus(code) {
 			t.Errorf("isRetriableStatus(%d) = true, want false", code)
@@ -145,16 +146,11 @@ func TestDoWithRetry_SuccessOnFirstAttempt(t *testing.T) {
 	}
 }
 
-func TestDoWithRetry_RetriesOn429ThenSucceeds(t *testing.T) {
+func TestDoWithRetry_429NotRetriedAtHTTPLevel(t *testing.T) {
 	var calls int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&calls, 1)
-		if n < 3 {
-			w.WriteHeader(http.StatusTooManyRequests)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, "ok")
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer ts.Close()
 
@@ -166,11 +162,12 @@ func TestDoWithRetry_RetriesOn429ThenSucceeds(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	// 429 is returned immediately — not retried at HTTP level.
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", resp.StatusCode)
 	}
-	if n := atomic.LoadInt32(&calls); n != 3 {
-		t.Fatalf("calls = %d, want 3", n)
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Fatalf("calls = %d, want 1 (429 should not be retried)", n)
 	}
 }
 
@@ -227,7 +224,7 @@ func TestDoWithRetry_ContextCancellation(t *testing.T) {
 	var calls int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&calls, 1)
-		w.WriteHeader(http.StatusTooManyRequests)
+		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer ts.Close()
 
@@ -265,13 +262,13 @@ func TestDoWithRetry_NetworkError(t *testing.T) {
 	}
 }
 
-func TestDoWithRetry_RetryAfterHeader(t *testing.T) {
+func TestDoWithRetry_RetryAfterHeaderOn503(t *testing.T) {
 	var calls int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&calls, 1)
 		if n == 1 {
 			w.Header().Set("Retry-After", "1")
-			w.WriteHeader(http.StatusTooManyRequests)
+			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
