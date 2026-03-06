@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "nekoclaw-api",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["run", "./cmd/nekoclaw", "-mode", "api"],
+      "port": 8085
+    },
+    {
+      "name": "nekoclaw-both",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["run", "./cmd/nekoclaw", "-mode", "both"],
+      "port": 8085
+    }
+  ]
+}

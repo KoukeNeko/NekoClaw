@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/doeshing/nekoclaw/internal/auth"
-	"github.com/doeshing/nekoclaw/internal/logger"
 	"github.com/doeshing/nekoclaw/internal/compaction"
 	"github.com/doeshing/nekoclaw/internal/contextwindow"
 	"github.com/doeshing/nekoclaw/internal/core"
+	"github.com/doeshing/nekoclaw/internal/logger"
 	"github.com/doeshing/nekoclaw/internal/mcp"
 	"github.com/doeshing/nekoclaw/internal/memory"
 	"github.com/doeshing/nekoclaw/internal/persona"
@@ -2245,6 +2245,10 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		modelID = "default"
 	}
 	sessionID := strings.TrimSpace(req.SessionID)
+	disableSession := req.DisableSession
+	if sessionID == "" && disableSession {
+		sessionID = fmt.Sprintf("stateless:%d", time.Now().UnixNano())
+	}
 	if sessionID == "" {
 		sessionID = "main"
 	}
@@ -2253,9 +2257,10 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		surface = core.SurfaceTUI
 	}
 	runID := strings.TrimSpace(req.RunID)
+	ephemeralMessages := cloneMessages(req.EphemeralMessages)
 
 	// Check session lifecycle before processing.
-	if s.lifecycle != nil && s.lifecycle.ShouldReset(sessionID) {
+	if !disableSession && s.lifecycle != nil && s.lifecycle.ShouldReset(sessionID) {
 		logService.Logf("session auto reset: session_id=%s", sessionID)
 		// Flush durable memories before clearing the session, so important
 		// facts survive the rotation via MEMORY.md / daily logs.
@@ -2296,16 +2301,18 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		}
 
 		resp, err := s.attemptSingleProvider(ctx, attemptSingleProviderParams{
-			providerID:     candidate.provider,
-			modelID:        candidateModel,
-			isDefaultModel: candidateIsDefault,
-			sessionID:      sessionID,
-			prompt:         prompt,
-			images:         req.Images,
-			surface:        surface,
-			enableTools:    req.EnableTools,
-			runID:          runID,
-			toolApprovals:  req.ToolApprovals,
+			providerID:        candidate.provider,
+			modelID:           candidateModel,
+			isDefaultModel:    candidateIsDefault,
+			sessionID:         sessionID,
+			disableSession:    disableSession,
+			ephemeralMessages: ephemeralMessages,
+			prompt:            prompt,
+			images:            req.Images,
+			surface:           surface,
+			enableTools:       req.EnableTools,
+			runID:             runID,
+			toolApprovals:     req.ToolApprovals,
 		})
 		if err == nil {
 			if isFallback {
@@ -2338,16 +2345,18 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 }
 
 type attemptSingleProviderParams struct {
-	providerID     string
-	modelID        string
-	isDefaultModel bool
-	sessionID      string
-	prompt         string
-	images         []core.ImageData
-	surface        core.Surface
-	enableTools    bool
-	runID          string
-	toolApprovals  []core.ToolApprovalDecision
+	providerID        string
+	modelID           string
+	isDefaultModel    bool
+	sessionID         string
+	disableSession    bool
+	ephemeralMessages []core.Message
+	prompt            string
+	images            []core.ImageData
+	surface           core.Surface
+	enableTools       bool
+	runID             string
+	toolApprovals     []core.ToolApprovalDecision
 }
 
 // attemptSingleProvider tries all accounts in one provider's pool.
@@ -2382,12 +2391,15 @@ func (s *Service) attemptSingleProvider(
 	var compressionMeta core.CompressionMeta
 	var compressed bool
 
-	entries := s.sessions.History(sessionID)
+	entries := []core.SessionEntry(nil)
+	if !params.disableSession {
+		entries = s.sessions.History(sessionID)
+	}
 	contextWindow := prov.ContextWindow(modelID)
 	compactor := compaction.NewCompactor(prov, modelID, core.Account{})
 
 	// Pre-compaction memory flush: extract durable notes before messages are dropped.
-	if s.memoryDir != "" {
+	if !params.disableSession && s.memoryDir != "" {
 		flusher := compaction.NewMemoryFlusher(prov, modelID, core.Account{}, s.memoryDir)
 		currentTokens := compaction.EstimateEntriesTokens(entries)
 		if flusher.ShouldFlush(currentTokens, contextWindow, compaction.DefaultReserveTokens) {
@@ -2397,7 +2409,7 @@ func (s *Service) attemptSingleProvider(
 		}
 	}
 
-	if compactor.ShouldCompact(entries, contextWindow, compaction.DefaultReserveTokens) {
+	if !params.disableSession && compactor.ShouldCompact(entries, contextWindow, compaction.DefaultReserveTokens) {
 		result, compactErr := compactor.Compact(ctx, compaction.CompactionRequest{
 			Entries:       entries,
 			ContextWindow: contextWindow,
@@ -2406,6 +2418,9 @@ func (s *Service) attemptSingleProvider(
 		if compactErr == nil && result.DroppedCount > 0 {
 			s.sessions.Append(sessionID, result.CompactionEntry)
 			compressedMessages = entriesToMessages(result.KeptEntries)
+			if len(params.ephemeralMessages) > 0 {
+				compressedMessages = append(compressedMessages, params.ephemeralMessages...)
+			}
 			if hasUserMessage {
 				compressedMessages = append(compressedMessages, userMessage)
 			}
@@ -2423,8 +2438,14 @@ func (s *Service) attemptSingleProvider(
 
 	// Fallback: token-based sliding window compression.
 	if compressedMessages == nil {
-		history := s.sessions.HistoryAsMessages(sessionID)
-		baseMessages := append([]core.Message(nil), history...)
+		baseMessages := []core.Message{}
+		if !params.disableSession {
+			history := s.sessions.HistoryAsMessages(sessionID)
+			baseMessages = append(baseMessages, history...)
+		}
+		if len(params.ephemeralMessages) > 0 {
+			baseMessages = append(baseMessages, params.ephemeralMessages...)
+		}
 		if hasUserMessage {
 			baseMessages = append(baseMessages, userMessage)
 		}
@@ -2572,7 +2593,7 @@ func (s *Service) attemptSingleProvider(
 				},
 			})
 			if runErr == nil {
-				if !runResult.Pending && len(runResult.SessionMessages) > 0 {
+				if !params.disableSession && !runResult.Pending && len(runResult.SessionMessages) > 0 {
 					s.sessions.AppendMessage(sessionID, runResult.SessionMessages...)
 					// Async title generation on first exchange (tool path).
 					if hasUserMessage {
@@ -2661,27 +2682,29 @@ func (s *Service) attemptSingleProvider(
 		})
 		if err == nil {
 			assistant := core.Message{Role: core.RoleAssistant, Content: resp.Text, CreatedAt: time.Now()}
-			if hasUserMessage {
-				s.sessions.AppendMessage(sessionID, userMessage, assistant)
-			} else {
-				s.sessions.AppendMessage(sessionID, assistant)
-			}
-			// Async title generation on first exchange.
-			if hasUserMessage {
-				s.generateSessionTitleAsync(providerID, attemptModelID, sessionID, account, userMessage.Content, assistant.Content)
-			}
-			// Async index for memory search.
-			if s.searchIndex != nil {
-				newEntries := make([]core.SessionEntry, 0, 2)
+			if !params.disableSession {
 				if hasUserMessage {
-					newEntries = append(newEntries, core.MessageToEntry(userMessage))
+					s.sessions.AppendMessage(sessionID, userMessage, assistant)
+				} else {
+					s.sessions.AppendMessage(sessionID, assistant)
 				}
-				newEntries = append(newEntries, core.MessageToEntry(assistant))
-				go func(entries []core.SessionEntry) {
-					if idxErr := s.searchIndex.Index(sessionID, entries); idxErr != nil {
-						logService.Errorf("search index: session_id=%s error=%q", sessionID, idxErr)
+				// Async title generation on first exchange.
+				if hasUserMessage {
+					s.generateSessionTitleAsync(providerID, attemptModelID, sessionID, account, userMessage.Content, assistant.Content)
+				}
+				// Async index for memory search.
+				if s.searchIndex != nil {
+					newEntries := make([]core.SessionEntry, 0, 2)
+					if hasUserMessage {
+						newEntries = append(newEntries, core.MessageToEntry(userMessage))
 					}
-				}(newEntries)
+					newEntries = append(newEntries, core.MessageToEntry(assistant))
+					go func(entries []core.SessionEntry) {
+						if idxErr := s.searchIndex.Index(sessionID, entries); idxErr != nil {
+							logService.Errorf("search index: session_id=%s error=%q", sessionID, idxErr)
+						}
+					}(newEntries)
+				}
 			}
 			if providerID == "google-gemini-cli" {
 				if endpoint := strings.TrimSpace(resp.Endpoint); endpoint != "" {
@@ -2774,6 +2797,21 @@ func entriesToMessages(entries []core.SessionEntry) []core.Message {
 		}
 	}
 	return msgs
+}
+
+func cloneMessages(messages []core.Message) []core.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	cloned := make([]core.Message, 0, len(messages))
+	for _, msg := range messages {
+		dup := msg
+		if len(msg.Images) > 0 {
+			dup.Images = append([]core.ImageData(nil), msg.Images...)
+		}
+		cloned = append(cloned, dup)
+	}
+	return cloned
 }
 
 func (s *Service) completeGeminiOAuth(

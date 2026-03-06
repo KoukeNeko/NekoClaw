@@ -385,7 +385,7 @@ func (e *RuntimeExecutor) runMemorySave(raw json.RawMessage) (string, error) {
 	if err := e.backend.SaveMemory(content); err != nil {
 		return "", err
 	}
-	return "Saved to memory.", nil
+	return fmt.Sprintf("Saved to memory: %s", content), nil
 }
 
 func (e *RuntimeExecutor) runProvidersList() (string, error) {

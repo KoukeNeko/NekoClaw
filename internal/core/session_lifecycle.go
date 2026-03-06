@@ -18,10 +18,6 @@ type SessionLifecycle struct {
 }
 
 func NewSessionLifecycle(store *SessionStore, config SessionLifecycleConfig) *SessionLifecycle {
-	// DailyResetHour = -1 disables daily reset.
-	if config.DailyResetHour < -1 || config.DailyResetHour > 23 {
-		config.DailyResetHour = 4
-	}
 	if config.IdleTimeout <= 0 {
 		config.IdleTimeout = 60 * time.Minute
 	}
@@ -40,8 +36,10 @@ func NewSessionLifecycle(store *SessionStore, config SessionLifecycleConfig) *Se
 	return &SessionLifecycle{store: store, config: config}
 }
 
-// ShouldReset returns true if the session should be reset due to daily reset
-// policy or idle timeout.
+// ShouldReset returns true if the session should be reset due to idle timeout.
+// Bot sessions (Discord/Telegram) are only reset manually via /reset or by
+// housekeeping (MaxEntries/MaxFileSize). Compaction and context window
+// compression handle the growing context automatically.
 func (l *SessionLifecycle) ShouldReset(sessionID string) bool {
 	sessions := l.store.ListSessions()
 	var meta *SessionMetadata
@@ -55,15 +53,8 @@ func (l *SessionLifecycle) ShouldReset(sessionID string) bool {
 		return false
 	}
 
-	// Daily reset: if the session was last updated before today's reset hour.
-	if l.pastDailyResetBoundary(meta.UpdatedAt) {
-		return true
-	}
-
 	// Idle timeout: only applies to interactive (TUI) sessions.
-	// Discord/Telegram sessions never idle-reset; they rely on daily reset
-	// and manual /reset only, because channel conversations naturally have
-	// long gaps between messages.
+	// Bot sessions rely on manual /reset and housekeeping only.
 	if !isBotSession(sessionID) && time.Since(meta.UpdatedAt) > l.config.IdleTimeout {
 		return true
 	}
@@ -75,27 +66,6 @@ func (l *SessionLifecycle) ShouldReset(sessionID string) bool {
 // (Discord, Telegram) which need a longer idle timeout.
 func isBotSession(sessionID string) bool {
 	return strings.HasPrefix(sessionID, "discord:") || strings.HasPrefix(sessionID, "telegram:")
-}
-
-// pastDailyResetBoundary returns true if lastUpdate is before the most recent
-// daily reset boundary (today at DailyResetHour, or yesterday's if it hasn't
-// occurred yet today).
-func (l *SessionLifecycle) pastDailyResetBoundary(lastUpdate time.Time) bool {
-	if l.config.DailyResetHour < 0 {
-		return false // daily reset disabled
-	}
-	now := time.Now()
-	resetToday := time.Date(now.Year(), now.Month(), now.Day(), l.config.DailyResetHour, 0, 0, 0, now.Location())
-
-	var boundary time.Time
-	if now.Before(resetToday) {
-		// Reset hour hasn't passed yet today; use yesterday's boundary.
-		boundary = resetToday.AddDate(0, 0, -1)
-	} else {
-		boundary = resetToday
-	}
-
-	return lastUpdate.Before(boundary)
 }
 
 // RotateSession archives the current session (by renaming its ID) and removes

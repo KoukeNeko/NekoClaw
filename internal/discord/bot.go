@@ -31,6 +31,18 @@ func (d *discordLogSender) SendMessage(channelID, content string) error {
 // discordMessageLimit is the maximum length of a single Discord message.
 const discordMessageLimit = 2000
 
+// Channel history injection settings (KoukeBOT-aligned defaults).
+const (
+	discordHistoryFetchLimit        = 40
+	discordHistoryTargetEntries     = 40
+	discordHistoryCharBudget        = 4500
+	discordHistoryEntryTextLimit    = 200
+	discordHistoryImageScanLimit    = 10
+	discordHistoryImageTotalLimit   = 5
+	discordHistoryImageMaxAge       = 30 * time.Minute
+	discordReplyReferenceImageLimit = 2
+)
+
 // Reaction emoji for message lifecycle.
 const (
 	emojiReceived   = "👀"
@@ -43,6 +55,15 @@ type messageJob struct {
 	s *discordgo.Session
 	m *discordgo.MessageCreate
 }
+
+type historyEntry struct {
+	FormattedText string
+	Images        []core.ImageData
+	IsBot         bool
+}
+
+// historyImageExtractor can be overridden in tests to avoid network I/O.
+var historyImageExtractor = extractDiscordImagesLimited
 
 // Bot connects to Discord Gateway and forwards messages to the NekoClaw service.
 type Bot struct {
@@ -58,9 +79,13 @@ type Bot struct {
 	queuesMu sync.Mutex
 
 	// Per-channel active session tracking.
-	// Key: channelID, Value: current sessionID.
 	activeSessions   map[string]string
 	activeSessionsMu sync.RWMutex
+
+	// Per-channel reset cutoff for Discord-native history injection.
+	// Messages at or before this timestamp are excluded from ephemeral context.
+	historyCutoffs   map[string]time.Time
+	historyCutoffsMu sync.RWMutex
 }
 
 // Config holds the configuration needed to create a Discord bot.
@@ -90,6 +115,7 @@ func New(svc *app.Service, cfg Config) (*Bot, error) {
 		svc:            svc,
 		queues:         make(map[string]chan messageJob),
 		activeSessions: make(map[string]string),
+		historyCutoffs: make(map[string]time.Time),
 	}, nil
 }
 
@@ -139,7 +165,7 @@ func (b *Bot) Stop() {
 // ---------------------------------------------------------------------------
 
 // getSessionID returns the active session ID for the given channel.
-// Falls back to the default format if no active session is set.
+// Falls back to the default per-channel format when no reset session exists.
 func (b *Bot) getSessionID(channelID string) string {
 	b.activeSessionsMu.RLock()
 	sid, ok := b.activeSessions[channelID]
@@ -150,13 +176,31 @@ func (b *Bot) getSessionID(channelID string) string {
 	return fmt.Sprintf("discord:%s", channelID)
 }
 
-// resetSession creates a new session for the channel and returns its ID.
+// resetSession creates a new active session ID and cutoff for the channel.
 func (b *Bot) resetSession(channelID string) string {
 	newID := fmt.Sprintf("discord:%s-%s", channelID, time.Now().Format("0102-150405"))
+	cutoff := time.Now().UTC()
+
 	b.activeSessionsMu.Lock()
 	b.activeSessions[channelID] = newID
 	b.activeSessionsMu.Unlock()
+
+	b.historyCutoffsMu.Lock()
+	b.historyCutoffs[channelID] = cutoff
+	b.historyCutoffsMu.Unlock()
+
 	return newID
+}
+
+func (b *Bot) historyCutoff(channelID string) *time.Time {
+	b.historyCutoffsMu.RLock()
+	cutoff, ok := b.historyCutoffs[channelID]
+	b.historyCutoffsMu.RUnlock()
+	if !ok {
+		return nil
+	}
+	c := cutoff
+	return &c
 }
 
 // ---------------------------------------------------------------------------
@@ -262,25 +306,7 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// --- Context building ---
 	var contextParts []string
 
-	// 1. Reply-to message context (when replying to another user, not bot).
-	if ref := m.MessageReference; ref != nil && ref.MessageID != "" {
-		refMsg, refErr := s.ChannelMessage(ref.ChannelID, ref.MessageID)
-		if refErr == nil && refMsg != nil && refMsg.Author != nil &&
-			refMsg.Author.ID != s.State.User.ID {
-			refText := strings.TrimSpace(refMsg.Content)
-			refImages := extractDiscordImages(refMsg.Attachments)
-			images = append(refImages, images...)
-
-			refName := refMsg.Author.Username
-			if refText != "" {
-				contextParts = append(contextParts, fmt.Sprintf("[回覆 %s (ID:<@%s>) 的訊息]\n%s", refName, refMsg.Author.ID, refText))
-			} else if len(refImages) > 0 {
-				contextParts = append(contextParts, fmt.Sprintf("[回覆 %s (ID:<@%s>) 的圖片]", refName, refMsg.Author.ID))
-			}
-		}
-	}
-
-	// 2. Sender identity so the LLM knows who is speaking.
+	// Sender identity so the LLM knows who is speaking.
 	//    Include Discord user ID so the LLM can mention them with <@ID>.
 	senderName := m.Author.Username
 	if m.Member != nil && m.Member.Nick != "" {
@@ -293,7 +319,16 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		text = strings.Join(contextParts, "\n") + "\n" + text
 	}
 
+	// Build ephemeral Discord-native channel history (not persisted).
+	cutoff := b.historyCutoff(m.ChannelID)
+	historyEntries := b.buildChannelHistoryEntries(s, m.ChannelID, m.ID, cutoff)
+	if replyEntry := b.buildReplyReferenceEntry(s, m, cutoff); replyEntry != nil {
+		historyEntries = append(historyEntries, *replyEntry)
+	}
+	ephemeralMessages := buildEphemeralMessages(historyEntries)
+
 	botID := s.State.User.ID
+	sessionID := b.getSessionID(m.ChannelID)
 
 	// Transition: 👀 → 🔄
 	_ = s.MessageReactionRemove(m.ChannelID, m.ID, emojiReceived, botID)
@@ -301,8 +336,6 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	// Show typing indicator while processing.
 	stopTyping := b.startTyping(s, m.ChannelID)
-
-	sessionID := b.getSessionID(m.ChannelID)
 
 	// Send placeholder message and start tool status polling.
 	placeholder := &discordgo.MessageSend{
@@ -319,13 +352,15 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	stopToolStatus := b.startToolStatusPolling(s, m.ChannelID, placeholderMsg, placeholderErr, sessionID)
 
 	resp, err := b.svc.HandleChat(b.ctx, core.ChatRequest{
-		SessionID:   sessionID,
-		Surface:     core.SurfaceDiscord,
-		Provider:    b.svc.GetDefaultProvider(),
-		Model:       b.svc.GetDefaultModel(),
-		Message:     text,
-		Images:      images,
-		EnableTools: true,
+		SessionID:         sessionID,
+		DisableSession:    false,
+		EphemeralMessages: ephemeralMessages,
+		Surface:           core.SurfaceDiscord,
+		Provider:          b.svc.GetDefaultProvider(),
+		Model:             b.svc.GetDefaultModel(),
+		Message:           text,
+		Images:            images,
+		EnableTools:       true,
 	})
 
 	stopToolStatus()
@@ -474,6 +509,248 @@ func (b *Bot) handlePersonaSwitch(s *discordgo.Session, m *discordgo.MessageCrea
 	}
 	b.sendReply(s, m, fmt.Sprintf("✅ 已切換為角色「%s」。", name))
 	b.logToConsole(s, fmt.Sprintf("[角色] 切換至「%s」(by %s)", name, m.Author.Username))
+}
+
+// ---------------------------------------------------------------------------
+// Ephemeral Discord History
+// ---------------------------------------------------------------------------
+
+func (b *Bot) buildChannelHistoryEntries(
+	s *discordgo.Session,
+	channelID string,
+	currentMessageID string,
+	cutoff *time.Time,
+) []historyEntry {
+	messages, err := s.ChannelMessages(channelID, discordHistoryFetchLimit, currentMessageID, "", "")
+	if err != nil {
+		logDiscord.Warnf("channel history fetch failed: channel=%s error=%v", channelID, err)
+		return nil
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+	return buildChannelHistoryEntriesFromMessages(messages, s.State.User.ID, cutoff, time.Now().UTC())
+}
+
+func buildChannelHistoryEntriesFromMessages(
+	messages []*discordgo.Message,
+	botID string,
+	cutoff *time.Time,
+	now time.Time,
+) []historyEntry {
+	// Discord returns ChannelMessages in newest->oldest order.
+	// Select from newest first (better recency under budget), then reverse to
+	// chronological order for model input.
+	entries := make([]historyEntry, 0, discordHistoryTargetEntries)
+	totalImages := 0
+	usedChars := 0
+
+	for i := 0; i < len(messages); i++ {
+		if len(entries) >= discordHistoryTargetEntries || usedChars >= discordHistoryCharBudget {
+			break
+		}
+
+		msg := messages[i]
+		if msg == nil || msg.Author == nil {
+			continue
+		}
+		if !shouldIncludeDiscordTimestamp(msg.Timestamp, cutoff) {
+			continue
+		}
+
+		content := strings.TrimSpace(msg.Content)
+		if content == "" && len(msg.Attachments) > 0 {
+			content = buildAttachmentPlaceholder(msg.Attachments)
+		}
+		if content == "" {
+			continue
+		}
+		if runeLen(content) > discordHistoryEntryTextLimit {
+			content = truncateRunesWithEllipsis(content, discordHistoryEntryTextLimit)
+		}
+
+		recentOffset := i
+		entryImages := []core.ImageData(nil)
+		if recentOffset < discordHistoryImageScanLimit && totalImages < discordHistoryImageTotalLimit &&
+			now.Sub(msg.Timestamp.UTC()) <= discordHistoryImageMaxAge {
+			remaining := discordHistoryImageTotalLimit - totalImages
+			entryImages = historyImageExtractor(msg.Attachments, remaining)
+			if len(entryImages) > remaining {
+				entryImages = entryImages[:remaining]
+			}
+			totalImages += len(entryImages)
+		}
+
+		isBot := strings.TrimSpace(msg.Author.ID) == strings.TrimSpace(botID)
+		ts := formatHistoryTimestamp(msg.Timestamp)
+		sender := resolveHistorySenderName(msg.Author)
+
+		formatted := content
+		if !isBot {
+			formatted = fmt.Sprintf("[%s · %s] %s", sender, ts, content)
+		}
+
+		formattedLen := runeLen(formatted)
+		if usedChars+formattedLen > discordHistoryCharBudget {
+			remaining := discordHistoryCharBudget - usedChars
+			if remaining <= 0 {
+				break
+			}
+			formatted = truncateRunesWithEllipsis(formatted, remaining)
+			formattedLen = runeLen(formatted)
+		}
+
+		entries = append(entries, historyEntry{
+			FormattedText: formatted,
+			Images:        entryImages,
+			IsBot:         isBot,
+		})
+		usedChars += formattedLen
+
+		if usedChars >= discordHistoryCharBudget {
+			break
+		}
+	}
+
+	// Reverse to chronological order (oldest -> newest).
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
+	}
+
+	return entries
+}
+
+func (b *Bot) buildReplyReferenceEntry(
+	s *discordgo.Session,
+	m *discordgo.MessageCreate,
+	cutoff *time.Time,
+) *historyEntry {
+	if m == nil || m.MessageReference == nil || strings.TrimSpace(m.MessageReference.MessageID) == "" {
+		return nil
+	}
+
+	refMsg := m.ReferencedMessage
+	if refMsg == nil {
+		refChannelID := m.ChannelID
+		if strings.TrimSpace(m.MessageReference.ChannelID) != "" {
+			refChannelID = m.MessageReference.ChannelID
+		}
+		fetched, err := s.ChannelMessage(refChannelID, m.MessageReference.MessageID)
+		if err != nil {
+			logDiscord.Warnf("reply target fetch failed: channel=%s message=%s error=%v",
+				refChannelID, m.MessageReference.MessageID, err)
+			return nil
+		}
+		refMsg = fetched
+	}
+
+	if refMsg == nil || refMsg.Author == nil || !shouldIncludeDiscordTimestamp(refMsg.Timestamp, cutoff) {
+		return nil
+	}
+
+	content := strings.TrimSpace(refMsg.Content)
+	if content == "" && len(refMsg.Attachments) > 0 {
+		content = buildAttachmentPlaceholder(refMsg.Attachments)
+	}
+	if content == "" {
+		return nil
+	}
+	if runeLen(content) > discordHistoryEntryTextLimit {
+		content = truncateRunesWithEllipsis(content, discordHistoryEntryTextLimit)
+	}
+
+	isBot := strings.TrimSpace(refMsg.Author.ID) == strings.TrimSpace(s.State.User.ID)
+	ts := formatHistoryTimestamp(refMsg.Timestamp)
+	sender := resolveHistorySenderName(refMsg.Author)
+
+	formatted := content
+	if !isBot {
+		formatted = fmt.Sprintf("[↩ %s · %s] %s", sender, ts, content)
+	}
+
+	images := historyImageExtractor(refMsg.Attachments, discordReplyReferenceImageLimit)
+	if len(images) > discordReplyReferenceImageLimit {
+		images = images[:discordReplyReferenceImageLimit]
+	}
+
+	return &historyEntry{
+		FormattedText: formatted,
+		Images:        images,
+		IsBot:         isBot,
+	}
+}
+
+func buildEphemeralMessages(entries []historyEntry) []core.Message {
+	out := make([]core.Message, 0, len(entries))
+	for _, entry := range entries {
+		content := strings.TrimSpace(entry.FormattedText)
+		if content == "" {
+			continue
+		}
+		role := core.RoleUser
+		if entry.IsBot {
+			role = core.RoleAssistant
+		}
+		out = append(out, core.Message{
+			Role:      role,
+			Content:   content,
+			Images:    entry.Images,
+			CreatedAt: time.Now(),
+		})
+	}
+	return out
+}
+
+func shouldIncludeDiscordTimestamp(ts time.Time, cutoff *time.Time) bool {
+	if cutoff == nil {
+		return true
+	}
+	return ts.After(*cutoff)
+}
+
+func formatHistoryTimestamp(ts time.Time) string {
+	return ts.Local().Format("01/02 15:04")
+}
+
+func resolveHistorySenderName(user *discordgo.User) string {
+	if user == nil {
+		return "Unknown"
+	}
+	if strings.TrimSpace(user.GlobalName) != "" {
+		return user.GlobalName
+	}
+	if strings.TrimSpace(user.Username) != "" {
+		return user.Username
+	}
+	return "Unknown"
+}
+
+func buildAttachmentPlaceholder(attachments []*discordgo.MessageAttachment) string {
+	if len(attachments) == 0 {
+		return ""
+	}
+	if len(attachments) == 1 {
+		return "[圖片]"
+	}
+	return fmt.Sprintf("[圖片 x%d]", len(attachments))
+}
+
+func runeLen(s string) int {
+	return len([]rune(s))
+}
+
+func truncateRunesWithEllipsis(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	runes := []rune(strings.TrimSpace(s))
+	if len(runes) <= max {
+		return string(runes)
+	}
+	if max == 1 {
+		return "…"
+	}
+	return string(runes[:max-1]) + "…"
 }
 
 // ---------------------------------------------------------------------------
@@ -719,14 +996,24 @@ func formatTokenCount(n int) string {
 	}
 }
 
+// memoryToolNames lists tools whose output is shown in the summary.
+var memoryToolNames = map[string]bool{
+	"memory_save":   true,
+	"memory_search": true,
+	"memory_get":    true,
+}
+
 // formatToolSummary builds a short summary of executed tools.
+// Memory tools include an output preview so the user can see what was
+// saved or retrieved.
 func formatToolSummary(events []core.ToolEvent) string {
 	if len(events) == 0 {
 		return ""
 	}
 	type entry struct {
-		name  string
-		count int
+		name    string
+		count   int
+		preview string // output preview for memory tools
 	}
 	seen := map[string]int{}
 	var entries []entry
@@ -743,7 +1030,11 @@ func formatToolSummary(events []core.ToolEvent) string {
 			continue
 		}
 		seen[evt.ToolName] = len(entries)
-		entries = append(entries, entry{name: display, count: 1})
+		preview := ""
+		if memoryToolNames[evt.ToolName] && evt.OutputPreview != "" {
+			preview = truncatePreview(evt.OutputPreview, 100)
+		}
+		entries = append(entries, entry{name: display, count: 1, preview: preview})
 	}
 	if len(entries) == 0 {
 		return ""
@@ -755,8 +1046,21 @@ func formatToolSummary(events []core.ToolEvent) string {
 		if e.count > 1 {
 			sb.WriteString(fmt.Sprintf(" (×%d)", e.count))
 		}
+		if e.preview != "" {
+			sb.WriteString(fmt.Sprintf("\n-#    → %s", e.preview))
+		}
 	}
 	return sb.String()
+}
+
+// truncatePreview shortens s to max runes, replacing newlines with spaces.
+func truncatePreview(s string, max int) string {
+	s = strings.ReplaceAll(strings.TrimSpace(s), "\n", " ")
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "…"
 }
 
 // ---------------------------------------------------------------------------
@@ -775,10 +1079,19 @@ const maxImageDownloadSize = 20 * 1024 * 1024 // 20 MB
 
 // extractDiscordImages downloads image attachments and returns base64-encoded ImageData.
 func extractDiscordImages(attachments []*discordgo.MessageAttachment) []core.ImageData {
+	return extractDiscordImagesLimited(attachments, 0)
+}
+
+// extractDiscordImagesLimited behaves like extractDiscordImages, but optionally
+// caps the number of images when limit > 0.
+func extractDiscordImagesLimited(attachments []*discordgo.MessageAttachment, limit int) []core.ImageData {
 	var images []core.ImageData
 	for _, att := range attachments {
 		if att == nil || att.URL == "" {
 			continue
+		}
+		if limit > 0 && len(images) >= limit {
+			break
 		}
 
 		// Check content type or infer from filename extension.

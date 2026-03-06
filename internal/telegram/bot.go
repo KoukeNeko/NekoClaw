@@ -837,14 +837,24 @@ func formatTokenCount(n int) string {
 // Tool summary
 // ---------------------------------------------------------------------------
 
+// memoryToolNames lists tools whose output is shown in the summary.
+var memoryToolNames = map[string]bool{
+	"memory_save":   true,
+	"memory_search": true,
+	"memory_get":    true,
+}
+
 // formatToolSummary builds a short summary of executed tools.
+// Memory tools include an output preview so the user can see what was
+// saved or retrieved.
 func formatToolSummary(events []core.ToolEvent) string {
 	if len(events) == 0 {
 		return ""
 	}
 	type entry struct {
-		name  string
-		count int
+		name    string
+		count   int
+		preview string
 	}
 	seen := map[string]int{}
 	var entries []entry
@@ -861,7 +871,11 @@ func formatToolSummary(events []core.ToolEvent) string {
 			continue
 		}
 		seen[evt.ToolName] = len(entries)
-		entries = append(entries, entry{name: display, count: 1})
+		preview := ""
+		if memoryToolNames[evt.ToolName] && evt.OutputPreview != "" {
+			preview = truncatePreview(evt.OutputPreview, 100)
+		}
+		entries = append(entries, entry{name: display, count: 1, preview: preview})
 	}
 	if len(entries) == 0 {
 		return ""
@@ -873,8 +887,21 @@ func formatToolSummary(events []core.ToolEvent) string {
 		if e.count > 1 {
 			sb.WriteString(fmt.Sprintf(" (×%d)", e.count))
 		}
+		if e.preview != "" {
+			sb.WriteString(fmt.Sprintf("\n   → %s", e.preview))
+		}
 	}
 	return sb.String()
+}
+
+// truncatePreview shortens s to max runes, replacing newlines with spaces.
+func truncatePreview(s string, max int) string {
+	s = strings.ReplaceAll(strings.TrimSpace(s), "\n", " ")
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "…"
 }
 
 // ---------------------------------------------------------------------------

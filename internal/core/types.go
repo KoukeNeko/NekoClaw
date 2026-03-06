@@ -99,15 +99,17 @@ type FallbackEntry struct {
 }
 
 type ChatRequest struct {
-	SessionID     string                 `json:"session_id"`
-	Surface       Surface                `json:"surface"`
-	Provider      string                 `json:"provider"`
-	Model         string                 `json:"model"`
-	Message       string                 `json:"message"`
-	Images        []ImageData            `json:"images,omitempty"`
-	EnableTools   bool                   `json:"enable_tools,omitempty"`
-	RunID         string                 `json:"run_id,omitempty"`
-	ToolApprovals []ToolApprovalDecision `json:"tool_approvals,omitempty"`
+	SessionID         string                 `json:"session_id"`
+	DisableSession    bool                   `json:"disable_session,omitempty"`
+	EphemeralMessages []Message              `json:"ephemeral_messages,omitempty"`
+	Surface           Surface                `json:"surface"`
+	Provider          string                 `json:"provider"`
+	Model             string                 `json:"model"`
+	Message           string                 `json:"message"`
+	Images            []ImageData            `json:"images,omitempty"`
+	EnableTools       bool                   `json:"enable_tools,omitempty"`
+	RunID             string                 `json:"run_id,omitempty"`
+	ToolApprovals     []ToolApprovalDecision `json:"tool_approvals,omitempty"`
 }
 
 type ChatResponse struct {
@@ -157,7 +159,6 @@ type SessionMetadata struct {
 // ---------------------------------------------------------------------------
 
 type SessionLifecycleConfig struct {
-	DailyResetHour int           `json:"daily_reset_hour"` // default 4 (4 AM)
 	IdleTimeout    time.Duration `json:"idle_timeout"`     // default 60min (TUI sessions)
 	BotIdleTimeout time.Duration `json:"bot_idle_timeout"` // default 24h (Discord/Telegram sessions)
 	RetentionDays  int           `json:"retention_days"`   // default 30
@@ -167,7 +168,6 @@ type SessionLifecycleConfig struct {
 
 func DefaultLifecycleConfig() SessionLifecycleConfig {
 	return SessionLifecycleConfig{
-		DailyResetHour: 4,
 		IdleTimeout:    60 * time.Minute,
 		BotIdleTimeout: 24 * time.Hour,
 		RetentionDays:  30,

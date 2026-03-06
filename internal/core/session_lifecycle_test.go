@@ -6,50 +6,10 @@ import (
 	"time"
 )
 
-func TestShouldReset_DailyReset(t *testing.T) {
-	store := NewSessionStore()
-	config := DefaultLifecycleConfig()
-	config.DailyResetHour = time.Now().Hour() // Set reset hour to current hour
-	config.IdleTimeout = 24 * time.Hour       // Disable idle timeout for this test
-
-	lifecycle := NewSessionLifecycle(store, config)
-
-	// Append a message with a timestamp from yesterday.
-	entry := NewMessageEntry(RoleUser, "old message")
-	entry.Timestamp = time.Now().Add(-25 * time.Hour)
-	store.Append("test-session", entry)
-
-	// Force metadata to look old.
-	store.mu.Lock()
-	meta := store.metadata["test-session"]
-	meta.UpdatedAt = time.Now().Add(-25 * time.Hour)
-	store.metadata["test-session"] = meta
-	store.mu.Unlock()
-
-	if !lifecycle.ShouldReset("test-session") {
-		t.Fatalf("expected session to need reset (daily boundary crossed)")
-	}
-}
-
-func TestShouldReset_NoReset(t *testing.T) {
-	store := NewSessionStore()
-	config := DefaultLifecycleConfig()
-	config.IdleTimeout = 24 * time.Hour
-
-	lifecycle := NewSessionLifecycle(store, config)
-
-	store.AppendMessage("active-session", Message{Role: RoleUser, Content: "recent"})
-
-	if lifecycle.ShouldReset("active-session") {
-		t.Fatalf("expected no reset for recently active session")
-	}
-}
-
 func TestShouldReset_IdleTimeout(t *testing.T) {
 	store := NewSessionStore()
 	config := DefaultLifecycleConfig()
 	config.IdleTimeout = 1 * time.Millisecond
-	config.DailyResetHour = -1 // Disable daily reset for this test
 
 	lifecycle := NewSessionLifecycle(store, config)
 
@@ -64,6 +24,42 @@ func TestShouldReset_IdleTimeout(t *testing.T) {
 
 	if !lifecycle.ShouldReset("idle-session") {
 		t.Fatalf("expected session to need reset (idle timeout)")
+	}
+}
+
+func TestShouldReset_BotSessionSkipsIdleTimeout(t *testing.T) {
+	store := NewSessionStore()
+	config := DefaultLifecycleConfig()
+	config.IdleTimeout = 1 * time.Millisecond
+
+	lifecycle := NewSessionLifecycle(store, config)
+
+	store.AppendMessage("discord:123", Message{Role: RoleUser, Content: "old"})
+
+	// Force metadata to look idle.
+	store.mu.Lock()
+	meta := store.metadata["discord:123"]
+	meta.UpdatedAt = time.Now().Add(-1 * time.Hour)
+	store.metadata["discord:123"] = meta
+	store.mu.Unlock()
+
+	// Bot sessions should NOT be reset by idle timeout.
+	if lifecycle.ShouldReset("discord:123") {
+		t.Fatalf("bot sessions should not be reset by idle timeout")
+	}
+}
+
+func TestShouldReset_NoReset(t *testing.T) {
+	store := NewSessionStore()
+	config := DefaultLifecycleConfig()
+	config.IdleTimeout = 24 * time.Hour
+
+	lifecycle := NewSessionLifecycle(store, config)
+
+	store.AppendMessage("active-session", Message{Role: RoleUser, Content: "recent"})
+
+	if lifecycle.ShouldReset("active-session") {
+		t.Fatalf("expected no reset for recently active session")
 	}
 }
 
@@ -152,13 +148,6 @@ func TestHousekeeping_MaxEntries(t *testing.T) {
 	// Add more messages than the cap.
 	for i := 0; i < 10; i++ {
 		store.AppendMessage("big-session", Message{Role: RoleUser, Content: "msg"})
-	}
-
-	sessions := store.ListSessions()
-	for _, s := range sessions {
-		if s.SessionID == "big-session" && s.MessageCount > config.MaxEntries {
-			break
-		}
 	}
 
 	if err := lifecycle.RunHousekeeping(); err != nil {

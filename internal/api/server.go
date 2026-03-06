@@ -212,7 +212,7 @@ func (s *Server) handleDiscordEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	sessionID := strings.TrimSpace(payload.SessionID)
 	if sessionID == "" {
-		sessionID = fmt.Sprintf("discord:%s:%s", payload.ChannelID, payload.UserID)
+		sessionID = fmt.Sprintf("discord:%s", payload.ChannelID)
 	}
 	providerID := strings.TrimSpace(payload.Provider)
 	resp, err := s.svc.HandleChat(r.Context(), core.ChatRequest{
