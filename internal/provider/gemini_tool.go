@@ -439,8 +439,10 @@ func buildGeminiGenerationConfig(gen *GenerationParams) map[string]any {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-// parseJSONOrWrap tries to parse s as JSON. If it succeeds, returns the parsed
-// value. Otherwise wraps it in {"result": s}.
+// parseJSONOrWrap tries to parse s as JSON object. If the result is not
+// a JSON object (e.g. array or primitive), it wraps it in {"result": ...}.
+// Gemini's FunctionResponse.response is a protobuf Struct which must be
+// an object — arrays and primitives are rejected with a 400 error.
 func parseJSONOrWrap(s string) any {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -448,7 +450,11 @@ func parseJSONOrWrap(s string) any {
 	}
 	var parsed any
 	if err := json.Unmarshal([]byte(s), &parsed); err == nil {
-		return parsed
+		// Gemini requires response to be an object (Struct), not array or primitive.
+		if _, isMap := parsed.(map[string]any); isMap {
+			return parsed
+		}
+		return map[string]any{"result": parsed}
 	}
 	return map[string]any{"result": s}
 }

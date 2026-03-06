@@ -2472,6 +2472,7 @@ func (s *Service) attemptSingleProvider(
 	}
 
 	preferredProfile := s.preferredProfile(providerID)
+	inlineRetried := map[string]bool{} // tracks accounts already inline-retried (max once per account)
 	var lastErr error
 	for attempt := 0; attempt < attemptLimit; attempt++ {
 		account, ok := pool.Acquire(preferredProfile)
@@ -2619,7 +2620,25 @@ func (s *Service) attemptSingleProvider(
 				return resp, nil
 			}
 			reason := deriveFailureReason(runErr)
-			pool.MarkFailureWithRetryHint(account.ID, reason, extractRetryHint(runErr))
+			retryHint := extractRetryHint(runErr)
+
+			// Inline retry: if the server suggests a short wait (≤30s),
+			// sleep and retry the same account instead of rotating.
+			// Avoids unnecessary cooldown escalation for transient rate limits.
+			if reason == core.FailureRateLimit && retryHint > 0 && retryHint <= inlineRetryThreshold && !inlineRetried[account.ID] {
+				inlineRetried[account.ID] = true
+				logService.Logf("inline retry: provider=%s account=%s delay=%s",
+					providerID, account.ID, retryHint.Round(time.Second))
+				s.activeRetryStatus.Store(sessionID,
+					fmt.Sprintf("⏳ %s/%s 短暫限流，%s 後重試...", providerID, attemptModelID, retryHint.Round(time.Second)))
+				if sleepErr := sleepWithContext(ctx, retryHint); sleepErr != nil {
+					return core.ChatResponse{}, sleepErr
+				}
+				attempt-- // counteract loop increment to retry same account
+				continue
+			}
+
+			pool.MarkFailureWithRetryHint(account.ID, reason, retryHint)
 			logFailureEvent(providerID, account.ID, reason, pool)
 			s.syncProfileState(providerID, account.ID)
 			s.activeRetryStatus.Store(sessionID,
@@ -2701,7 +2720,23 @@ func (s *Service) attemptSingleProvider(
 		}
 
 		reason := deriveFailureReason(err)
-		pool.MarkFailureWithRetryHint(account.ID, reason, extractRetryHint(err))
+		retryHint := extractRetryHint(err)
+
+		// Inline retry for short rate limits (same logic as tool path above).
+		if reason == core.FailureRateLimit && retryHint > 0 && retryHint <= inlineRetryThreshold && !inlineRetried[account.ID] {
+			inlineRetried[account.ID] = true
+			logService.Logf("inline retry: provider=%s account=%s delay=%s",
+				providerID, account.ID, retryHint.Round(time.Second))
+			s.activeRetryStatus.Store(sessionID,
+				fmt.Sprintf("⏳ %s/%s 短暫限流，%s 後重試...", providerID, attemptModelID, retryHint.Round(time.Second)))
+			if sleepErr := sleepWithContext(ctx, retryHint); sleepErr != nil {
+				return core.ChatResponse{}, sleepErr
+			}
+			attempt--
+			continue
+		}
+
+		pool.MarkFailureWithRetryHint(account.ID, reason, retryHint)
 		logFailureEvent(providerID, account.ID, reason, pool)
 		s.syncProfileState(providerID, account.ID)
 		s.activeRetryStatus.Store(sessionID,
@@ -3105,6 +3140,27 @@ func (s *Service) adjustCompressionPolicy(providerID, _ string, policy contextwi
 // transientWaitThreshold is the maximum time to wait for a cooling-down
 // account before giving up. Matches KoukeBOT's transientRecoveryWaitMax.
 const transientWaitThreshold = 60 * time.Second
+
+// inlineRetryThreshold is the maximum server-suggested delay for which we
+// sleep and retry the SAME account instead of rotating. Short rate limits
+// (e.g. 5-15s) are better handled inline rather than triggering cooldown
+// escalation and account rotation. Mirrors KoukeBOT's inline retry logic.
+const inlineRetryThreshold = 30 * time.Second
+
+// sleepWithContext pauses for d, returning early if ctx is cancelled.
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
 
 func deriveFailureReason(err error) core.FailureReason {
 	var failureErr *provider.FailureError
@@ -3544,6 +3600,13 @@ func (b serviceToolBackend) ReadMemoryFile(relPath string, from, lines int) (str
 		allLines = allLines[:lines]
 	}
 	return strings.Join(allLines, "\n"), nil
+}
+
+func (b serviceToolBackend) SaveMemory(content string) error {
+	if b.svc == nil || b.svc.memoryDir == "" {
+		return fmt.Errorf("memory not configured")
+	}
+	return memory.AppendDailyLog(b.svc.memoryDir, content)
 }
 
 func (b serviceToolBackend) Providers() []string {

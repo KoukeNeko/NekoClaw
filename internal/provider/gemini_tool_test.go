@@ -435,3 +435,29 @@ func TestParseJSONOrWrap_Empty(t *testing.T) {
 		t.Errorf("expected empty map, got %v", m)
 	}
 }
+
+func TestParseJSONOrWrap_Array(t *testing.T) {
+	result := parseJSONOrWrap(`[{"snippet":"hello"},{"snippet":"world"}]`)
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map wrapping array, got %T", result)
+	}
+	arr, ok := m["result"].([]any)
+	if !ok {
+		t.Fatalf("expected result to be []any, got %T", m["result"])
+	}
+	if len(arr) != 2 {
+		t.Errorf("expected 2 items, got %d", len(arr))
+	}
+}
+
+func TestParseJSONOrWrap_Primitive(t *testing.T) {
+	result := parseJSONOrWrap(`42`)
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map wrapping primitive, got %T", result)
+	}
+	if m["result"] != float64(42) {
+		t.Errorf("expected result=42, got %v", m["result"])
+	}
+}
