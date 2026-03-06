@@ -142,9 +142,7 @@ func TestLoadMemoryContext_WithFiles(t *testing.T) {
 	if ctx.MemoryMD != "Long-term memory content" {
 		t.Fatalf("expected MEMORY.md content, got %q", ctx.MemoryMD)
 	}
-	if !strings.Contains(ctx.DailyLogs, "Today's activity") {
-		t.Fatalf("expected daily log content in context")
-	}
+	// Daily logs are NOT injected into context (accessed via tools instead).
 }
 
 func TestLoadMemoryContext_EmptyDir(t *testing.T) {
@@ -159,18 +157,18 @@ func TestLoadMemoryContext_EmptyDir(t *testing.T) {
 
 func TestBuildSystemPrompt(t *testing.T) {
 	mc := MemoryContext{
-		MemoryMD:  "Remember: user prefers Go",
-		DailyLogs: "Worked on session persistence",
+		MemoryMD: "Remember: user prefers Go",
 	}
 	prompt := BuildSystemPrompt(mc)
 	if !strings.Contains(prompt, "Long-term Memory") {
 		t.Fatalf("expected Long-term Memory header")
 	}
-	if !strings.Contains(prompt, "Recent Activity") {
-		t.Fatalf("expected Recent Activity header")
-	}
 	if !strings.Contains(prompt, "user prefers Go") {
 		t.Fatalf("expected MEMORY.md content in prompt")
+	}
+	// Daily logs should NOT be in the system prompt (tool-based access only).
+	if strings.Contains(prompt, "Recent Activity") {
+		t.Fatalf("daily logs should not be injected into system prompt")
 	}
 }
 
