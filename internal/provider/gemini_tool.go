@@ -33,6 +33,7 @@ func toGeminiFunctionDeclarations(tools []ToolDefinition) []map[string]any {
 		if len(tool.InputSchema) > 0 {
 			var schema any
 			if err := json.Unmarshal(tool.InputSchema, &schema); err == nil {
+				stripUnsupportedSchemaFields(schema)
 				decl["parameters"] = schema
 			}
 		}
@@ -450,6 +451,31 @@ func parseJSONOrWrap(s string) any {
 		return parsed
 	}
 	return map[string]any{"result": s}
+}
+
+// geminiUnsupportedSchemaKeys lists JSON Schema fields that the Gemini API
+// does not accept in function declaration parameters.
+var geminiUnsupportedSchemaKeys = map[string]bool{
+	"additionalProperties": true,
+	"$schema":              true,
+}
+
+// stripUnsupportedSchemaFields recursively removes JSON Schema fields that
+// the Gemini API rejects (e.g. additionalProperties, $schema).
+func stripUnsupportedSchemaFields(v any) {
+	switch node := v.(type) {
+	case map[string]any:
+		for key := range geminiUnsupportedSchemaKeys {
+			delete(node, key)
+		}
+		for _, child := range node {
+			stripUnsupportedSchemaFields(child)
+		}
+	case []any:
+		for _, item := range node {
+			stripUnsupportedSchemaFields(item)
+		}
+	}
 }
 
 // generateGeminiToolCallID creates a unique ID for Gemini tool calls since
