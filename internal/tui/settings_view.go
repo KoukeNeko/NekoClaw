@@ -184,7 +184,10 @@ func (sv *SettingsView) Update(msg tea.Msg) tea.Cmd {
 	case ModelsListMsg:
 		return sv.provider.HandleModelsList(msg)
 	case FallbacksMsg:
-		sv.provider.HandleFallbacks(msg)
+		cmds := sv.provider.HandleFallbacks(msg, sv.apiClient)
+		if len(cmds) > 0 {
+			return tea.Batch(cmds...)
+		}
 		return nil
 	case FallbacksSavedMsg:
 		sv.provider.HandleFallbacksSaved(msg)

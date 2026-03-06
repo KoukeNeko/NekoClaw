@@ -150,10 +150,11 @@ func (ps *ProviderSection) HandleModelsList(msg ModelsListMsg) tea.Cmd {
 }
 
 // HandleFallbacks processes the loaded fallback configuration.
-func (ps *ProviderSection) HandleFallbacks(msg FallbacksMsg) {
+func (ps *ProviderSection) HandleFallbacks(msg FallbacksMsg, apiClient *client.APIClient) []tea.Cmd {
 	if msg.Err != nil {
-		return
+		return nil
 	}
+	var cmds []tea.Cmd
 	for i := 0; i < maxFallbackSlots; i++ {
 		slot := &ps.fallbacks[i]
 		if i < len(msg.Fallbacks) {
@@ -166,11 +167,14 @@ func (ps *ProviderSection) HandleFallbacks(msg FallbacksMsg) {
 		ps.syncFallbackProviders(i)
 		if slot.provider != "" {
 			slot.models = modelOptionsForProvider(slot.provider, slot.model)
+			// Trigger async fetch to replace hardcoded models with the full list.
+			cmds = append(cmds, loadFallbackModelsCmd(apiClient, i, slot.provider))
 		} else {
 			slot.models = []string{"default"}
 		}
 		ps.syncFallbackModelIdx(i)
 	}
+	return cmds
 }
 
 // HandleFallbacksSaved processes the save result.
@@ -344,7 +348,11 @@ func (ps *ProviderSection) cycleFallbackOption(slotIdx int, apiClient *client.AP
 		slot.model = "default"
 		slot.models = modelOptionsForProvider(slot.provider, "")
 		slot.modelIdx = 0
-		return ps.saveFallbacks(apiClient)
+		// Save and trigger async fetch to replace hardcoded models with the full list.
+		return tea.Batch(
+			ps.saveFallbacks(apiClient),
+			loadFallbackModelsCmd(apiClient, slotIdx, slot.provider),
+		)
 	}
 
 	// Cycle model (only when a provider is set).
