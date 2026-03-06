@@ -18,7 +18,9 @@ type templateData struct {
 
 // RenderSystemPrompt executes the persona's Go template with the provided
 // memory content and returns the final system prompt string.
-func RenderSystemPrompt(p *Persona, memoryContent string) (string, error) {
+// When providerID is non-empty, a matching ProviderPatches entry (if any) is
+// appended to reinforce provider-specific behaviour (e.g. stricter roleplay).
+func RenderSystemPrompt(p *Persona, memoryContent string, providerID string) (string, error) {
 	if strings.TrimSpace(p.Config.SystemTemplate) == "" {
 		return "", nil
 	}
@@ -39,7 +41,17 @@ func RenderSystemPrompt(p *Persona, memoryContent string) (string, error) {
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return "", fmt.Errorf("render persona template %s: %w", p.DirName, err)
 	}
-	return buf.String(), nil
+
+	rendered := buf.String()
+
+	// Append provider-specific patch to reinforce roleplay compliance.
+	if providerID != "" {
+		if patch := strings.TrimSpace(p.Config.ProviderPatches[providerID]); patch != "" {
+			rendered = rendered + "\n\n" + patch
+		}
+	}
+
+	return rendered, nil
 }
 
 // FormatAnchors converts a slice of Anchors into readable few-shot text.

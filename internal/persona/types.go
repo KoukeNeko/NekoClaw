@@ -26,10 +26,11 @@ func (g GenerationParams) IsZero() bool {
 
 // PersonaConfig represents the contents of a persona's config.yaml.
 type PersonaConfig struct {
-	Meta           PersonaMeta    `yaml:"meta"`
-	SystemTemplate string         `yaml:"system_template"`
-	Generation     GenerationParams `yaml:"generation"`
-	Variables      map[string]any `yaml:"variables,omitempty"`
+	Meta            PersonaMeta       `yaml:"meta"`
+	SystemTemplate  string            `yaml:"system_template"`
+	Generation      GenerationParams  `yaml:"generation"`
+	Variables       map[string]any    `yaml:"variables,omitempty"`
+	ProviderPatches map[string]string `yaml:"provider_patches,omitempty"`
 }
 
 // Anchor is a single few-shot example (user input → bot response).
