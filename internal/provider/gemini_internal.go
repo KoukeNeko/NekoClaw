@@ -360,6 +360,18 @@ func (p *GeminiInternalProvider) fetchAllModels(ctx context.Context, account cor
 		}
 	}
 
+	// Always include well-known preview models that may not appear in the
+	// API response but are usable via the internal endpoint.
+	for _, knownModel := range []string{
+		"gemini-3-pro-preview",
+		"gemini-3-flash-preview",
+	} {
+		if _, exists := seen[knownModel]; !exists {
+			seen[knownModel] = struct{}{}
+			models = append(models, knownModel)
+		}
+	}
+
 	sort.Strings(models)
 	return models
 }

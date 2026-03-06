@@ -293,7 +293,11 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 		replyImages := b.extractImages(msg.ReplyToMessage)
 		images = append(replyImages, images...) // replied images first, then user's own
 
-		senderName := formatSenderName(msg.ReplyToMessage.From)
+		replyFrom := msg.ReplyToMessage.From
+		senderName := formatSenderName(replyFrom)
+		if replyFrom.UserName != "" {
+			senderName += " (@" + replyFrom.UserName + ")"
+		}
 		if replyText != "" {
 			contextParts = append(contextParts, fmt.Sprintf("[回覆 %s 的訊息]\n%s", senderName, replyText))
 		} else if len(replyImages) > 0 {
@@ -301,11 +305,16 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 		}
 	}
 
+	// 3. Sender identity so the LLM knows who is speaking.
+	// Include @username when available so the LLM can tag people in replies.
+	senderTag := formatSenderTag(msg.From)
+	contextParts = append(contextParts, senderTag)
+
 	// Prepend context to the user message.
-	if len(contextParts) > 0 && text != "" {
-		text = strings.Join(contextParts, "\n\n") + "\n\n---\n" + text
-	} else if len(contextParts) > 0 {
-		text = strings.Join(contextParts, "\n\n")
+	if text != "" {
+		text = strings.Join(contextParts, "\n") + "\n" + text
+	} else {
+		text = strings.Join(contextParts, "\n")
 	}
 
 	// Skip if no text and no images.
@@ -545,6 +554,16 @@ func formatSenderName(user *tgbotapi.User) string {
 		name += " " + user.LastName
 	}
 	return name
+}
+
+// formatSenderTag builds a sender identity tag including @username when available,
+// so the LLM can use @username to mention people in Telegram replies.
+func formatSenderTag(user *tgbotapi.User) string {
+	name := formatSenderName(user)
+	if user != nil && user.UserName != "" {
+		return fmt.Sprintf("[發送者: %s (@%s)]", name, user.UserName)
+	}
+	return fmt.Sprintf("[發送者: %s]", name)
 }
 
 // ---------------------------------------------------------------------------

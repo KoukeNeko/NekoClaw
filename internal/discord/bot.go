@@ -259,6 +259,40 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		text = "請描述這張圖片"
 	}
 
+	// --- Context building ---
+	var contextParts []string
+
+	// 1. Reply-to message context (when replying to another user, not bot).
+	if ref := m.MessageReference; ref != nil && ref.MessageID != "" {
+		refMsg, refErr := s.ChannelMessage(ref.ChannelID, ref.MessageID)
+		if refErr == nil && refMsg != nil && refMsg.Author != nil &&
+			refMsg.Author.ID != s.State.User.ID {
+			refText := strings.TrimSpace(refMsg.Content)
+			refImages := extractDiscordImages(refMsg.Attachments)
+			images = append(refImages, images...)
+
+			refName := refMsg.Author.Username
+			if refText != "" {
+				contextParts = append(contextParts, fmt.Sprintf("[回覆 %s (ID:<@%s>) 的訊息]\n%s", refName, refMsg.Author.ID, refText))
+			} else if len(refImages) > 0 {
+				contextParts = append(contextParts, fmt.Sprintf("[回覆 %s (ID:<@%s>) 的圖片]", refName, refMsg.Author.ID))
+			}
+		}
+	}
+
+	// 2. Sender identity so the LLM knows who is speaking.
+	//    Include Discord user ID so the LLM can mention them with <@ID>.
+	senderName := m.Author.Username
+	if m.Member != nil && m.Member.Nick != "" {
+		senderName = m.Member.Nick
+	}
+	contextParts = append(contextParts, fmt.Sprintf("[發送者: %s (ID:<@%s>)]", senderName, m.Author.ID))
+
+	// Prepend context to the user message.
+	if len(contextParts) > 0 {
+		text = strings.Join(contextParts, "\n") + "\n" + text
+	}
+
 	botID := s.State.User.ID
 
 	// Transition: 👀 → 🔄
