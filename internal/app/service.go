@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -111,7 +112,30 @@ func NewService(opts ServiceOptions) *Service {
 		svc.personaManager = persona.NewManager(opts.PersonasDir)
 	}
 
+	// Background indexing of memory files and session transcripts.
+	if svc.searchIndex != nil {
+		go svc.backgroundIndex()
+	}
+
 	return svc
+}
+
+// backgroundIndex indexes memory files and historical session transcripts
+// into the FTS5 search index. Runs once at startup as a background goroutine.
+func (s *Service) backgroundIndex() {
+	if s.memoryDir != "" {
+		if err := s.searchIndex.IndexMemoryFiles(s.memoryDir); err != nil {
+			logService.Warnf("background index memory files: %v", err)
+		}
+	}
+	if s.sessions != nil {
+		transcriptsDir := s.sessions.TranscriptsDir()
+		if transcriptsDir != "" {
+			if err := s.searchIndex.IndexSessionFiles(transcriptsDir); err != nil {
+				logService.Warnf("background index session files: %v", err)
+			}
+		}
+	}
 }
 
 func (s *Service) ListSessions() []core.SessionMetadata {
@@ -2456,20 +2480,29 @@ func (s *Service) attemptSingleProvider(
 				lastErr = inferred
 				break
 			}
-			reason := pool.ResolveUnavailableReason()
-			if lastErr == nil {
-				if inferred := s.inferGeminiMissingProjectFromPool(providerID, reason, pool); inferred != nil {
-					lastErr = inferred
-					break
+			// Transient wait: if the shortest cooldown is within threshold,
+			// wait for it and retry once instead of failing immediately.
+			s.activeRetryStatus.Store(sessionID,
+				fmt.Sprintf("⏳ %s 所有帳號冷卻中，等待恢復...", providerID))
+			account, ok = pool.AcquireOrWait(ctx, preferredProfile, transientWaitThreshold)
+			if ok {
+				logService.Logf("transient wait recovered: provider=%s profile_id=%s", providerID, account.ID)
+			} else {
+				reason := pool.ResolveUnavailableReason()
+				if lastErr == nil {
+					if inferred := s.inferGeminiMissingProjectFromPool(providerID, reason, pool); inferred != nil {
+						lastErr = inferred
+						break
+					}
+					soonest := pool.SoonestAvailableAt()
+					if soonest.IsZero() {
+						lastErr = fmt.Errorf("%w: provider=%s reason=%s", ErrNoAvailableAccount, providerID, reason)
+					} else {
+						lastErr = fmt.Errorf("%w: provider=%s reason=%s retry_at=%s", ErrNoAvailableAccount, providerID, reason, soonest.Format(time.RFC3339))
+					}
 				}
-				soonest := pool.SoonestAvailableAt()
-				if soonest.IsZero() {
-					lastErr = fmt.Errorf("%w: provider=%s reason=%s", ErrNoAvailableAccount, providerID, reason)
-				} else {
-					lastErr = fmt.Errorf("%w: provider=%s reason=%s retry_at=%s", ErrNoAvailableAccount, providerID, reason, soonest.Format(time.RFC3339))
-				}
+				break
 			}
-			break
 		}
 
 		attemptModelID := modelID
@@ -2488,7 +2521,7 @@ func (s *Service) attemptSingleProvider(
 		account, refreshErr := s.maybeRefreshAccountCredential(ctx, providerID, attemptModelID, prov, pool, account)
 		if refreshErr != nil {
 			reason := deriveFailureReason(refreshErr)
-			pool.MarkFailure(account.ID, reason)
+			pool.MarkFailureWithRetryHint(account.ID, reason, extractRetryHint(refreshErr))
 			logFailureEvent(providerID, account.ID, reason, pool)
 			s.syncProfileState(providerID, account.ID)
 			s.activeRetryStatus.Store(sessionID,
@@ -2586,7 +2619,7 @@ func (s *Service) attemptSingleProvider(
 				return resp, nil
 			}
 			reason := deriveFailureReason(runErr)
-			pool.MarkFailure(account.ID, reason)
+			pool.MarkFailureWithRetryHint(account.ID, reason, extractRetryHint(runErr))
 			logFailureEvent(providerID, account.ID, reason, pool)
 			s.syncProfileState(providerID, account.ID)
 			s.activeRetryStatus.Store(sessionID,
@@ -2668,7 +2701,7 @@ func (s *Service) attemptSingleProvider(
 		}
 
 		reason := deriveFailureReason(err)
-		pool.MarkFailure(account.ID, reason)
+		pool.MarkFailureWithRetryHint(account.ID, reason, extractRetryHint(err))
 		logFailureEvent(providerID, account.ID, reason, pool)
 		s.syncProfileState(providerID, account.ID)
 		s.activeRetryStatus.Store(sessionID,
@@ -3069,12 +3102,26 @@ func (s *Service) adjustCompressionPolicy(providerID, _ string, policy contextwi
 	return policy
 }
 
+// transientWaitThreshold is the maximum time to wait for a cooling-down
+// account before giving up. Matches KoukeBOT's transientRecoveryWaitMax.
+const transientWaitThreshold = 60 * time.Second
+
 func deriveFailureReason(err error) core.FailureReason {
 	var failureErr *provider.FailureError
 	if errors.As(err, &failureErr) && failureErr.Reason != "" {
 		return failureErr.Reason
 	}
 	return core.ClassifyFailure(err.Error())
+}
+
+// extractRetryHint unwraps a FailureError and returns the server-provided
+// Retry-After duration, or zero if not available.
+func extractRetryHint(err error) time.Duration {
+	var fe *provider.FailureError
+	if errors.As(err, &fe) {
+		return fe.RetryAfter
+	}
+	return 0
 }
 
 // shouldTryNextProvider decides if HandleChat should try the next provider in
@@ -3387,9 +3434,25 @@ func (s *Service) flushMemoryBeforeRotate(ctx context.Context, sessionID string)
 	}
 	defer pool.MarkUsed(account.ID)
 
+	// Extract durable notes into daily log.
 	flusher := compaction.NewMemoryFlusher(prov, "default", account, s.memoryDir)
 	if _, flushErr := flusher.Flush(ctx, entries); flushErr != nil {
 		logService.Warnf("pre-rotate memory flush: session_id=%s error=%q", sessionID, flushErr)
+	}
+
+	// Save session transcript as dated memory file.
+	saver := memory.NewSessionSaver(s.memoryDir, prov, "default")
+	if err := saver.SaveSessionMemory(ctx, account, sessionID, entries); err != nil {
+		logService.Warnf("session save: session_id=%s error=%q", sessionID, err)
+	}
+
+	// Re-index memory files to pick up newly created files.
+	if s.searchIndex != nil {
+		go func() {
+			if err := s.searchIndex.IndexMemoryFiles(s.memoryDir); err != nil {
+				logService.Warnf("post-rotate memory reindex: %v", err)
+			}
+		}()
 	}
 }
 
@@ -3436,12 +3499,51 @@ func (b serviceToolBackend) SearchMemory(query string, limit int) ([]tooling.Mem
 	for _, item := range results {
 		out = append(out, tooling.MemoryResult{
 			SessionID: item.SessionID,
+			Path:      item.Path,
+			StartLine: item.StartLine,
+			EndLine:   item.EndLine,
 			Snippet:   item.Content,
 			Score:     item.Score,
 			Role:      item.Role,
+			Source:    item.Source,
 		})
 	}
 	return out, nil
+}
+
+func (b serviceToolBackend) ReadMemoryFile(relPath string, from, lines int) (string, error) {
+	if b.svc == nil || b.svc.memoryDir == "" {
+		return "", fmt.Errorf("memory not configured")
+	}
+	// Sanitize: prevent path traversal outside memoryDir.
+	cleaned := filepath.Clean(relPath)
+	if strings.HasPrefix(cleaned, "..") || filepath.IsAbs(cleaned) {
+		return "", fmt.Errorf("invalid path: must be relative within memory directory")
+	}
+	full := filepath.Join(b.svc.memoryDir, cleaned)
+	// Ensure resolved path stays within memoryDir.
+	absMemDir, _ := filepath.Abs(b.svc.memoryDir)
+	absFull, _ := filepath.Abs(full)
+	if !strings.HasPrefix(absFull, absMemDir+string(filepath.Separator)) && absFull != absMemDir {
+		return "", fmt.Errorf("path escapes memory directory")
+	}
+	data, err := os.ReadFile(full)
+	if err != nil {
+		return "", err
+	}
+	allLines := strings.Split(string(data), "\n")
+	// Apply line range if specified.
+	if from > 0 {
+		from-- // convert to 0-based
+		if from >= len(allLines) {
+			return "", nil
+		}
+		allLines = allLines[from:]
+	}
+	if lines > 0 && lines < len(allLines) {
+		allLines = allLines[:lines]
+	}
+	return strings.Join(allLines, "\n"), nil
 }
 
 func (b serviceToolBackend) Providers() []string {

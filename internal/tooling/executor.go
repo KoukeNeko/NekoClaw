@@ -37,6 +37,7 @@ func NewRuntimeExecutor(backend Backend, policy Policy, cfg ExecutorConfig) *Run
 		"file_search":    {Definition: toolDef("file_search", "Search text in files.", `{"type":"object","required":["query"],"properties":{"query":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string"},"max_results":{"type":"integer","minimum":1}}}`)},
 		"sessions_list":  {Definition: toolDef("sessions_list", "List chat sessions.", `{"type":"object","properties":{"limit":{"type":"integer","minimum":1}}}`)},
 		"memory_search":  {Definition: toolDef("memory_search", "Search memory index.", `{"type":"object","required":["query"],"properties":{"query":{"type":"string"},"limit":{"type":"integer","minimum":1}}}`)},
+		"memory_get":     {Definition: toolDef("memory_get", "Read a memory file by relative path. Optionally specify line range.", `{"type":"object","required":["path"],"properties":{"path":{"type":"string","description":"Relative path to memory file (e.g. MEMORY.md, memory/2026-03-06-auth.md)"},"from":{"type":"integer","description":"Starting line number (1-based)","minimum":1},"lines":{"type":"integer","description":"Number of lines to read","minimum":1}}}`)},
 		"providers_list": {Definition: toolDef("providers_list", "List providers.", `{"type":"object","properties":{}}`)},
 		"accounts_list":  {Definition: toolDef("accounts_list", "List provider accounts.", `{"type":"object","required":["provider"],"properties":{"provider":{"type":"string"}}}`)},
 		"git_status":     {Definition: toolDef("git_status", "Run git status.", `{"type":"object","properties":{}}`)},
@@ -132,6 +133,8 @@ func (e *RuntimeExecutor) Run(ctx context.Context, call provider.ToolCall) (stri
 		return e.runSessionsList(call.Arguments)
 	case "memory_search":
 		return e.runMemorySearch(call.Arguments)
+	case "memory_get":
+		return e.runMemoryGet(call.Arguments)
 	case "providers_list":
 		return e.runProvidersList()
 	case "accounts_list":
@@ -343,6 +346,26 @@ func (e *RuntimeExecutor) runMemorySearch(raw json.RawMessage) (string, error) {
 	}
 	payload, _ := json.MarshalIndent(results, "", "  ")
 	return string(payload), nil
+}
+
+func (e *RuntimeExecutor) runMemoryGet(raw json.RawMessage) (string, error) {
+	var args struct {
+		Path  string `json:"path"`
+		From  int    `json:"from"`
+		Lines int    `json:"lines"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return "", err
+	}
+	path := strings.TrimSpace(args.Path)
+	if path == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	content, err := e.backend.ReadMemoryFile(path, args.From, args.Lines)
+	if err != nil {
+		return "", err
+	}
+	return content, nil
 }
 
 func (e *RuntimeExecutor) runProvidersList() (string, error) {

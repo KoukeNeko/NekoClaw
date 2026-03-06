@@ -10,15 +10,20 @@ import (
 type Backend interface {
 	ListSessions() []core.SessionMetadata
 	SearchMemory(query string, limit int) ([]MemoryResult, error)
+	ReadMemoryFile(relPath string, from, lines int) (string, error)
 	Providers() []string
 	Accounts(providerID string) []core.AccountSnapshot
 }
 
 type MemoryResult struct {
 	SessionID string  `json:"session_id"`
+	Path      string  `json:"path,omitempty"`
+	StartLine int     `json:"start_line,omitempty"`
+	EndLine   int     `json:"end_line,omitempty"`
 	Snippet   string  `json:"snippet"`
 	Score     float64 `json:"score"`
 	Role      string  `json:"role"`
+	Source    string  `json:"source,omitempty"`
 }
 
 type ToolSpec struct {

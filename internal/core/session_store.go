@@ -258,6 +258,32 @@ func migrateLineToEntry(line []byte) SessionEntry {
 	return MessageToEntry(msg)
 }
 
+// ParseSessionEntries parses JSONL-encoded session entries from raw bytes.
+// Supports both typed-entry and legacy plain-Message formats.
+func ParseSessionEntries(data []byte) []SessionEntry {
+	var entries []SessionEntry
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		var entry SessionEntry
+		if err := json.Unmarshal(line, &entry); err != nil {
+			continue
+		}
+		if entry.Type == "" {
+			entry = migrateLineToEntry(line)
+			if entry.Type == "" {
+				continue
+			}
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
 func (s *SessionStore) appendToTranscriptLocked(sessionID string, entries []SessionEntry) {
 	path := s.transcriptPath(sessionID)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -344,6 +370,15 @@ func (s *SessionStore) writeMetadataLocked() {
 	if err := os.Rename(tmp, metaPath); err != nil {
 		logStore.Errorf("metadata rename error: %v", err)
 	}
+}
+
+// TranscriptsDir returns the directory where session transcripts are stored.
+// Returns empty string if the store is in-memory only.
+func (s *SessionStore) TranscriptsDir() string {
+	if s.dataDir == "" {
+		return ""
+	}
+	return filepath.Join(s.dataDir, "transcripts")
 }
 
 func (s *SessionStore) transcriptPath(sessionID string) string {
