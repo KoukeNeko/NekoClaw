@@ -158,7 +158,8 @@ type SessionMetadata struct {
 
 type SessionLifecycleConfig struct {
 	DailyResetHour int           `json:"daily_reset_hour"` // default 4 (4 AM)
-	IdleTimeout    time.Duration `json:"idle_timeout"`     // default 60min
+	IdleTimeout    time.Duration `json:"idle_timeout"`     // default 60min (TUI sessions)
+	BotIdleTimeout time.Duration `json:"bot_idle_timeout"` // default 24h (Discord/Telegram sessions)
 	RetentionDays  int           `json:"retention_days"`   // default 30
 	MaxEntries     int           `json:"max_entries"`      // default 500
 	MaxFileSize    int64         `json:"max_file_size"`    // default 10MB
@@ -168,6 +169,7 @@ func DefaultLifecycleConfig() SessionLifecycleConfig {
 	return SessionLifecycleConfig{
 		DailyResetHour: 4,
 		IdleTimeout:    60 * time.Minute,
+		BotIdleTimeout: 24 * time.Hour,
 		RetentionDays:  30,
 		MaxEntries:     500,
 		MaxFileSize:    10 * 1024 * 1024,

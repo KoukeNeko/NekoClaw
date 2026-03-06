@@ -42,7 +42,7 @@ func main() {
 		mode               = flag.String("mode", envOr("NEKOCLAW_MODE", "both"), "run mode: api | tui | both")
 		addr               = flag.String("addr", envOr("NEKOCLAW_ADDR", "127.0.0.1:8085"), "api listen address")
 		apiBaseURL         = flag.String("api-base-url", envOr("NEKOCLAW_API_BASE_URL", "http://127.0.0.1:8085"), "api base url for tui")
-		defaultProvider    = flag.String("provider", envOr("NEKOCLAW_PROVIDER", "mock"), "default provider for TUI")
+		defaultProvider    = flag.String("provider", envOr("NEKOCLAW_PROVIDER", "google-gemini-cli"), "default provider")
 		defaultModel       = flag.String("model", envOr("NEKOCLAW_MODEL", "default"), "default model for TUI")
 		sessionID          = flag.String("session", envOr("NEKOCLAW_SESSION", "main"), "default session id for TUI")
 		accountsPath       = flag.String("accounts", envOr("NEKOCLAW_ACCOUNTS_FILE", "./accounts.json"), "account json path")

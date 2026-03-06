@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/doeshing/nekoclaw/internal/logger"
@@ -23,6 +24,9 @@ func NewSessionLifecycle(store *SessionStore, config SessionLifecycleConfig) *Se
 	}
 	if config.IdleTimeout <= 0 {
 		config.IdleTimeout = 60 * time.Minute
+	}
+	if config.BotIdleTimeout <= 0 {
+		config.BotIdleTimeout = 24 * time.Hour
 	}
 	if config.RetentionDays <= 0 {
 		config.RetentionDays = 30
@@ -56,12 +60,21 @@ func (l *SessionLifecycle) ShouldReset(sessionID string) bool {
 		return true
 	}
 
-	// Idle timeout: if the session has been idle longer than the configured timeout.
-	if time.Since(meta.UpdatedAt) > l.config.IdleTimeout {
+	// Idle timeout: only applies to interactive (TUI) sessions.
+	// Discord/Telegram sessions never idle-reset; they rely on daily reset
+	// and manual /reset only, because channel conversations naturally have
+	// long gaps between messages.
+	if !isBotSession(sessionID) && time.Since(meta.UpdatedAt) > l.config.IdleTimeout {
 		return true
 	}
 
 	return false
+}
+
+// isBotSession returns true for sessions originating from bot surfaces
+// (Discord, Telegram) which need a longer idle timeout.
+func isBotSession(sessionID string) bool {
+	return strings.HasPrefix(sessionID, "discord:") || strings.HasPrefix(sessionID, "telegram:")
 }
 
 // pastDailyResetBoundary returns true if lastUpdate is before the most recent

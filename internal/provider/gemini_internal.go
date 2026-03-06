@@ -199,7 +199,7 @@ func (p *GeminiInternalProvider) GenerateToolTurn(ctx context.Context, req ToolT
 		_ = resp.Body.Close()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			reason := classifyStatus(resp.StatusCode, string(respBody))
-			lastErr = &FailureError{
+			endpointErr := &FailureError{
 				Reason:     reason,
 				Message:    strings.TrimSpace(string(respBody)),
 				Endpoint:   endpoint,
@@ -207,8 +207,15 @@ func (p *GeminiInternalProvider) GenerateToolTurn(ctx context.Context, req ToolT
 				RetryAfter: parseRetryAfter(resp),
 			}
 			if shouldFallbackEndpoint(resp.StatusCode, respBody) {
+				// Only overwrite lastErr when no earlier, more meaningful error
+				// exists. This prevents sandbox 403 (FailureAuth) from masking
+				// a production 429 (FailureRateLimit).
+				if lastErr == nil {
+					lastErr = endpointErr
+				}
 				continue
 			}
+			lastErr = endpointErr
 			return ToolTurnResponse{}, lastErr
 		}
 
@@ -438,7 +445,7 @@ func (p *GeminiInternalProvider) Generate(ctx context.Context, req GenerateReque
 		_ = resp.Body.Close()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			reason := classifyStatus(resp.StatusCode, string(respBody))
-			lastErr = &FailureError{
+			endpointErr := &FailureError{
 				Reason:     reason,
 				Message:    strings.TrimSpace(string(respBody)),
 				Endpoint:   endpoint,
@@ -446,8 +453,15 @@ func (p *GeminiInternalProvider) Generate(ctx context.Context, req GenerateReque
 				RetryAfter: parseRetryAfter(resp),
 			}
 			if shouldFallbackEndpoint(resp.StatusCode, respBody) {
+				// Only overwrite lastErr when no earlier, more meaningful error
+				// exists. This prevents sandbox 403 (FailureAuth) from masking
+				// a production 429 (FailureRateLimit).
+				if lastErr == nil {
+					lastErr = endpointErr
+				}
 				continue
 			}
+			lastErr = endpointErr
 			return GenerateResponse{}, lastErr
 		}
 

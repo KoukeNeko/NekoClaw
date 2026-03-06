@@ -2233,6 +2233,9 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 	// Check session lifecycle before processing.
 	if s.lifecycle != nil && s.lifecycle.ShouldReset(sessionID) {
 		logService.Logf("session auto reset: session_id=%s", sessionID)
+		// Flush durable memories before clearing the session, so important
+		// facts survive the rotation via MEMORY.md / daily logs.
+		s.flushMemoryBeforeRotate(ctx, sessionID)
 		_ = s.lifecycle.RotateSession(sessionID)
 	}
 
@@ -3355,6 +3358,38 @@ func pEndpoint(prov provider.Provider) string {
 		return strings.TrimSpace(p.BaseURL())
 	default:
 		return ""
+	}
+}
+
+// flushMemoryBeforeRotate performs a best-effort memory flush for a session
+// that is about to be rotated (daily reset / housekeeping). This ensures
+// durable notes are extracted into daily logs before the conversation history
+// is archived and cleared.
+func (s *Service) flushMemoryBeforeRotate(ctx context.Context, sessionID string) {
+	if s.memoryDir == "" {
+		return
+	}
+	entries := s.sessions.History(sessionID)
+	if len(entries) == 0 {
+		return
+	}
+
+	// Pick any available provider+account for the silent flush turn.
+	provID := s.GetDefaultProvider()
+	prov := s.Provider(provID)
+	pool := s.Pool(provID)
+	if prov == nil || pool == nil {
+		return
+	}
+	account, ok := pool.Acquire("")
+	if !ok {
+		return
+	}
+	defer pool.MarkUsed(account.ID)
+
+	flusher := compaction.NewMemoryFlusher(prov, "default", account, s.memoryDir)
+	if _, flushErr := flusher.Flush(ctx, entries); flushErr != nil {
+		logService.Warnf("pre-rotate memory flush: session_id=%s error=%q", sessionID, flushErr)
 	}
 }
 
