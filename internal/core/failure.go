@@ -12,6 +12,7 @@ const (
 	FailureBilling       FailureReason = "billing"
 	FailureTimeout       FailureReason = "timeout"
 	FailureModelNotFound FailureReason = "model_not_found"
+	FailureModelCapacity FailureReason = "model_capacity"
 	FailureUnknown       FailureReason = "unknown"
 )
 
@@ -31,6 +32,11 @@ func ClassifyFailure(message string) FailureReason {
 		strings.Contains(lower, "billing"),
 		strings.Contains(lower, "quota exceeded"):
 		return FailureBilling
+	case strings.Contains(lower, "overloaded"),
+		strings.Contains(lower, "no capacity"),
+		strings.Contains(lower, "model_capacity"),
+		strings.Contains(lower, "model capacity"):
+		return FailureModelCapacity
 	case strings.Contains(lower, "429"),
 		strings.Contains(lower, "rate limit"),
 		strings.Contains(lower, "resource exhausted"):

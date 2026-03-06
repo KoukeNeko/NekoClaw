@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"sync"
@@ -31,13 +32,18 @@ func DefaultCooldownConfig() CooldownConfig {
 	}
 }
 
+// globalCapacityCooldown is applied to all accounts when the model server
+// itself has no capacity (distinct from per-account rate limits).
+const globalCapacityCooldown = 90 * time.Second
+
 type AccountPool struct {
-	mu       sync.Mutex
-	provider string
-	accounts map[string]Account
-	order    []string
-	usage    map[string]*ProfileUsageStats
-	cooldown CooldownConfig
+	mu                  sync.Mutex
+	provider            string
+	accounts            map[string]Account
+	order               []string
+	usage               map[string]*ProfileUsageStats
+	cooldown            CooldownConfig
+	globalCooldownUntil time.Time // blocks ALL accounts when model has no capacity
 }
 
 type AccountSnapshot struct {
@@ -93,6 +99,40 @@ func (p *AccountPool) Acquire(preferredID string) (Account, bool) {
 	return Account{}, false
 }
 
+// AcquireOrWait tries Acquire first; if all accounts are cooling down it waits
+// up to maxWait for the soonest cooldown to expire, then retries once.
+// Returns (Account, true) on success, or (Account{}, false) if nothing becomes
+// available within the deadline or the context is cancelled.
+func (p *AccountPool) AcquireOrWait(ctx context.Context, preferredID string, maxWait time.Duration) (Account, bool) {
+	// Fast path: an account is ready right now.
+	if account, ok := p.Acquire(preferredID); ok {
+		return account, true
+	}
+
+	soonest := p.SoonestAvailableAt()
+
+	// Already past the cooldown (race with Acquire above) — try again.
+	wait := time.Until(soonest)
+	if wait <= 0 {
+		return p.Acquire(preferredID)
+	}
+
+	// No recoverable cooldown or wait exceeds our tolerance.
+	if soonest.IsZero() || wait > maxWait {
+		return Account{}, false
+	}
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return Account{}, false
+	case <-timer.C:
+	}
+
+	return p.Acquire(preferredID)
+}
+
 func (p *AccountPool) MarkUsed(accountID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -109,7 +149,19 @@ func (p *AccountPool) MarkUsed(accountID string) {
 	stats.FailureCounts = nil
 }
 
+// MarkFailure records a failure without server retry hint. Delegates to MarkFailureWithRetryHint.
 func (p *AccountPool) MarkFailure(accountID string, reason FailureReason) {
+	p.MarkFailureWithRetryHint(accountID, reason, 0)
+}
+
+// maxServerHintCooldown caps the server-suggested retry duration to prevent
+// absurdly long cooldowns from a misbehaving server.
+const maxServerHintCooldown = 5 * time.Minute
+
+// MarkFailureWithRetryHint records a failure with an optional server-provided
+// retry-after hint. The actual cooldown is max(escalated, retryHint), capped
+// at maxServerHintCooldown. This mirrors KoukeBOT's handleQuotaError pattern.
+func (p *AccountPool) MarkFailureWithRetryHint(accountID string, reason FailureReason, retryHint time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -150,9 +202,22 @@ func (p *AccountPool) MarkFailure(accountID string, reason FailureReason) {
 	case FailureTimeout:
 		// Timeout is a network/infrastructure issue, not an account-level problem.
 		// Track error count for diagnostics but do NOT set cooldown.
-		// This matches OpenClaw behavior: the account stays available for immediate retry.
+	case FailureModelCapacity:
+		// Model-wide capacity problem: apply global cooldown to all accounts.
+		// Individual account cooldown is not set since the issue is model-level.
+		globalUntil := now.Add(globalCapacityCooldown)
+		if p.globalCooldownUntil.IsZero() || !now.Before(p.globalCooldownUntil) {
+			p.globalCooldownUntil = globalUntil
+		}
 	default:
+		// Use max(escalated, serverHint) capped at maxServerHintCooldown.
 		cooldownFor := calculateAuthCooldown(nextErrorCount)
+		if retryHint > cooldownFor {
+			cooldownFor = retryHint
+		}
+		if cooldownFor > maxServerHintCooldown {
+			cooldownFor = maxServerHintCooldown
+		}
 		stats.CooldownUntil = keepActiveWindowOrRecompute(stats.CooldownUntil, now, now.Add(cooldownFor))
 	}
 }
@@ -270,6 +335,12 @@ func (p *AccountPool) SoonestAvailableAt() time.Time {
 
 	now := time.Now()
 	p.clearExpiredCooldownsLocked(now)
+
+	// Global cooldown blocks all accounts regardless of individual state.
+	if !p.globalCooldownUntil.IsZero() && now.Before(p.globalCooldownUntil) {
+		return p.globalCooldownUntil
+	}
+
 	var soonest time.Time
 	for id := range p.accounts {
 		until := p.unusableUntilLocked(id)
@@ -319,6 +390,7 @@ func (p *AccountPool) ResolveUnavailableReason() FailureReason {
 		FailureAuthPermanent,
 		FailureAuth,
 		FailureBilling,
+		FailureModelCapacity,
 		FailureFormat,
 		FailureModelNotFound,
 		FailureTimeout,
@@ -390,13 +462,14 @@ func (p *AccountPool) resolveOrderLocked(preferredID string, now time.Time) []st
 
 // orderProfilesByModeLocked mirrors OpenClaw's orderProfilesByMode:
 //   - Partition accounts into available and in-cooldown.
-//   - Sort available by type (OAuth > Token > APIKey), then by lastUsed (oldest first = round-robin).
+//   - Sort available by error count (healthier first), then type, then lastUsed.
 //   - Append in-cooldown accounts sorted by soonest-available.
 func (p *AccountPool) orderProfilesByModeLocked(ids []string, now time.Time) []string {
 	type scoredEntry struct {
-		id        string
-		typeScore int
-		lastUsed  time.Time
+		id         string
+		errorCount int
+		typeScore  int
+		lastUsed   time.Time
 	}
 	available := make([]scoredEntry, 0, len(ids))
 	type cooldownEntry struct {
@@ -411,16 +484,21 @@ func (p *AccountPool) orderProfilesByModeLocked(ids []string, now time.Time) []s
 		} else {
 			account := p.accounts[id]
 			available = append(available, scoredEntry{
-				id:        id,
-				typeScore: accountTypeScore(account.Type),
-				lastUsed:  p.lastUsedOrZeroLocked(id),
+				id:         id,
+				errorCount: p.errorCountLocked(id),
+				typeScore:  accountTypeScore(account.Type),
+				lastUsed:   p.lastUsedOrZeroLocked(id),
 			})
 		}
 	}
 
-	// Primary sort: type preference (oauth > token > api_key).
-	// Secondary sort: lastUsed (oldest first for round-robin within type).
+	// Primary: fewer errors first (prefer healthier accounts).
+	// Secondary: type preference (oauth > token > api_key).
+	// Tertiary: lastUsed (oldest first for round-robin within type).
 	sort.SliceStable(available, func(i, j int) bool {
+		if available[i].errorCount != available[j].errorCount {
+			return available[i].errorCount < available[j].errorCount
+		}
 		if available[i].typeScore != available[j].typeScore {
 			return available[i].typeScore < available[j].typeScore
 		}
@@ -484,6 +562,10 @@ func (p *AccountPool) baseOrderLocked() []string {
 }
 
 func (p *AccountPool) clearExpiredCooldownsLocked(now time.Time) {
+	// Clear expired global capacity cooldown.
+	if !p.globalCooldownUntil.IsZero() && !now.Before(p.globalCooldownUntil) {
+		p.globalCooldownUntil = time.Time{}
+	}
 	for _, stats := range p.usage {
 		if stats == nil {
 			continue
@@ -505,6 +587,10 @@ func (p *AccountPool) clearExpiredCooldownsLocked(now time.Time) {
 func (p *AccountPool) isInCooldownLocked(accountID string, now time.Time) bool {
 	if p.isCooldownBypassedLocked(accountID) {
 		return false
+	}
+	// Global capacity cooldown blocks all accounts regardless of individual state.
+	if !p.globalCooldownUntil.IsZero() && now.Before(p.globalCooldownUntil) {
+		return true
 	}
 	stats := p.usage[accountID]
 	if stats == nil {
@@ -542,6 +628,14 @@ func (p *AccountPool) lastUsedOrZeroLocked(accountID string) time.Time {
 		return time.Time{}
 	}
 	return stats.LastUsed
+}
+
+func (p *AccountPool) errorCountLocked(accountID string) int {
+	stats := p.usage[accountID]
+	if stats == nil {
+		return 0
+	}
+	return stats.ErrorCount
 }
 
 func (p *AccountPool) ensureStatsLocked(accountID string) *ProfileUsageStats {
