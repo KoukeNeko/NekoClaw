@@ -488,20 +488,17 @@ func (p *AccountPool) clearExpiredCooldownsLocked(now time.Time) {
 		if stats == nil {
 			continue
 		}
-		changed := false
 		if !stats.CooldownUntil.IsZero() && !now.Before(stats.CooldownUntil) {
 			stats.CooldownUntil = time.Time{}
-			changed = true
 		}
 		if !stats.DisabledUntil.IsZero() && !now.Before(stats.DisabledUntil) {
 			stats.DisabledUntil = time.Time{}
 			stats.DisabledReason = ""
-			changed = true
 		}
-		if changed && stats.CooldownUntil.IsZero() && stats.DisabledUntil.IsZero() {
-			stats.ErrorCount = 0
-			stats.FailureCounts = nil
-		}
+		// NOTE: ErrorCount and FailureCounts are intentionally NOT reset here.
+		// They are only reset on success (MarkUsed) or when FailureWindow
+		// expires (checked in MarkFailure). This ensures the escalating
+		// cooldown sequence (1m→5m→25m→1h) works correctly across retries.
 	}
 }
 
