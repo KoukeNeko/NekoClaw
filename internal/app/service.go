@@ -2396,20 +2396,42 @@ func (s *Service) attemptSingleProvider(
 		entries = s.sessions.History(sessionID)
 	}
 	contextWindow := prov.ContextWindow(modelID)
-	compactor := compaction.NewCompactor(prov, modelID, core.Account{})
+
+	// Estimate tokens once and reuse — avoid repeated O(N) loops.
+	estimatedTokens := compaction.EstimateEntriesTokens(entries)
+
+	// Start memory load concurrently — overlaps disk I/O with compaction/compression.
+	type memoryResult struct {
+		prompt string
+		err    error
+	}
+	memoryCh := make(chan memoryResult, 1)
+	if s.memoryDir != "" {
+		go func() {
+			memCtx, err := memory.LoadMemoryContext(s.memoryDir)
+			if err != nil {
+				memoryCh <- memoryResult{err: err}
+				return
+			}
+			memoryCh <- memoryResult{prompt: memory.BuildSystemPrompt(memCtx)}
+		}()
+	} else {
+		memoryCh <- memoryResult{}
+	}
 
 	// Pre-compaction memory flush: extract durable notes before messages are dropped.
 	if !params.disableSession && s.memoryDir != "" {
 		flusher := compaction.NewMemoryFlusher(prov, modelID, core.Account{}, s.memoryDir)
-		currentTokens := compaction.EstimateEntriesTokens(entries)
-		if flusher.ShouldFlush(currentTokens, contextWindow, compaction.DefaultReserveTokens) {
+		if flusher.ShouldFlush(estimatedTokens, contextWindow, compaction.DefaultReserveTokens) {
 			if _, flushErr := flusher.Flush(ctx, entries); flushErr != nil {
 				logService.Errorf("memory flush: session_id=%s error=%q", sessionID, flushErr)
 			}
 		}
 	}
 
-	if !params.disableSession && compactor.ShouldCompact(entries, contextWindow, compaction.DefaultReserveTokens) {
+	compactBudget := contextWindow - compaction.DefaultReserveTokens
+	if !params.disableSession && compactBudget > 0 && estimatedTokens > compactBudget {
+		compactor := compaction.NewCompactor(prov, modelID, core.Account{})
 		result, compactErr := compactor.Compact(ctx, compaction.CompactionRequest{
 			Entries:       entries,
 			ContextWindow: contextWindow,
@@ -2425,7 +2447,7 @@ func (s *Service) attemptSingleProvider(
 				compressedMessages = append(compressedMessages, userMessage)
 			}
 			compressionMeta = core.CompressionMeta{
-				OriginalTokens:   compaction.EstimateEntriesTokens(entries),
+				OriginalTokens:   estimatedTokens,
 				CompressedTokens: compaction.EstimateEntriesTokens(result.KeptEntries) + result.SummaryTokens,
 				DroppedMessages:  result.DroppedCount,
 			}
@@ -2454,15 +2476,13 @@ func (s *Service) attemptSingleProvider(
 		compressedMessages, compressionMeta, compressed = contextwindow.Compress(baseMessages, policy)
 	}
 
-	// Build memory prompt string (used by both persona-based and plain injection).
+	// Collect memory result (started concurrently above).
+	memResult := <-memoryCh
 	var memoryPrompt string
-	if s.memoryDir != "" {
-		memCtx, memErr := memory.LoadMemoryContext(s.memoryDir)
-		if memErr != nil {
-			logService.Errorf("memory load: error=%q", memErr)
-		} else if !memCtx.IsEmpty() {
-			memoryPrompt = memory.BuildSystemPrompt(memCtx)
-		}
+	if memResult.err != nil {
+		logService.Errorf("memory load: error=%q", memResult.err)
+	} else {
+		memoryPrompt = memResult.prompt
 	}
 
 	// Inject system prompt: persona template (with embedded memory) or plain memory.
