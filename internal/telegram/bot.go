@@ -95,6 +95,15 @@ func New(svc *app.Service, cfg Config) (*Bot, error) {
 func (b *Bot) Start(ctx context.Context) error {
 	b.ctx, b.cancel = context.WithCancel(ctx)
 
+	// Register slash commands so Telegram shows the command menu.
+	commands := tgbotapi.NewSetMyCommands(
+		tgbotapi.BotCommand{Command: "reset", Description: "重置對話，開始新的對話"},
+		tgbotapi.BotCommand{Command: "persona", Description: "查看或切換角色（用法：/persona [名稱]）"},
+	)
+	if _, err := b.api.Request(commands); err != nil {
+		logTelegram.Warnf("set commands failed: %v", err)
+	}
+
 	logTelegram.Logf("bot started: user=%s", b.api.Self.UserName)
 
 	u := tgbotapi.NewUpdate(0)
