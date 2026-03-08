@@ -1,6 +1,5 @@
 import { useAppStore } from "@/store/appStore";
 import { SessionList } from "./SessionList";
-import { InspectorPanel } from "./InspectorPanel";
 import { ThemeDropdown } from "./ThemeDropdown";
 
 /**
@@ -86,13 +85,6 @@ export function Sidebar() {
 
       {/* Bottom section — pushed to bottom via mt-auto */}
       <div className="mt-auto w-full">
-        {/* Inspector footer — hidden when collapsed */}
-        <div className="is-drawer-close:hidden">
-          <InspectorPanel />
-        </div>
-
-        <div className="divider my-0 mx-4 is-drawer-close:hidden" />
-
         {/* Settings — daisyUI menu with collapsible tooltip */}
         <ul className="menu w-full px-2 py-0">
           <li>
