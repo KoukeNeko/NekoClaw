@@ -171,7 +171,10 @@ func (p *AnthropicProvider) ID() string {
 	return "anthropic"
 }
 
-func (p *AnthropicProvider) ContextWindow(_ string) int {
+func (p *AnthropicProvider) ContextWindow(model string) int {
+	if cw := lookupModelContextWindow(model); cw > 0 {
+		return cw
+	}
 	return p.contextWindow
 }
 

@@ -147,7 +147,10 @@ func (p *OpenAIProvider) BaseURL() string {
 	return p.baseURL
 }
 
-func (p *OpenAIProvider) ContextWindow(_ string) int {
+func (p *OpenAIProvider) ContextWindow(model string) int {
+	if cw := lookupModelContextWindow(model); cw > 0 {
+		return cw
+	}
 	return p.contextWindow
 }
 

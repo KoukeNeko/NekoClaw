@@ -14,6 +14,7 @@ type ProfileUsageStats struct {
 	DisabledUntil  time.Time             `json:"disabled_until,omitempty"`
 	DisabledReason FailureReason         `json:"disabled_reason,omitempty"`
 	ErrorCount     int                   `json:"error_count,omitempty"`
+	SuccessCount   int                   `json:"success_count,omitempty"`
 	FailureCounts  map[FailureReason]int `json:"failure_counts,omitempty"`
 	LastFailureAt  time.Time             `json:"last_failure_at,omitempty"`
 }
@@ -165,6 +166,7 @@ func (p *AccountPool) MarkUsed(accountID string) {
 	}
 	stats := p.ensureStatsLocked(accountID)
 	stats.LastUsed = time.Now()
+	stats.SuccessCount++
 	stats.ErrorCount = 0
 	stats.CooldownUntil = time.Time{}
 	stats.DisabledUntil = time.Time{}
@@ -508,16 +510,32 @@ func (p *AccountPool) resolveOrderLocked(preferredID string, now time.Time) []st
 	return p.putPreferredFirst(ordered, preferredID)
 }
 
+// healthScoreLocked computes a health score for an account (0.0 = worst, 1.0 = best).
+// Accounts with no history default to 1.0 (benefit of the doubt).
+// Score = successCount / (successCount + errorCount), penalised by recent errors.
+func (p *AccountPool) healthScoreLocked(id string) float64 {
+	stats := p.usage[id]
+	if stats == nil {
+		return 1.0
+	}
+	total := stats.SuccessCount + stats.ErrorCount
+	if total == 0 {
+		return 1.0
+	}
+	return float64(stats.SuccessCount) / float64(total)
+}
+
 // orderProfilesByModeLocked mirrors OpenClaw's orderProfilesByMode:
 //   - Partition accounts into available and in-cooldown.
-//   - Sort available by error count (healthier first), then type, then lastUsed.
+//   - Sort available by health score (highest first), then type, then lastUsed.
 //   - Append in-cooldown accounts sorted by soonest-available.
 func (p *AccountPool) orderProfilesByModeLocked(ids []string, now time.Time) []string {
 	type scoredEntry struct {
-		id         string
-		errorCount int
-		typeScore  int
-		lastUsed   time.Time
+		id          string
+		healthScore float64
+		errorCount  int
+		typeScore   int
+		lastUsed    time.Time
 	}
 	available := make([]scoredEntry, 0, len(ids))
 	type cooldownEntry struct {
@@ -532,18 +550,23 @@ func (p *AccountPool) orderProfilesByModeLocked(ids []string, now time.Time) []s
 		} else {
 			account := p.accounts[id]
 			available = append(available, scoredEntry{
-				id:         id,
-				errorCount: p.errorCountLocked(id),
-				typeScore:  accountTypeScore(account.Type),
-				lastUsed:   p.lastUsedOrZeroLocked(id),
+				id:          id,
+				healthScore: p.healthScoreLocked(id),
+				errorCount:  p.errorCountLocked(id),
+				typeScore:   accountTypeScore(account.Type),
+				lastUsed:    p.lastUsedOrZeroLocked(id),
 			})
 		}
 	}
 
-	// Primary: fewer errors first (prefer healthier accounts).
-	// Secondary: type preference (oauth > token > api_key).
-	// Tertiary: lastUsed (oldest first for round-robin within type).
+	// Primary: health score (higher = healthier = preferred).
+	// Secondary: fewer errors (for tie-breaking within same health score).
+	// Tertiary: type preference (oauth > token > api_key).
+	// Quaternary: lastUsed (oldest first for round-robin within type).
 	sort.SliceStable(available, func(i, j int) bool {
+		if available[i].healthScore != available[j].healthScore {
+			return available[i].healthScore > available[j].healthScore
+		}
 		if available[i].errorCount != available[j].errorCount {
 			return available[i].errorCount < available[j].errorCount
 		}

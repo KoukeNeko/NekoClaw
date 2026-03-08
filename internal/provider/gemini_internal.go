@@ -115,7 +115,10 @@ func (p *GeminiInternalProvider) ID() string {
 	return "google-gemini-cli"
 }
 
-func (p *GeminiInternalProvider) ContextWindow(_ string) int {
+func (p *GeminiInternalProvider) ContextWindow(model string) int {
+	if cw := lookupModelContextWindow(model); cw > 0 {
+		return cw
+	}
 	return p.contextWindow
 }
 

@@ -13,6 +13,11 @@ import (
 
 const maxToolRounds = 8
 
+// maxToolResultBytes is the upper bound on tool output stored in context
+// messages. Outputs exceeding this are head+tail truncated to preserve
+// both the initial context and the final result/error.
+const maxToolResultBytes = 30 * 1024 // 30 KB ≈ ~7500 tokens
+
 type Runtime struct {
 	executor  Executor
 	approvals *ApprovalStore
@@ -353,7 +358,11 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 				events = append(events, execEvt)
 				emitToolEvent(&req, execEvt)
 			}
-			toolMsg := core.Message{
+			// Head+tail truncate tool output to prevent oversized context.
+		// Preserves both initial context and final results/errors.
+		content = truncateHeadTail(content, maxToolResultBytes)
+
+		toolMsg := core.Message{
 				Role:       core.RoleTool,
 				ToolName:   call.Name,
 				ToolCallID: call.ID,

@@ -304,5 +304,5 @@ func (e *RuntimeExecutor) runWebSearch(raw json.RawMessage) (string, error) {
 		))
 	}
 
-	return trimPreview(sb.String(), e.policy.MaxOutputBytes), nil
+	return truncateHeadTail(sb.String(), e.policy.MaxOutputBytes), nil
 }

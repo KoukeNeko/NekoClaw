@@ -261,7 +261,7 @@ func (e *RuntimeExecutor) runFileRead(raw json.RawMessage) (string, error) {
 		return "", fmt.Errorf("start_line must be <= end_line")
 	}
 	out := strings.Join(lines[start-1:end], "\n")
-	return trimPreview(out, e.policy.MaxOutputBytes), nil
+	return truncateHeadTail(out, e.policy.MaxOutputBytes), nil
 }
 
 func (e *RuntimeExecutor) runFileSearch(raw json.RawMessage) (string, error) {
@@ -604,18 +604,15 @@ func (e *RuntimeExecutor) runCommand(ctx context.Context, argv []string, workdir
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = cwd
 	output, runErr := cmd.CombinedOutput()
-	if len(output) > e.policy.MaxOutputBytes && e.policy.MaxOutputBytes > 0 {
-		output = output[:e.policy.MaxOutputBytes]
-	}
 	text := string(output)
 	if runErr != nil {
 		if strings.TrimSpace(text) == "" {
 			text = runErr.Error()
 		}
-		return "", fmt.Errorf("%s", trimPreview(text, e.policy.MaxOutputBytes))
+		return "", fmt.Errorf("%s", truncateHeadTail(text, e.policy.MaxOutputBytes))
 	}
 	if strings.TrimSpace(text) == "" {
 		text = "(ok)"
 	}
-	return trimPreview(text, e.policy.MaxOutputBytes), nil
+	return truncateHeadTail(text, e.policy.MaxOutputBytes), nil
 }

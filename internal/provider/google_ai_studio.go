@@ -91,7 +91,10 @@ func (p *GoogleAIStudioProvider) ID() string {
 	return "google-ai-studio"
 }
 
-func (p *GoogleAIStudioProvider) ContextWindow(_ string) int {
+func (p *GoogleAIStudioProvider) ContextWindow(model string) int {
+	if cw := lookupModelContextWindow(model); cw > 0 {
+		return cw
+	}
 	return p.contextWindow
 }
 

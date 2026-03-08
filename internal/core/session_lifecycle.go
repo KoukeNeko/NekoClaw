@@ -53,9 +53,13 @@ func (l *SessionLifecycle) ShouldReset(sessionID string) bool {
 		return false
 	}
 
-	// Idle timeout: only applies to interactive (TUI) sessions.
-	// Bot sessions rely on manual /reset and housekeeping only.
-	if !isBotSession(sessionID) && time.Since(meta.UpdatedAt) > l.config.IdleTimeout {
+	// Idle timeout: TUI sessions use the short timeout, bot sessions use
+	// BotIdleTimeout for automatic context freshness.
+	timeout := l.config.IdleTimeout
+	if isBotSession(sessionID) {
+		timeout = l.config.BotIdleTimeout
+	}
+	if time.Since(meta.UpdatedAt) > timeout {
 		return true
 	}
 
@@ -118,6 +122,8 @@ func (l *SessionLifecycle) RunHousekeeping() error {
 	sessions := l.store.ListSessions()
 	cutoff := time.Now().AddDate(0, 0, -l.config.RetentionDays)
 
+	botIdleCutoff := time.Now().Add(-l.config.BotIdleTimeout)
+
 	for _, meta := range sessions {
 		// Retention: delete sessions older than RetentionDays.
 		if meta.UpdatedAt.Before(cutoff) {
@@ -125,6 +131,16 @@ func (l *SessionLifecycle) RunHousekeeping() error {
 				meta.SessionID, meta.UpdatedAt.Format(time.RFC3339))
 			if err := l.store.DeleteSession(meta.SessionID); err != nil {
 				logSession.Errorf("housekeeping delete error: session_id=%s error=%v", meta.SessionID, err)
+			}
+			continue
+		}
+
+		// Bot idle timeout: rotate bot sessions idle longer than BotIdleTimeout.
+		if isBotSession(meta.SessionID) && meta.UpdatedAt.Before(botIdleCutoff) {
+			logSession.Logf("housekeeping rotate: session_id=%s reason=bot_idle updated_at=%s",
+				meta.SessionID, meta.UpdatedAt.Format(time.RFC3339))
+			if err := l.RotateSession(meta.SessionID); err != nil {
+				logSession.Errorf("housekeeping rotate error: session_id=%s error=%v", meta.SessionID, err)
 			}
 			continue
 		}

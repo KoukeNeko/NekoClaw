@@ -16,6 +16,10 @@ var logCompact = logger.New("compact", logger.Cyan)
 const (
 	DefaultReserveTokens    = 16384
 	defaultKeepRecentTokens = 20000
+	// minDropCount is the minimum number of entries that must be dropped
+	// for compaction to proceed. Compacting only 1-2 messages wastes an
+	// LLM call and produces a poor summary.
+	minDropCount = 3
 )
 
 // Compactor performs LLM-based compaction of session history.
@@ -77,7 +81,8 @@ func (c *Compactor) Compact(ctx context.Context, req CompactionRequest) (Compact
 
 	// Split entries into "to keep" (recent) and "to drop" (older).
 	kept, dropped := splitByTokenBudget(req.Entries, req.KeepRecentTokens)
-	if len(dropped) == 0 {
+	if len(dropped) < minDropCount {
+		// Not enough entries to justify an LLM summarization call.
 		return CompactionResult{KeptEntries: req.Entries}, nil
 	}
 
