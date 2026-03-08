@@ -1,5 +1,6 @@
 import { Fragment } from "react";
 import { useAppStore, type Route } from "@/store/appStore";
+import { PersonaPanel } from "./PersonaPanel";
 import { ProviderPanel } from "./ProviderPanel";
 
 /**
@@ -30,6 +31,8 @@ function renderPanel(route: Route) {
   switch (route) {
     case "settings/provider":
       return <ProviderPanel />;
+    case "settings/persona":
+      return <PersonaPanel />;
     default: {
       const label = TABS.find((t) => t.route === route)?.label ?? "";
       return <PlaceholderPanel name={label} />;
@@ -40,6 +43,8 @@ function renderPanel(route: Route) {
 export function SettingsPage() {
   const route = useAppStore((s) => s.route);
   const setRoute = useAppStore((s) => s.setRoute);
+  const panelWidth =
+    route === "settings/persona" ? "max-w-6xl" : "max-w-2xl";
 
   return (
     <div className="flex flex-col h-full">
@@ -91,7 +96,7 @@ export function SettingsPage() {
               onChange={() => setRoute(tab.route)}
             />
             <div className="tab-content border-l-0 border-r-0 border-base-300 rounded-none bg-base-100 p-6">
-              <div className="max-w-2xl mx-auto">
+              <div className={`mx-auto w-full ${panelWidth}`}>
                 {route === tab.route && renderPanel(tab.route)}
               </div>
             </div>

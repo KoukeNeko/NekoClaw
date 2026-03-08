@@ -481,9 +481,10 @@ export interface MCPBuiltinServer {
 // ---------------------------------------------------------------------------
 
 export interface PersonaInfo {
+  id: string;
   dir_name: string;
   name: string;
-  active: boolean;
+  description: string;
 }
 
 // ---------------------------------------------------------------------------

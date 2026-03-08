@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { getActivePersona } from "@/api/client";
 import { useAppStore, type Route } from "@/store/appStore";
 import { AppLayout } from "@/layouts/AppLayout";
 import { ChatPage } from "@/components/chat/ChatPage";
@@ -43,6 +44,7 @@ function setHash(route: Route) {
 export function App() {
   const route = useAppStore((s) => s.route);
   const setRoute = useAppStore((s) => s.setRoute);
+  const setActivePersona = useAppStore((s) => s.setActivePersona);
 
   // Sync hash → store on initial load and popstate
   useEffect(() => {
@@ -62,6 +64,23 @@ export function App() {
       setHash(route);
     }
   }, [route]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    getActivePersona()
+      .then((persona) => {
+        if (cancelled) return;
+        setActivePersona(persona?.name ?? "");
+      })
+      .catch(() => {
+        if (cancelled) return;
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [setActivePersona]);
 
   // Global keyboard shortcuts
   useEffect(() => {

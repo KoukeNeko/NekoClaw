@@ -421,8 +421,9 @@ export async function listPersonas(): Promise<PersonaInfo[]> {
   return resp.personas ?? [];
 }
 
-export function getActivePersona(): Promise<PersonaInfo | null> {
-  return get("/v1/personas/active");
+export async function getActivePersona(): Promise<PersonaInfo | null> {
+  const resp = await get<{ persona: PersonaInfo | null }>("/v1/personas/active");
+  return resp.persona ?? null;
 }
 
 export function usePersona(dirName: string): Promise<void> {
