@@ -18,7 +18,7 @@ export function InspectorPanel() {
   ).length;
 
   return (
-    <div className="border-t border-base-300 px-1 py-2">
+    <div className="border-t border-base-300 px-2 py-2">
       <ul className="list list-none text-xs">
         {/* Provider & Model */}
         <li className="list-row py-1 px-2 flex justify-between items-center">
@@ -45,13 +45,12 @@ export function InspectorPanel() {
             <span>{contextPercent}%</span>
           </div>
           <progress
-            className={`progress progress-sm w-full ${
-              contextPercent > 80
+            className={`progress progress-sm w-full ${contextPercent > 80
                 ? "progress-error"
                 : contextPercent > 50
                   ? "progress-warning"
                   : "progress-success"
-            }`}
+              }`}
             value={Math.min(contextPercent, 100)}
             max={100}
           />

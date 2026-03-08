@@ -9,8 +9,17 @@ import { ThinkingIndicator } from "./ThinkingIndicator";
 export function MessageList() {
   const messages = useAppStore((s) => s.messages);
   const isStreaming = useAppStore((s) => s.isStreaming);
+  const sessionID = useAppStore((s) => s.sessionID);
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Scroll to bottom instantly when switching sessions
+  useEffect(() => {
+    // Use requestAnimationFrame to ensure DOM has rendered the new messages
+    requestAnimationFrame(() => {
+      bottomRef.current?.scrollIntoView();
+    });
+  }, [sessionID]);
 
   // Auto-scroll to bottom on new messages or streaming updates
   useEffect(() => {

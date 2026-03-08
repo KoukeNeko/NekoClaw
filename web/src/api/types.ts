@@ -545,4 +545,9 @@ export interface TranscriptEntry {
   content: string;
   image_names?: string[];
   created_at: string;
+  // Assistant response metadata (populated for role=assistant only)
+  provider?: string;
+  model?: string;
+  usage?: UsageInfo;
+  tool_events?: ToolEvent[];
 }

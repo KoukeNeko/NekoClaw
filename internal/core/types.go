@@ -237,6 +237,12 @@ type SessionEntry struct {
 	ToolName   string      `json:"tool_name,omitempty"`
 	ToolCallID string      `json:"tool_call_id,omitempty"`
 
+	// type=message (assistant response metadata — populated for role=assistant)
+	MsgProvider  string      `json:"msg_provider,omitempty"`
+	MsgModel     string      `json:"msg_model,omitempty"`
+	MsgUsage     *UsageInfo  `json:"msg_usage,omitempty"`
+	MsgToolEvents []ToolEvent `json:"msg_tool_events,omitempty"`
+
 	// type=compaction
 	Summary          string `json:"summary,omitempty"`
 	DroppedCount     int    `json:"dropped_count,omitempty"`
@@ -333,4 +339,24 @@ func MessageToEntry(msg Message) SessionEntry {
 		ToolName:   msg.ToolName,
 		ToolCallID: msg.ToolCallID,
 	}
+}
+
+// AssistantResponseMeta holds per-message metadata for assistant responses.
+type AssistantResponseMeta struct {
+	Provider   string
+	Model      string
+	Usage      UsageInfo
+	ToolEvents []ToolEvent
+}
+
+// NewAssistantEntryWithMeta creates an assistant message entry with response metadata.
+func NewAssistantEntryWithMeta(content string, meta AssistantResponseMeta) SessionEntry {
+	e := NewMessageEntry(RoleAssistant, content)
+	e.MsgProvider = meta.Provider
+	e.MsgModel = meta.Model
+	e.MsgUsage = &meta.Usage
+	if len(meta.ToolEvents) > 0 {
+		e.MsgToolEvents = meta.ToolEvents
+	}
+	return e
 }

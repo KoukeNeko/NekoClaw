@@ -88,12 +88,18 @@ export function SessionList() {
 }
 
 /** Convert API transcript entries to ChatMessages for display.
- *  The API already filters to user/assistant roles only. */
+ *  The API already filters to user/assistant roles only.
+ *  Assistant messages include per-message metadata (provider, model, usage, tools). */
 function transcriptToMessages(entries: TranscriptEntry[]): ChatMessage[] {
   return entries.map((entry, i) => ({
     id: `tx-${i + 1}`,
     role: entry.role as ChatMessage["role"],
     content: entry.content ?? "",
     createdAt: entry.created_at,
+    // Per-message metadata from transcript (assistant only)
+    provider: entry.provider,
+    model: entry.model,
+    usage: entry.usage,
+    toolEvents: entry.tool_events,
   }));
 }

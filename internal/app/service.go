@@ -322,32 +322,51 @@ func (s *Service) RenameSession(sessionID, title string) error {
 	return nil
 }
 
-// TranscriptMessage is a lightweight message for TUI display (no base64 image data).
+// TranscriptMessage is a lightweight message for display (no base64 image data).
+// Assistant messages include per-message metadata (provider, model, usage, tool events).
 type TranscriptMessage struct {
-	Role       string   `json:"role"`
-	Content    string   `json:"content"`
-	ImageNames []string `json:"image_names,omitempty"`
-	CreatedAt  string   `json:"created_at"`
+	Role       string            `json:"role"`
+	Content    string            `json:"content"`
+	ImageNames []string          `json:"image_names,omitempty"`
+	CreatedAt  string            `json:"created_at"`
+	Provider   string            `json:"provider,omitempty"`
+	Model      string            `json:"model,omitempty"`
+	Usage      *core.UsageInfo   `json:"usage,omitempty"`
+	ToolEvents []core.ToolEvent  `json:"tool_events,omitempty"`
 }
 
-// GetSessionTranscript returns user and assistant messages for display in the TUI.
+// GetSessionTranscript returns user and assistant messages for display.
 // Image base64 data is stripped; only file names are included.
+// Assistant messages include per-message provider/model/usage/tool metadata.
 func (s *Service) GetSessionTranscript(sessionID string) []TranscriptMessage {
-	msgs := s.sessions.HistoryAsMessages(sessionID)
-	display := make([]TranscriptMessage, 0, len(msgs))
-	for _, m := range msgs {
-		switch m.Role {
+	entries := s.sessions.History(sessionID)
+	display := make([]TranscriptMessage, 0, len(entries))
+	for _, e := range entries {
+		if e.Type != core.EntryMessage {
+			continue
+		}
+		switch e.Role {
 		case core.RoleUser, core.RoleAssistant:
 			var imageNames []string
-			for _, img := range m.Images {
+			for _, img := range e.Images {
 				imageNames = append(imageNames, img.FileName)
 			}
-			display = append(display, TranscriptMessage{
-				Role:       string(m.Role),
-				Content:    m.Content,
+			tm := TranscriptMessage{
+				Role:       string(e.Role),
+				Content:    e.Content,
 				ImageNames: imageNames,
-				CreatedAt:  m.CreatedAt.Format("2006-01-02T15:04:05.999999999Z07:00"),
-			})
+				CreatedAt:  e.Timestamp.Format("2006-01-02T15:04:05.999999999Z07:00"),
+			}
+			// Include metadata for assistant messages
+			if e.Role == core.RoleAssistant {
+				tm.Provider = e.MsgProvider
+				tm.Model = e.MsgModel
+				tm.Usage = e.MsgUsage
+				if len(e.MsgToolEvents) > 0 {
+					tm.ToolEvents = e.MsgToolEvents
+				}
+			}
+			display = append(display, tm)
 		}
 	}
 	return display
@@ -2806,7 +2825,22 @@ func (s *Service) attemptSingleProvider(
 			})
 			if runErr == nil {
 				if !params.disableSession && !runResult.Pending && len(runResult.SessionMessages) > 0 {
-					s.sessions.AppendMessage(sessionID, runResult.SessionMessages...)
+					// Build entries with per-message metadata for assistant messages
+					toolMeta := core.AssistantResponseMeta{
+						Provider:   providerID,
+						Model:      attemptModelID,
+						Usage:      runResult.Response.Usage,
+						ToolEvents: runResult.Response.ToolEvents,
+					}
+					entries := make([]core.SessionEntry, 0, len(runResult.SessionMessages))
+					for _, msg := range runResult.SessionMessages {
+						if msg.Role == core.RoleAssistant {
+							entries = append(entries, core.NewAssistantEntryWithMeta(msg.Content, toolMeta))
+						} else {
+							entries = append(entries, core.MessageToEntry(msg))
+						}
+					}
+					s.sessions.Append(sessionID, entries...)
 					// Async title generation on first exchange (tool path).
 					if hasUserMessage {
 						var firstAssistant string
@@ -2821,15 +2855,11 @@ func (s *Service) attemptSingleProvider(
 						}
 					}
 					if s.searchIndex != nil {
-						newEntries := make([]core.SessionEntry, 0, len(runResult.SessionMessages))
-						for _, msg := range runResult.SessionMessages {
-							newEntries = append(newEntries, core.MessageToEntry(msg))
-						}
 						go func(entries []core.SessionEntry) {
 							if idxErr := s.searchIndex.Index(sessionID, entries); idxErr != nil {
 								logService.Errorf("search index: session_id=%s error=%q", sessionID, idxErr)
 							}
-						}(newEntries)
+						}(entries)
 					}
 				}
 				pool.MarkUsed(account.ID)
@@ -2932,27 +2962,27 @@ func (s *Service) attemptSingleProvider(
 					if streamOK {
 						text := strings.TrimSpace(fullText.String())
 						if text != "" {
-							assistant := core.Message{Role: core.RoleAssistant, Content: text, CreatedAt: time.Now()}
+							assistantEntry := core.NewAssistantEntryWithMeta(text, core.AssistantResponseMeta{
+								Provider: providerID,
+								Model:    attemptModelID,
+								Usage:    streamUsage,
+							})
 							if !params.disableSession {
+								sessionEntries := make([]core.SessionEntry, 0, 2)
 								if hasUserMessage {
-									s.sessions.AppendMessage(sessionID, userMessage, assistant)
-								} else {
-									s.sessions.AppendMessage(sessionID, assistant)
+									sessionEntries = append(sessionEntries, core.MessageToEntry(userMessage))
 								}
+								sessionEntries = append(sessionEntries, assistantEntry)
+								s.sessions.Append(sessionID, sessionEntries...)
 								if hasUserMessage {
-									s.generateSessionTitleAsync(providerID, attemptModelID, sessionID, account, userMessage.Content, assistant.Content)
+									s.generateSessionTitleAsync(providerID, attemptModelID, sessionID, account, userMessage.Content, text)
 								}
 								if s.searchIndex != nil {
-									newEntries := make([]core.SessionEntry, 0, 2)
-									if hasUserMessage {
-										newEntries = append(newEntries, core.MessageToEntry(userMessage))
-									}
-									newEntries = append(newEntries, core.MessageToEntry(assistant))
 									go func(entries []core.SessionEntry) {
 										if idxErr := s.searchIndex.Index(sessionID, entries); idxErr != nil {
 											logService.Errorf("search index: session_id=%s error=%q", sessionID, idxErr)
 										}
-									}(newEntries)
+									}(sessionEntries)
 								}
 							}
 							if providerID == "google-gemini-cli" {
@@ -3019,29 +3049,29 @@ func (s *Service) attemptSingleProvider(
 			Generation: generationParams,
 		})
 		if err == nil {
-			assistant := core.Message{Role: core.RoleAssistant, Content: resp.Text, CreatedAt: time.Now()}
+			assistantEntry := core.NewAssistantEntryWithMeta(resp.Text, core.AssistantResponseMeta{
+				Provider: providerID,
+				Model:    attemptModelID,
+				Usage:    resp.Usage,
+			})
 			if !params.disableSession {
+				sessionEntries := make([]core.SessionEntry, 0, 2)
 				if hasUserMessage {
-					s.sessions.AppendMessage(sessionID, userMessage, assistant)
-				} else {
-					s.sessions.AppendMessage(sessionID, assistant)
+					sessionEntries = append(sessionEntries, core.MessageToEntry(userMessage))
 				}
+				sessionEntries = append(sessionEntries, assistantEntry)
+				s.sessions.Append(sessionID, sessionEntries...)
 				// Async title generation on first exchange.
 				if hasUserMessage {
-					s.generateSessionTitleAsync(providerID, attemptModelID, sessionID, account, userMessage.Content, assistant.Content)
+					s.generateSessionTitleAsync(providerID, attemptModelID, sessionID, account, userMessage.Content, resp.Text)
 				}
 				// Async index for memory search.
 				if s.searchIndex != nil {
-					newEntries := make([]core.SessionEntry, 0, 2)
-					if hasUserMessage {
-						newEntries = append(newEntries, core.MessageToEntry(userMessage))
-					}
-					newEntries = append(newEntries, core.MessageToEntry(assistant))
 					go func(entries []core.SessionEntry) {
 						if idxErr := s.searchIndex.Index(sessionID, entries); idxErr != nil {
 							logService.Errorf("search index: session_id=%s error=%q", sessionID, idxErr)
 						}
-					}(newEntries)
+					}(sessionEntries)
 				}
 			}
 			if providerID == "google-gemini-cli" {

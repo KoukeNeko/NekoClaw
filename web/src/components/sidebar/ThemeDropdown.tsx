@@ -67,11 +67,11 @@ export function ThemeDropdown() {
   }
 
   return (
-    <div className="dropdown dropdown-top is-drawer-close:dropdown-right w-full">
+    <div className="dropdown dropdown-top w-full">
       <div
         tabIndex={0}
         role="button"
-        className="btn btn-ghost btn-sm w-full justify-start gap-2 is-drawer-close:btn-square is-drawer-close:tooltip is-drawer-close:tooltip-right"
+        className="btn btn-ghost w-full justify-start gap-2 h-auto py-2.5 is-drawer-close:btn-square is-drawer-close:tooltip is-drawer-close:tooltip-right"
         data-tip="主題"
       >
         <svg
