@@ -3,7 +3,7 @@
 Go-based agent runtime with:
 
 - TUI chat client
-- HTTP API for future Web UI
+- HTTP API and embedded Web UI
 - Discord bot (emoji reactions, per-channel sessions, slash commands, image support)
 - Telegram bot (per-chat sessions, slash commands, image support)
 - Pluggable LLM provider architecture with automatic failover
@@ -13,7 +13,7 @@ Go-based agent runtime with:
 - Tool output head+tail truncation (preserves beginning and end of long outputs)
 - Persistent channel-session bindings (survive bot restarts)
 - Session lifecycle management (idle auto-expiry, retention cleanup, size rotation)
-- Streaming response support across all frontends (TUI, Discord, Telegram)
+- Streaming response support across all frontends (TUI, Web UI, Discord, Telegram)
 - Persona system with template rendering and few-shot anchors
 - Memory system (long-term notes, daily logs, FTS5 search index)
 - MCP (Model Context Protocol) tool integration
@@ -22,15 +22,52 @@ Go-based agent runtime with:
 
 ## Quick Start
 
+For a zero-auth local smoke test, run with the mock provider:
+
 ```bash
-go run ./cmd/nekoclaw -mode both
+go run ./cmd/nekoclaw -mode both -provider mock
 ```
 
-Defaults:
+Run modes:
+
+- `api` — API only
+- `tui` — TUI only
+- `both` — API + TUI (default)
+- `web` — API + embedded Web UI
+
+Defaults when flags are omitted:
 
 - API: `127.0.0.1:8085`
 - TUI -> API: `http://127.0.0.1:8085`
-- Provider: `mock`
+- Mode: `both`
+- Provider: `google-gemini-cli`
+- Model: `default`
+- Session: `main`
+
+## Web UI / Docker
+
+`-mode web` serves the embedded frontend from the same Go process. The Web UI includes chat, session history, live tool status, and settings panels for Provider, Persona, Auth, Sessions, Memory, Usage, MCP, Discord, Telegram, and Tools.
+
+Local Web UI run:
+
+```bash
+cd web && npm ci && npm run build
+go run ./cmd/nekoclaw -mode web -provider mock -addr 0.0.0.0:8085
+```
+
+Docker image:
+
+```bash
+docker build -t nekoclaw:local .
+docker run --rm -p 8085:8085 -v nekoclaw-data:/data/.nekoclaw nekoclaw:local
+```
+
+The container defaults to `-mode web` and persists runtime state under `/data/.nekoclaw`.
+
+GitHub Actions can publish the image to GHCR as `ghcr.io/koukeneko/nekoclaw`:
+
+- push to `main` -> `latest` and `sha-*`
+- push `vX.Y.Z` -> `X.Y.Z`, `X.Y`, `X`, and `sha-*`
 
 ## Gemini Internal Provider
 
@@ -99,19 +136,52 @@ export GEMINI_INTERNAL_PROJECT_ID="my-gcp-project"
 go run ./cmd/nekoclaw -mode both -provider google-gemini-cli -model gemini-3-pro-preview
 ```
 
-## Anthropic Provider (Claude setup-token / API key)
+## Google AI Studio Provider
+
+The project includes a `google-ai-studio` provider that supports:
+
+- API key profile management in TUI and Web UI
+- model listing via `GET /v1/ai-studio/models`
+- default fallback target when no explicit fallback chain is configured
+
+TUI auth flow (Auth section):
+
+- `a` add AI Studio API key
+- `Enter` use selected profile
+- `d` delete selected profile
+
+API endpoints:
+
+- `POST /v1/auth/ai-studio/add-key`
+- `GET /v1/auth/ai-studio/profiles`
+- `POST /v1/auth/ai-studio/use`
+- `POST /v1/auth/ai-studio/delete`
+- `GET /v1/ai-studio/models`
+
+Env credential loading (optional):
+
+- `GEMINI_API_KEY` / `GOOGLE_API_KEY`
+- `GEMINI_API_KEYS` / `GOOGLE_API_KEYS` (CSV)
+- `GEMINI_API_KEY_*`
+- `GOOGLE_API_KEY_*`
+- `GOOGLE_AI_STUDIO_BASE_URL` (optional override)
+
+## Anthropic Provider (Claude setup-token / API key / browser login)
 
 The project includes an `anthropic` provider that supports:
 
 - Claude subscription setup-token (`sk-ant-oat01-...`)
 - Anthropic API key
+- browser login bridge with job polling and manual completion
 - account pool rotation/cooldown/failover (`token` naturally preferred over `api_key`)
 - default model runtime fallback (`claude-sonnet-4-6`)
 
 TUI auth flow (Auth section):
 
+- `b` start Anthropic browser login
 - `t` add Anthropic setup-token (masked input)
 - `k` add Anthropic API key (masked input)
+- `c` cancel active browser login job
 - `Enter` use selected profile
 - `d` delete selected profile
 
@@ -122,6 +192,10 @@ API endpoints:
 - `GET /v1/auth/anthropic/profiles`
 - `POST /v1/auth/anthropic/use`
 - `POST /v1/auth/anthropic/delete`
+- `POST /v1/auth/anthropic/browser/start`
+- `POST /v1/auth/anthropic/browser/manual/complete`
+- `POST /v1/auth/anthropic/browser/cancel`
+- `GET /v1/auth/anthropic/browser/jobs/<job_id>`
 
 Env credential loading (optional):
 
@@ -138,7 +212,7 @@ Env credential loading (optional):
 The project now includes:
 
 - `openai` (API key path)
-- `openai-codex` (OAuth token path)
+- `openai-codex` (OAuth token path + browser login bridge)
 
 OpenClaw-aligned runtime behavior:
 
@@ -147,6 +221,30 @@ OpenClaw-aligned runtime behavior:
   - `openai-codex` -> `gpt-5.3-codex`
 - `openai` and `openai-codex` credentials are not mixed.
 - if `provider=openai` has no API key but `openai-codex` OAuth exists, chat returns a clear guardrail error (use `openai-codex/...` or set `OPENAI_API_KEY`).
+
+TUI auth flow (Auth section):
+
+- `w` start OpenAI Codex browser login
+- `p` add OpenAI API key
+- `x` add OpenAI Codex OAuth token
+- `c` cancel active browser login job
+- `Enter` use selected profile
+- `d` delete selected profile
+
+API endpoints:
+
+- `POST /v1/auth/openai/add-key`
+- `POST /v1/auth/openai-codex/add-token`
+- `POST /v1/auth/openai-codex/browser/start`
+- `POST /v1/auth/openai-codex/browser/manual/complete`
+- `POST /v1/auth/openai-codex/browser/cancel`
+- `GET /v1/auth/openai-codex/browser/jobs/<job_id>`
+- `GET /v1/auth/openai/profiles`
+- `GET /v1/auth/openai-codex/profiles`
+- `POST /v1/auth/openai/use`
+- `POST /v1/auth/openai-codex/use`
+- `POST /v1/auth/openai/delete`
+- `POST /v1/auth/openai-codex/delete`
 
 Env credential loading (optional):
 
@@ -200,7 +298,7 @@ Create `accounts.json` in repo root:
 
 ## Discord Bot
 
-NekoClaw includes a built-in Discord bot that runs alongside all modes (api/tui/both).
+NekoClaw includes a built-in Discord bot that runs alongside all modes (`api` / `tui` / `both` / `web`).
 
 ### Configuration
 
@@ -238,7 +336,7 @@ TUI settings also support:
 
 ## Telegram Bot
 
-NekoClaw includes a built-in Telegram bot using long polling.
+NekoClaw includes a built-in Telegram bot using long polling and runs alongside all modes (`api` / `tui` / `both` / `web`).
 
 ### Configuration
 
@@ -293,15 +391,26 @@ Override path: `--memory-dir` flag or `NEKOCLAW_MEMORY_DIR` env.
 
 ## API Endpoints
 
+When `-mode web` is active, `/` serves the embedded SPA with client-side routing fallback. The API surface itself is grouped below.
+
+Core:
+
 - `GET /healthz`
 - `GET /v1/providers`
 - `GET /v1/accounts?provider=<id>`
+- `GET /v1/models?provider=<id>&profile_id=<id>`
+- `GET/PUT /v1/fallbacks`
+- `GET/PUT /v1/default-provider`
 - `POST /v1/chat`
-- `POST /v1/integrations/discord/events`
-- `GET /v1/gemini/quota?provider=google-gemini-cli&account_id=<id>&profile_id=<id>`
+- `POST /v1/chat/stream`
+- `GET /v1/tool-status?session_id=<id>`
+
+Provider auth:
+
+- `GET /oauth2callback`
+- `GET /v1/gemini/quota?provider=<id>&account_id=<id>`
 - `POST /v1/gemini/discover-project`
 - `POST /v1/auth/gemini/start`
-- `GET /oauth2callback`
 - `POST /v1/auth/gemini/manual/complete`
 - `GET /v1/auth/gemini/profiles`
 - `POST /v1/auth/gemini/use`
@@ -309,17 +418,65 @@ Override path: `--memory-dir` flag or `NEKOCLAW_MEMORY_DIR` env.
 - `GET /v1/auth/ai-studio/profiles`
 - `POST /v1/auth/ai-studio/use`
 - `POST /v1/auth/ai-studio/delete`
-- `GET /v1/ai-studio/models`
+- `GET /v1/ai-studio/models?profile_id=<id>`
 - `POST /v1/auth/anthropic/add-token`
 - `POST /v1/auth/anthropic/add-api-key`
 - `GET /v1/auth/anthropic/profiles`
 - `POST /v1/auth/anthropic/use`
 - `POST /v1/auth/anthropic/delete`
+- `POST /v1/auth/anthropic/browser/start`
+- `POST /v1/auth/anthropic/browser/manual/complete`
+- `POST /v1/auth/anthropic/browser/cancel`
+- `GET /v1/auth/anthropic/browser/jobs/<job_id>`
+- `POST /v1/auth/openai/add-key`
+- `POST /v1/auth/openai-codex/add-token`
+- `POST /v1/auth/openai-codex/browser/start`
+- `POST /v1/auth/openai-codex/browser/manual/complete`
+- `POST /v1/auth/openai-codex/browser/cancel`
+- `GET /v1/auth/openai-codex/browser/jobs/<job_id>`
+- `GET /v1/auth/openai/profiles`
+- `GET /v1/auth/openai-codex/profiles`
+- `POST /v1/auth/openai/use`
+- `POST /v1/auth/openai-codex/use`
+- `POST /v1/auth/openai/delete`
+- `POST /v1/auth/openai-codex/delete`
 
+Sessions, usage, and memory:
+
+- `GET /v1/sessions`
+- `POST /v1/sessions/delete`
+- `POST /v1/sessions/rename`
+- `GET /v1/sessions/transcript?session_id=<id>`
+- `GET /v1/usage/summary`
 - `POST /v1/memory/search`
 
+Config and tools:
+
+- `GET/PUT /v1/general/config`
 - `GET/PUT /v1/discord/config`
 - `GET/PUT /v1/telegram/config`
+- `GET /v1/tools/catalog`
+- `GET/PUT /v1/tools/config`
+
+MCP and personas:
+
+- `GET /v1/mcp/servers`
+- `GET /v1/mcp/tools`
+- `GET /v1/mcp/builtin`
+- `POST /v1/mcp/builtin/toggle`
+- `GET /v1/mcp/configs`
+- `POST /v1/mcp/configs/save`
+- `POST /v1/mcp/configs/delete`
+- `POST /v1/mcp/configs/apply`
+- `GET /v1/personas`
+- `GET /v1/personas/active`
+- `POST /v1/personas/use`
+- `POST /v1/personas/clear`
+- `POST /v1/personas/reload`
+
+Integrations:
+
+- `POST /v1/integrations/discord/events`
 
 ## Context Window & Compression
 
