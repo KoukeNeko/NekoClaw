@@ -12,6 +12,12 @@
       "runtimeExecutable": "go",
       "runtimeArgs": ["run", "./cmd/nekoclaw", "-mode", "both"],
       "port": 8085
+    },
+    {
+      "name": "vite-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "web"],
+      "port": 5173
     }
   ]
 }

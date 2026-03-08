@@ -242,6 +242,7 @@ type SessionEntry struct {
 	MsgModel     string      `json:"msg_model,omitempty"`
 	MsgUsage     *UsageInfo  `json:"msg_usage,omitempty"`
 	MsgToolEvents []ToolEvent `json:"msg_tool_events,omitempty"`
+	MsgElapsedMs  int64       `json:"msg_elapsed_ms,omitempty"`
 
 	// type=compaction
 	Summary          string `json:"summary,omitempty"`
@@ -347,6 +348,7 @@ type AssistantResponseMeta struct {
 	Model      string
 	Usage      UsageInfo
 	ToolEvents []ToolEvent
+	ElapsedMs  int64
 }
 
 // NewAssistantEntryWithMeta creates an assistant message entry with response metadata.
@@ -358,5 +360,6 @@ func NewAssistantEntryWithMeta(content string, meta AssistantResponseMeta) Sessi
 	if len(meta.ToolEvents) > 0 {
 		e.MsgToolEvents = meta.ToolEvents
 	}
+	e.MsgElapsedMs = meta.ElapsedMs
 	return e
 }

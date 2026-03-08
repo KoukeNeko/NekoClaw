@@ -550,4 +550,5 @@ export interface TranscriptEntry {
   model?: string;
   usage?: UsageInfo;
   tool_events?: ToolEvent[];
+  elapsed_ms?: number;
 }

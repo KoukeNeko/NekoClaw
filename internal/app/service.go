@@ -333,6 +333,7 @@ type TranscriptMessage struct {
 	Model      string            `json:"model,omitempty"`
 	Usage      *core.UsageInfo   `json:"usage,omitempty"`
 	ToolEvents []core.ToolEvent  `json:"tool_events,omitempty"`
+	ElapsedMs  int64             `json:"elapsed_ms,omitempty"`
 }
 
 // GetSessionTranscript returns user and assistant messages for display.
@@ -362,6 +363,7 @@ func (s *Service) GetSessionTranscript(sessionID string) []TranscriptMessage {
 				tm.Provider = e.MsgProvider
 				tm.Model = e.MsgModel
 				tm.Usage = e.MsgUsage
+				tm.ElapsedMs = e.MsgElapsedMs
 				if len(e.MsgToolEvents) > 0 {
 					tm.ToolEvents = e.MsgToolEvents
 				}
@@ -2543,6 +2545,7 @@ func (s *Service) attemptSingleProvider(
 	modelID := params.modelID
 	isDefaultModel := params.isDefaultModel
 	sessionID := params.sessionID
+	startTime := time.Now()
 
 	prov, pool, err := s.resolveProviderPool(providerID)
 	if err != nil {
@@ -2831,6 +2834,7 @@ func (s *Service) attemptSingleProvider(
 						Model:      attemptModelID,
 						Usage:      runResult.Response.Usage,
 						ToolEvents: runResult.Response.ToolEvents,
+						ElapsedMs:  time.Since(startTime).Milliseconds(),
 					}
 					entries := make([]core.SessionEntry, 0, len(runResult.SessionMessages))
 					for _, msg := range runResult.SessionMessages {
@@ -2963,9 +2967,10 @@ func (s *Service) attemptSingleProvider(
 						text := strings.TrimSpace(fullText.String())
 						if text != "" {
 							assistantEntry := core.NewAssistantEntryWithMeta(text, core.AssistantResponseMeta{
-								Provider: providerID,
-								Model:    attemptModelID,
-								Usage:    streamUsage,
+								Provider:  providerID,
+								Model:     attemptModelID,
+								Usage:     streamUsage,
+								ElapsedMs: time.Since(startTime).Milliseconds(),
 							})
 							if !params.disableSession {
 								sessionEntries := make([]core.SessionEntry, 0, 2)
@@ -3053,6 +3058,7 @@ func (s *Service) attemptSingleProvider(
 				Provider: providerID,
 				Model:    attemptModelID,
 				Usage:    resp.Usage,
+				ElapsedMs: time.Since(startTime).Milliseconds(),
 			})
 			if !params.disableSession {
 				sessionEntries := make([]core.SessionEntry, 0, 2)
