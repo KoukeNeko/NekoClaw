@@ -130,6 +130,45 @@ func (cv *ChatViewport) UpdateLastMessage(content string) {
 	}
 }
 
+// AppendToLastMessage appends text to the last message's Content and re-renders.
+func (cv *ChatViewport) AppendToLastMessage(text string) {
+	if len(cv.messages) == 0 {
+		return
+	}
+	cv.atBottom = cv.viewport.AtBottom()
+	last := &cv.messages[len(cv.messages)-1]
+	last.Content += text
+	last.renderedCache = ""
+	last.renderedWidth = 0
+	cv.rebuildContent()
+	if cv.atBottom {
+		cv.viewport.GotoBottom()
+	}
+}
+
+// UpdateLastMessageMeta copies metadata fields from meta to the last message
+// without changing its Content. Updates Provider, Model, token counts,
+// ElapsedMs, and ToolEvents, then re-renders.
+func (cv *ChatViewport) UpdateLastMessageMeta(meta ChatMessage) {
+	if len(cv.messages) == 0 {
+		return
+	}
+	cv.atBottom = cv.viewport.AtBottom()
+	last := &cv.messages[len(cv.messages)-1]
+	last.Provider = meta.Provider
+	last.Model = meta.Model
+	last.InputTokens = meta.InputTokens
+	last.OutputTokens = meta.OutputTokens
+	last.ElapsedMs = meta.ElapsedMs
+	last.ToolEvents = meta.ToolEvents
+	last.renderedCache = ""
+	last.renderedWidth = 0
+	cv.rebuildContent()
+	if cv.atBottom {
+		cv.viewport.GotoBottom()
+	}
+}
+
 // ScrollPercent returns the current scroll percentage.
 func (cv ChatViewport) ScrollPercent() float64 {
 	return cv.viewport.ScrollPercent()

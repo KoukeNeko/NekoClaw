@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -66,6 +67,7 @@ type anthropicRequest struct {
 	MaxTokens   int                `json:"max_tokens"`
 	System      string             `json:"system,omitempty"`
 	Messages    []anthropicMessage `json:"messages"`
+	Stream      bool               `json:"stream,omitempty"`
 	Temperature *float64           `json:"temperature,omitempty"`
 	TopP        *float64           `json:"top_p,omitempty"`
 }
@@ -285,6 +287,207 @@ func (p *AnthropicProvider) Generate(ctx context.Context, req GenerateRequest) (
 		Raw:      body,
 		Usage:    usage,
 	}, nil
+}
+
+// GenerateStream sends a streaming request to Anthropic's /v1/messages endpoint
+// and returns a channel that yields incremental text deltas as they arrive.
+func (p *AnthropicProvider) GenerateStream(ctx context.Context, req GenerateRequest) (<-chan GenerateStreamChunk, error) {
+	secret := strings.TrimSpace(req.Account.Token)
+	if secret == "" {
+		return nil, &FailureError{
+			Reason:   core.FailureAuthPermanent,
+			Message:  "missing anthropic credential",
+			Endpoint: p.baseURL,
+			Status:   http.StatusUnauthorized,
+		}
+	}
+
+	modelID := strings.TrimSpace(req.Model)
+	if modelID == "" || strings.EqualFold(modelID, "default") {
+		modelID = "claude-sonnet-4-5"
+	}
+
+	system, turns := splitAnthropicMessages(req.Messages)
+	if len(turns) == 0 {
+		return nil, &FailureError{
+			Reason:   core.FailureFormat,
+			Message:  "anthropic request has no chat turns",
+			Endpoint: p.baseURL,
+			Status:   http.StatusBadRequest,
+		}
+	}
+
+	payload := anthropicRequest{
+		Model:     modelID,
+		MaxTokens: p.maxTokens,
+		System:    system,
+		Messages:  turns,
+		Stream:    true,
+	}
+	if req.Generation != nil {
+		// Anthropic forbids sending both temperature and top_p simultaneously.
+		// Prefer temperature when both are provided.
+		if req.Generation.Temperature != nil {
+			payload.Temperature = req.Generation.Temperature
+		} else {
+			payload.TopP = req.Generation.TopP
+		}
+	}
+	raw, _ := json.Marshal(payload)
+
+	targetURL := strings.TrimRight(p.baseURL, "/") + "/v1/messages"
+	authType := resolveAnthropicCredentialType(req.Account, secret)
+
+	resp, err := doWithRetry(ctx, DefaultRetryConfig(), func() (*http.Response, error) {
+		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(raw))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		setAnthropicHeaders(httpReq, secret, authType)
+		return p.client.Do(httpReq)
+	}, nil)
+	if err != nil {
+		return nil, &FailureError{
+			Reason:   core.FailureUnknown,
+			Message:  err.Error(),
+			Endpoint: p.baseURL,
+		}
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		message := summarizeAnthropicError(body)
+		logProvider.Errorf("anthropic stream API error: status=%d model=%s message=%v body=%s",
+			resp.StatusCode, modelID, message, summarizeForError(body, 500))
+		if authType == core.AccountToken && looksLikeAnthropicInvalidBearer(body, message) {
+			message = "Invalid bearer token. Your Claude setup-token may have expired. Please run 'claude setup-token' again to get a new one."
+		}
+		return nil, &FailureError{
+			Reason:     classifyAnthropicStatus(resp.StatusCode, string(body)),
+			Message:    message,
+			Endpoint:   p.baseURL,
+			Status:     resp.StatusCode,
+			RetryAfter: parseRetryAfter(resp),
+		}
+	}
+
+	ch := make(chan GenerateStreamChunk, 16)
+	go p.readAnthropicSSE(ctx, resp, ch)
+	return ch, nil
+}
+
+// readAnthropicSSE consumes an Anthropic SSE stream from resp.Body and sends
+// parsed chunks to ch. It always closes both resp.Body and ch before returning.
+func (p *AnthropicProvider) readAnthropicSSE(ctx context.Context, resp *http.Response, ch chan<- GenerateStreamChunk) {
+	defer resp.Body.Close()
+	defer close(ch)
+
+	var (
+		currentEvent string
+		inputTokens  int
+		outputTokens int
+	)
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		// Respect context cancellation between lines.
+		select {
+		case <-ctx.Done():
+			ch <- GenerateStreamChunk{Error: ctx.Err()}
+			return
+		default:
+		}
+
+		line := scanner.Text()
+
+		// Track the SSE event type from "event:" lines.
+		if strings.HasPrefix(line, "event:") {
+			currentEvent = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			continue
+		}
+
+		// Parse "data:" lines containing JSON payloads.
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" {
+			continue
+		}
+
+		switch currentEvent {
+		case "message_start":
+			// Extract initial input_tokens from the message envelope.
+			var envelope struct {
+				Message struct {
+					Usage struct {
+						InputTokens int `json:"input_tokens"`
+					} `json:"usage"`
+				} `json:"message"`
+			}
+			if json.Unmarshal([]byte(data), &envelope) == nil {
+				inputTokens = envelope.Message.Usage.InputTokens
+			}
+
+		case "content_block_delta":
+			// Extract incremental text from delta events.
+			var delta struct {
+				Delta struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"delta"`
+			}
+			if json.Unmarshal([]byte(data), &delta) == nil && delta.Delta.Type == "text_delta" && delta.Delta.Text != "" {
+				ch <- GenerateStreamChunk{Text: delta.Delta.Text}
+			}
+
+		case "message_delta":
+			// Extract final output_tokens from the message delta.
+			var msgDelta struct {
+				Usage struct {
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+			}
+			if json.Unmarshal([]byte(data), &msgDelta) == nil {
+				outputTokens = msgDelta.Usage.OutputTokens
+			}
+
+		case "message_stop":
+			// Final event — send the done chunk with accumulated usage.
+			usage := core.UsageInfo{
+				InputTokens:  inputTokens,
+				OutputTokens: outputTokens,
+				TotalTokens:  inputTokens + outputTokens,
+			}
+			ch <- GenerateStreamChunk{
+				Done:     true,
+				Endpoint: p.baseURL,
+				Usage:    usage,
+			}
+			return
+		}
+	}
+
+	// Scanner finished without message_stop — could be a network error or
+	// premature disconnect.
+	if err := scanner.Err(); err != nil {
+		ch <- GenerateStreamChunk{Error: fmt.Errorf("anthropic stream read error: %w", err)}
+		return
+	}
+
+	// Stream ended without message_stop — synthesize a done chunk with
+	// whatever usage was accumulated so partial responses are not lost.
+	usage := core.UsageInfo{
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		TotalTokens:  inputTokens + outputTokens,
+	}
+	ch <- GenerateStreamChunk{
+		Done:     true,
+		Endpoint: p.baseURL,
+		Usage:    usage,
+	}
 }
 
 func (p *AnthropicProvider) GenerateToolTurn(ctx context.Context, req ToolTurnRequest) (ToolTurnResponse, error) {

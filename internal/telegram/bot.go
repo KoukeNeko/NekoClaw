@@ -345,7 +345,7 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 
 	chatID := msg.Chat.ID
 
-	// Send a placeholder message that we will edit with the final reply.
+	// Send a placeholder message that we will edit with streaming updates.
 	placeholder := tgbotapi.NewMessage(chatID, "🔄 處理中...")
 	placeholder.ReplyToMessageID = msg.MessageID
 	placeholderMsg, placeholderErr := b.api.Send(placeholder)
@@ -355,10 +355,17 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 
 	sessionID := b.getSessionID(chatID)
 
-	// Poll tool status and update placeholder while waiting for response.
-	stopToolStatus := b.startToolStatusPolling(chatID, placeholderMsg.MessageID, placeholderErr, sessionID)
+	// Stream response chunks instead of blocking for the full reply.
+	var (
+		fullText     strings.Builder
+		lastEditTime time.Time
+		editInterval = 2 * time.Second // Telegram rate limits are strict
+		textStarted  bool
+		streamResp   *core.ChatResponse
+		streamErr    string
+	)
 
-	resp, err := b.svc.HandleChat(b.ctx, core.ChatRequest{
+	streamCh := b.svc.HandleChatStream(b.ctx, core.ChatRequest{
 		SessionID:   sessionID,
 		Surface:     core.SurfaceTelegram,
 		Provider:    b.svc.GetDefaultProvider(),
@@ -368,41 +375,97 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 		EnableTools: true,
 	})
 
-	stopToolStatus()
-	stopTyping()
-
-	// Delete the placeholder so it won't conflict with new messages in the chat.
-	// The final reply is always sent as fresh messages to avoid edit-interruption issues.
-	if placeholderErr == nil {
-		del := tgbotapi.NewDeleteMessage(chatID, placeholderMsg.MessageID)
-		_, _ = b.api.Send(del)
+	for chunk := range streamCh {
+		switch chunk.Type {
+		case core.ChunkToolStatus:
+			if placeholderErr == nil {
+				displayName := chunk.ToolName
+				if serverName, tn, isMCP := mcp.ParseNamespacedTool(chunk.ToolName); isMCP {
+					displayName = serverName + "/" + tn
+				}
+				edit := tgbotapi.NewEditMessageText(chatID, placeholderMsg.MessageID, "🔧 正在使用 "+displayName+"...")
+				_, _ = b.api.Send(edit)
+			}
+		case core.ChunkRetryStatus:
+			if placeholderErr == nil {
+				edit := tgbotapi.NewEditMessageText(chatID, placeholderMsg.MessageID, "🔄 處理中...（"+chunk.RetryStatus+"）")
+				_, _ = b.api.Send(edit)
+			}
+		case core.ChunkText:
+			fullText.WriteString(chunk.Content)
+			textStarted = true
+			if time.Since(lastEditTime) >= editInterval {
+				preview := fullText.String()
+				if len(preview) > 4000 {
+					preview = preview[:4000] + "..."
+				}
+				if placeholderErr == nil {
+					edit := tgbotapi.NewEditMessageText(chatID, placeholderMsg.MessageID, preview)
+					_, _ = b.api.Send(edit)
+				}
+				lastEditTime = time.Now()
+			}
+		case core.ChunkError:
+			streamErr = chunk.Error
+		case core.ChunkDone:
+			streamResp = chunk.Response
+		}
 	}
 
-	if err != nil {
-		logTelegram.Errorf("chat error: chat=%d user=%d error=%v", chatID, msg.From.ID, err)
-		b.sendReply(chatID, msg.MessageID, "⚠️ "+err.Error())
+	stopTyping()
+
+	// Handle error from stream.
+	if streamErr != "" {
+		logTelegram.Errorf("chat error: chat=%d user=%d error=%s", chatID, msg.From.ID, streamErr)
+		if placeholderErr == nil {
+			b.editMessage(chatID, placeholderMsg.MessageID, "⚠️ "+streamErr)
+		} else {
+			b.sendReply(chatID, msg.MessageID, "⚠️ "+streamErr)
+		}
+		return
+	}
+
+	// Handle missing response (stream ended without done chunk).
+	if streamResp == nil {
+		errMsg := "⚠️ 未收到回應"
+		if placeholderErr == nil {
+			b.editMessage(chatID, placeholderMsg.MessageID, errMsg)
+		} else {
+			b.sendReply(chatID, msg.MessageID, errMsg)
+		}
 		return
 	}
 
 	elapsed := time.Since(startTime)
 
-	reply := strings.TrimSpace(resp.Reply)
+	reply := strings.TrimSpace(streamResp.Reply)
+	// If streaming accumulated text but the response reply is empty, use accumulated text.
+	if reply == "" && textStarted {
+		reply = strings.TrimSpace(fullText.String())
+	}
 	if reply == "" {
 		reply = "（無回應）"
 	}
 
 	// Append usage stats and tool summary.
 	var footer []string
-	if stats := formatUsageStats(resp.Usage, elapsed, resp.Provider, resp.Model); stats != "" {
+	if stats := formatUsageStats(streamResp.Usage, elapsed, streamResp.Provider, streamResp.Model); stats != "" {
 		footer = append(footer, stats)
 	}
-	if summary := formatToolSummary(resp.ToolEvents); summary != "" {
+	if summary := formatToolSummary(streamResp.ToolEvents); summary != "" {
 		footer = append(footer, summary)
 	}
 	if len(footer) > 0 {
 		reply += "\n\n" + strings.Join(footer, "\n")
 	}
 
+	// Always delete the placeholder and resend as fresh messages.
+	// This prevents the "(edited)" label and handles overflow / message ordering
+	// correctly when someone else sends a message during streaming.
+	if placeholderErr == nil {
+		del := tgbotapi.NewDeleteMessage(chatID, placeholderMsg.MessageID)
+		_, _ = b.api.Send(del)
+	}
 	b.sendReply(chatID, msg.MessageID, reply)
 }
 

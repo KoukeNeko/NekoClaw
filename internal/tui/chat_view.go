@@ -37,6 +37,9 @@ type ChatView struct {
 	activeProfile string
 	defaultModel  string
 
+	// Active stream channel for SSE streaming
+	streamCh <-chan core.StreamChunk
+
 	// Pending image attachments for next submit
 	pendingImages []core.ImageData
 
@@ -185,6 +188,20 @@ func (cv *ChatView) Update(msg tea.Msg) tea.Cmd {
 
 	case ChatResultMsg:
 		return cv.handleChatResult(msg)
+
+	case streamStartMsg:
+		cv.streamCh = msg.ch
+		if msg.sessionID != cv.sessionID {
+			return nil
+		}
+		return streamNextCmd(cv.streamCh)
+
+	case StreamChunkMsg:
+		return cv.handleStreamChunk(msg)
+
+	case streamDoneMsg:
+		cv.streamCh = nil
+		return nil
 
 	case ToolStatusMsg:
 		if cv.pending {
@@ -515,6 +532,116 @@ func (cv *ChatView) handleChatResult(msg ChatResultMsg) tea.Cmd {
 		return StatusUpdateMsg{MessageCount: cv.viewport.MessageCount()}
 	}
 	return tea.Batch(cv.input.Focus(), statusCmd)
+}
+
+func (cv *ChatView) handleStreamChunk(msg StreamChunkMsg) tea.Cmd {
+	chunk := msg.Chunk
+
+	switch chunk.Type {
+	case core.ChunkToolStatus:
+		cv.currentToolName = chunk.ToolName
+		if cv.thinkingActive {
+			cv.viewport.UpdateLastMessage(cv.thinkingStatus())
+		}
+		return streamNextCmd(cv.streamCh)
+
+	case core.ChunkRetryStatus:
+		cv.currentRetryStatus = chunk.RetryStatus
+		if cv.thinkingActive {
+			cv.viewport.UpdateLastMessage(cv.thinkingStatus())
+		}
+		return streamNextCmd(cv.streamCh)
+
+	case core.ChunkText:
+		// First text chunk: replace thinking with assistant message
+		if cv.thinkingActive {
+			cv.viewport.RemoveLastMessage()
+			cv.thinkingActive = false
+			cv.viewport.AppendMessage(ChatMessage{
+				Role:      "assistant",
+				Content:   chunk.Content,
+				Timestamp: time.Now(),
+			})
+		} else {
+			// Subsequent chunks: append to last message
+			cv.viewport.AppendToLastMessage(chunk.Content)
+		}
+		return streamNextCmd(cv.streamCh)
+
+	case core.ChunkError:
+		if cv.thinkingActive {
+			cv.viewport.RemoveLastMessage()
+			cv.thinkingActive = false
+		}
+		cv.pending = false
+		cv.currentToolName = ""
+		cv.currentRetryStatus = ""
+		cv.viewport.AppendMessage(ChatMessage{
+			Role:      "error",
+			Content:   chunk.Error,
+			Timestamp: time.Now(),
+		})
+		return cv.input.Focus()
+
+	case core.ChunkDone:
+		cv.pending = false
+		cv.currentToolName = ""
+		cv.currentRetryStatus = ""
+		cv.streamCh = nil
+
+		if chunk.Response == nil {
+			return cv.input.Focus()
+		}
+
+		resp := chunk.Response
+
+		// Track profile and model
+		if cv.provider == "google-gemini-cli" || cv.provider == "google-ai-studio" || cv.provider == "anthropic" {
+			if strings.EqualFold(cv.modelID, "default") {
+				cv.defaultModel = strings.TrimSpace(resp.Model)
+			}
+			cv.activeProfile = strings.TrimSpace(resp.AccountID)
+		}
+
+		var elapsedMs int64
+		if !cv.thinkingStart.IsZero() {
+			elapsedMs = time.Since(cv.thinkingStart).Milliseconds()
+		}
+
+		// If thinking is still active (no text was streamed), show the full reply
+		if cv.thinkingActive {
+			cv.viewport.RemoveLastMessage()
+			cv.thinkingActive = false
+			cv.viewport.AppendMessage(ChatMessage{
+				Role:         "assistant",
+				Content:      resp.Reply,
+				Provider:     resp.Provider,
+				Model:        resp.Model,
+				InputTokens:  resp.Usage.InputTokens,
+				OutputTokens: resp.Usage.OutputTokens,
+				ElapsedMs:    elapsedMs,
+				ToolEvents:   resp.ToolEvents,
+				Timestamp:    time.Now(),
+			})
+		} else {
+			// Update the last assistant message with metadata
+			cv.viewport.UpdateLastMessageMeta(ChatMessage{
+				Provider:     resp.Provider,
+				Model:        resp.Model,
+				InputTokens:  resp.Usage.InputTokens,
+				OutputTokens: resp.Usage.OutputTokens,
+				ElapsedMs:    elapsedMs,
+				ToolEvents:   resp.ToolEvents,
+			})
+		}
+
+		statusCmd := func() tea.Msg {
+			return StatusUpdateMsg{MessageCount: cv.viewport.MessageCount()}
+		}
+		return tea.Batch(cv.input.Focus(), statusCmd)
+	}
+
+	return streamNextCmd(cv.streamCh)
 }
 
 func (cv *ChatView) handleApprovalDecision(decision string) tea.Cmd {

@@ -28,13 +28,20 @@ func checkClipboardImageCmd() tea.Cmd {
 
 func sendChatCmd(apiClient *client.APIClient, req core.ChatRequest) tea.Cmd {
 	return func() tea.Msg {
-		// No client-side timeout: MCP tool chains can run indefinitely.
-		// Server controls the lifecycle; user cancels via Esc.
-		resp, err := apiClient.Chat(context.Background(), req)
-		if err != nil && resp.SessionID == "" {
-			resp.SessionID = req.SessionID
+		ch := apiClient.ChatStream(context.Background(), req)
+		return streamStartMsg{ch: ch, sessionID: req.SessionID}
+	}
+}
+
+// streamNextCmd reads the next chunk from a stream channel.
+func streamNextCmd(ch <-chan core.StreamChunk) tea.Cmd {
+	return func() tea.Msg {
+		chunk, ok := <-ch
+		if !ok {
+			// Channel closed — stream complete
+			return streamDoneMsg{}
 		}
-		return ChatResultMsg{Response: resp, Err: err}
+		return StreamChunkMsg{Chunk: chunk}
 	}
 }
 

@@ -86,6 +86,23 @@ type ToolCallingProvider interface {
 	GenerateToolTurn(ctx context.Context, req ToolTurnRequest) (ToolTurnResponse, error)
 }
 
+// GenerateStreamChunk is a single piece of a streaming LLM response.
+type GenerateStreamChunk struct {
+	Text     string         // incremental text delta
+	Done     bool           // true on the final chunk
+	Endpoint string         // populated only when Done=true
+	Usage    core.UsageInfo // populated only when Done=true
+	Error    error          // non-nil signals a streaming error
+}
+
+// StreamingProvider optionally supports token-level streaming generation.
+// Providers that do not support streaming should omit this interface;
+// the service layer falls back to Generate() for them.
+type StreamingProvider interface {
+	Provider
+	GenerateStream(ctx context.Context, req GenerateRequest) (<-chan GenerateStreamChunk, error)
+}
+
 // ModelDiscoveryProvider optionally resolves a provider-specific default model
 // at runtime for a specific account/profile.
 type ModelDiscoveryProvider interface {

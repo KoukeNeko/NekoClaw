@@ -134,6 +134,32 @@ type UsageInfo struct {
 	TotalTokens  int `json:"total_tokens"`
 }
 
+// ---------------------------------------------------------------------------
+// Streaming types
+// ---------------------------------------------------------------------------
+
+// StreamChunkType discriminates the payload within a StreamChunk.
+type StreamChunkType string
+
+const (
+	ChunkText        StreamChunkType = "text"
+	ChunkToolStatus  StreamChunkType = "tool_status"
+	ChunkRetryStatus StreamChunkType = "retry_status"
+	ChunkError       StreamChunkType = "error"
+	ChunkDone        StreamChunkType = "done"
+)
+
+// StreamChunk is a single event emitted by HandleChatStream.
+type StreamChunk struct {
+	Type        StreamChunkType `json:"type"`
+	Content     string          `json:"content,omitempty"`      // text delta (ChunkText)
+	ToolName    string          `json:"tool_name,omitempty"`    // active tool (ChunkToolStatus)
+	ToolPhase   string          `json:"tool_phase,omitempty"`   // requested | executed | failed
+	RetryStatus string          `json:"retry_status,omitempty"` // fallback message (ChunkRetryStatus)
+	Response    *ChatResponse   `json:"response,omitempty"`     // final metadata (ChunkDone)
+	Error       string          `json:"error,omitempty"`        // error message (ChunkError)
+}
+
 type CompressionMeta struct {
 	OriginalTokens   int `json:"original_tokens"`
 	CompressedTokens int `json:"compressed_tokens"`

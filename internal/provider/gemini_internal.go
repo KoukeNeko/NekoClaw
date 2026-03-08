@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -495,6 +496,183 @@ func (p *GeminiInternalProvider) Generate(ctx context.Context, req GenerateReque
 		lastErr = &FailureError{Reason: core.FailureUnknown, Message: "gemini generate failed", Endpoint: ""}
 	}
 	return GenerateResponse{}, lastErr
+}
+
+// GenerateStream returns a channel that yields incremental text chunks as SSE
+// events arrive from the Gemini streaming endpoint. The channel is closed once
+// the response is fully consumed or an error occurs.
+func (p *GeminiInternalProvider) GenerateStream(ctx context.Context, req GenerateRequest) (<-chan GenerateStreamChunk, error) {
+	endpointOrder := p.resolveEndpointOrder(req.Account)
+	requestBody := map[string]any{
+		"contents": toGeminiContents(req.Messages),
+	}
+	if req.Generation != nil {
+		genConfig := map[string]any{}
+		if req.Generation.Temperature != nil {
+			genConfig["temperature"] = *req.Generation.Temperature
+		}
+		if req.Generation.TopP != nil {
+			genConfig["topP"] = *req.Generation.TopP
+		}
+		if req.Generation.FrequencyPenalty != nil {
+			genConfig["frequencyPenalty"] = *req.Generation.FrequencyPenalty
+		}
+		if req.Generation.PresencePenalty != nil {
+			genConfig["presencePenalty"] = *req.Generation.PresencePenalty
+		}
+		if len(genConfig) > 0 {
+			requestBody["generationConfig"] = genConfig
+		}
+	}
+	payload := map[string]any{
+		"model":   strings.TrimSpace(req.Model),
+		"request": requestBody,
+	}
+	if projectID := strings.TrimSpace(req.Account.Metadata["project_id"]); projectID != "" {
+		payload["project"] = projectID
+	}
+	body, _ := json.Marshal(payload)
+
+	// Try each endpoint until one returns a successful streaming response.
+	var lastErr error
+	for _, endpoint := range endpointOrder {
+		endpointURL := strings.TrimRight(endpoint, "/") + p.generatePath
+
+		resp, err := doWithRetry(ctx, DefaultRetryConfig(), func() (*http.Response, error) {
+			httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, bytes.NewReader(body))
+			if reqErr != nil {
+				return nil, reqErr
+			}
+			httpReq.Header.Set("Authorization", "Bearer "+req.Account.Token)
+			httpReq.Header.Set("Content-Type", "application/json")
+			httpReq.Header.Set("Accept", "text/event-stream")
+			httpReq.Header.Set("User-Agent", "google-cloud-sdk vscode_cloudshelleditor/0.1")
+			httpReq.Header.Set("X-Goog-Api-Client", "google-cloud-sdk vscode_cloudshelleditor/0.1")
+			httpReq.Header.Set("Client-Metadata", `{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}`)
+			return p.client.Do(httpReq)
+		}, nil)
+		if err != nil {
+			lastErr = &FailureError{Reason: core.FailureUnknown, Message: err.Error(), Endpoint: endpoint}
+			continue
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			respBody, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			reason := classifyStatus(resp.StatusCode, string(respBody))
+			endpointErr := &FailureError{
+				Reason:     reason,
+				Message:    strings.TrimSpace(string(respBody)),
+				Endpoint:   endpoint,
+				Status:     resp.StatusCode,
+				RetryAfter: parseRetryAfter(resp),
+			}
+			if shouldFallbackEndpoint(resp.StatusCode, respBody) {
+				if lastErr == nil {
+					lastErr = endpointErr
+				}
+				continue
+			}
+			lastErr = endpointErr
+			return nil, lastErr
+		}
+
+		// Successful response — spawn goroutine to stream SSE events.
+		ch := make(chan GenerateStreamChunk, 16)
+		go p.readGeminiSSEStream(ctx, resp, endpoint, ch)
+		return ch, nil
+	}
+
+	if lastErr == nil {
+		lastErr = &FailureError{Reason: core.FailureUnknown, Message: "gemini generate stream failed", Endpoint: ""}
+	}
+	return nil, lastErr
+}
+
+// readGeminiSSEStream reads SSE events from the HTTP response body and sends
+// parsed text chunks to ch. It always closes ch and resp.Body before returning.
+func (p *GeminiInternalProvider) readGeminiSSEStream(ctx context.Context, resp *http.Response, endpoint string, ch chan<- GenerateStreamChunk) {
+	defer close(ch)
+	defer resp.Body.Close()
+
+	var usage core.UsageInfo
+	var eventData []string
+
+	// flushEvent parses the accumulated SSE data lines as a single JSON event,
+	// extracts any text delta and usage metadata, and sends a chunk if text is
+	// present. Returns true when a [DONE] sentinel is encountered.
+	flushEvent := func() bool {
+		if len(eventData) == 0 {
+			return false
+		}
+		chunk := strings.TrimSpace(strings.Join(eventData, "\n"))
+		eventData = eventData[:0]
+		if chunk == "" {
+			return false
+		}
+		if chunk == "[DONE]" {
+			return true
+		}
+
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(chunk), &payload); err != nil {
+			return false
+		}
+		// Unwrap the .response envelope when present.
+		root := payload
+		if response, ok := payload["response"].(map[string]any); ok {
+			root = response
+		}
+
+		if text, ok := extractTextFromGeminiMap(root); ok {
+			select {
+			case ch <- GenerateStreamChunk{Text: text}:
+			case <-ctx.Done():
+				return true
+			}
+		}
+
+		if u := parseUsageMetadata(root); u.TotalTokens > 0 {
+			usage = u
+		}
+		return false
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			ch <- GenerateStreamChunk{Error: ctx.Err(), Done: true}
+			return
+		default:
+		}
+
+		line := strings.TrimSpace(scanner.Text())
+
+		// Empty line marks an SSE event boundary.
+		if line == "" {
+			if done := flushEvent(); done {
+				break
+			}
+			continue
+		}
+
+		// Only collect data: prefixed lines; ignore other SSE fields.
+		if strings.HasPrefix(line, "data:") {
+			eventData = append(eventData, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		}
+	}
+
+	// Flush any trailing event that was not terminated by an empty line.
+	flushEvent()
+
+	if err := scanner.Err(); err != nil {
+		ch <- GenerateStreamChunk{Error: err, Done: true}
+		return
+	}
+
+	// Send the final "done" chunk with accumulated usage and endpoint.
+	ch <- GenerateStreamChunk{Done: true, Endpoint: endpoint, Usage: usage}
 }
 
 func (p *GeminiInternalProvider) RetrieveQuota(ctx context.Context, token string) (GeminiQuotaResponse, error) {

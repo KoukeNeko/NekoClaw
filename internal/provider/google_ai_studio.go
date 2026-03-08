@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -293,6 +294,180 @@ func (p *GoogleAIStudioProvider) Generate(ctx context.Context, req GenerateReque
 		Raw:      body,
 		Usage:    usage,
 	}, nil
+}
+
+// GenerateStream sends a streaming request to the AI Studio SSE endpoint and
+// returns a channel that yields incremental text chunks as they arrive.
+func (p *GoogleAIStudioProvider) GenerateStream(ctx context.Context, req GenerateRequest) (<-chan GenerateStreamChunk, error) {
+	apiKey := strings.TrimSpace(req.Account.Token)
+	if apiKey == "" {
+		return nil, &FailureError{
+			Reason:   core.FailureAuthPermanent,
+			Message:  "missing API key",
+			Endpoint: p.baseURL,
+			Status:   http.StatusUnauthorized,
+		}
+	}
+	modelID := normalizeAIStudioModelID(req.Model)
+	if modelID == "" || strings.EqualFold(modelID, "default") {
+		modelID = "gemini-2.5-pro"
+	}
+
+	// Build the same payload as Generate().
+	payload := map[string]any{
+		"contents": toAIStudioContents(req.Messages),
+	}
+	if req.Generation != nil {
+		genConfig := map[string]any{}
+		if req.Generation.Temperature != nil {
+			genConfig["temperature"] = *req.Generation.Temperature
+		}
+		if req.Generation.TopP != nil {
+			genConfig["topP"] = *req.Generation.TopP
+		}
+		if req.Generation.FrequencyPenalty != nil {
+			genConfig["frequencyPenalty"] = *req.Generation.FrequencyPenalty
+		}
+		if req.Generation.PresencePenalty != nil {
+			genConfig["presencePenalty"] = *req.Generation.PresencePenalty
+		}
+		if len(genConfig) > 0 {
+			payload["generationConfig"] = genConfig
+		}
+	}
+	raw, _ := json.Marshal(payload)
+
+	// Use the SSE streaming endpoint instead of :generateContent.
+	streamPath := "models/" + url.PathEscape(modelID) + ":streamGenerateContent"
+	callURL, err := p.buildURL(streamPath, apiKey)
+	if err != nil {
+		return nil, &FailureError{
+			Reason:   core.FailureFormat,
+			Message:  err.Error(),
+			Endpoint: p.baseURL,
+		}
+	}
+	// Append alt=sse; buildURL already sets ?key=..., so use "&".
+	callURL += "&alt=sse"
+
+	resp, err := doWithRetry(ctx, DefaultRetryConfig(), func() (*http.Response, error) {
+		httpReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, callURL, bytes.NewReader(raw))
+		if reqErr != nil {
+			return nil, reqErr
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Accept", "text/event-stream")
+		httpReq.Header.Set("User-Agent", "nekoclaw/1.0")
+		return p.client.Do(httpReq)
+	}, nil)
+	if err != nil {
+		return nil, &FailureError{
+			Reason:   core.FailureUnknown,
+			Message:  err.Error(),
+			Endpoint: p.baseURL,
+		}
+	}
+
+	// For non-2xx responses, read the error body and return immediately.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		reason := classifyAIStudioStatus(resp.StatusCode, string(body))
+		return nil, &FailureError{
+			Reason:     reason,
+			Message:    summarizeAIStudioError(body),
+			Endpoint:   p.baseURL,
+			Status:     resp.StatusCode,
+			RetryAfter: parseRetryAfter(resp),
+		}
+	}
+
+	ch := make(chan GenerateStreamChunk, 16)
+
+	go func() {
+		defer close(ch)
+		defer resp.Body.Close()
+
+		var accumulatedUsage core.UsageInfo
+		scanner := bufio.NewScanner(resp.Body)
+		// Increase buffer size for large SSE data lines.
+		scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+
+		var eventData []string
+
+		flush := func() {
+			if len(eventData) == 0 {
+				return
+			}
+			joined := strings.Join(eventData, "")
+			eventData = eventData[:0]
+
+			var root map[string]any
+			if err := json.Unmarshal([]byte(joined), &root); err != nil {
+				return
+			}
+
+			// Extract text from the Gemini-style SSE chunk.
+			if text, ok := extractTextFromGeminiMap(root); ok {
+				select {
+				case ch <- GenerateStreamChunk{Text: text}:
+				case <-ctx.Done():
+					return
+				}
+			}
+
+			// Accumulate usage from every chunk; the final chunk typically
+			// carries the full token counts.
+			if usage := parseUsageMetadata(root); usage.TotalTokens > 0 {
+				accumulatedUsage = usage
+			}
+		}
+
+		for scanner.Scan() {
+			select {
+			case <-ctx.Done():
+				ch <- GenerateStreamChunk{Error: ctx.Err()}
+				return
+			default:
+			}
+
+			line := scanner.Text()
+			trimmed := strings.TrimSpace(line)
+
+			// Empty line signals end of an SSE event.
+			if trimmed == "" {
+				flush()
+				continue
+			}
+
+			// Collect data: lines.
+			if strings.HasPrefix(trimmed, "data:") {
+				eventData = append(eventData, strings.TrimSpace(strings.TrimPrefix(trimmed, "data:")))
+			}
+		}
+		// Flush any remaining buffered event data.
+		flush()
+
+		if err := scanner.Err(); err != nil {
+			select {
+			case ch <- GenerateStreamChunk{Error: err}:
+			case <-ctx.Done():
+			}
+			return
+		}
+
+		// Send the final done chunk with accumulated usage.
+		select {
+		case ch <- GenerateStreamChunk{
+			Done:     true,
+			Endpoint: p.baseURL,
+			Usage:    accumulatedUsage,
+		}:
+		case <-ctx.Done():
+		}
+	}()
+
+	return ch, nil
 }
 
 func (p *GoogleAIStudioProvider) DiscoverPreferredModel(

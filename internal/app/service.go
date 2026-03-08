@@ -2345,6 +2345,153 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 	return core.ChatResponse{}, lastErr
 }
 
+// HandleChatStream is the streaming variant of HandleChat. It returns a
+// channel of StreamChunk that emits tool status, retry status, incremental
+// text, and a final done event. The channel is closed when processing is
+// complete.
+func (s *Service) HandleChatStream(ctx context.Context, req core.ChatRequest) <-chan core.StreamChunk {
+	ch := make(chan core.StreamChunk, 16)
+	go func() {
+		defer close(ch)
+
+		emit := func(chunk core.StreamChunk) bool {
+			select {
+			case ch <- chunk:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+
+		// Same normalization as HandleChat.
+		providerID := strings.TrimSpace(req.Provider)
+		if providerID == "" {
+			providerID = "mock"
+		}
+		modelID := strings.TrimSpace(req.Model)
+		if modelID == "" {
+			modelID = "default"
+		}
+		sessionID := strings.TrimSpace(req.SessionID)
+		disableSession := req.DisableSession
+		if sessionID == "" && disableSession {
+			sessionID = fmt.Sprintf("stateless:%d", time.Now().UnixNano())
+		}
+		if sessionID == "" {
+			sessionID = "main"
+		}
+		surface := req.Surface
+		if surface == "" {
+			surface = core.SurfaceTUI
+		}
+		runID := strings.TrimSpace(req.RunID)
+		ephemeralMessages := cloneMessages(req.EphemeralMessages)
+
+		// Session lifecycle check.
+		if !disableSession && s.lifecycle != nil && s.lifecycle.ShouldReset(sessionID) {
+			logService.Logf("session auto reset: session_id=%s", sessionID)
+			s.flushMemoryBeforeRotate(ctx, sessionID)
+			_ = s.lifecycle.RotateSession(sessionID)
+		}
+
+		prompt := strings.TrimSpace(req.Message)
+		if prompt == "" && runID == "" {
+			emit(core.StreamChunk{Type: core.ChunkError, Error: "message is required"})
+			return
+		}
+
+		// Provider chain.
+		type fallbackCandidate struct {
+			provider string
+			model    string
+		}
+		chain := []fallbackCandidate{{provider: providerID, model: modelID}}
+		if runID == "" {
+			s.mu.RLock()
+			for _, fb := range s.fallbacks {
+				chain = append(chain, fallbackCandidate{provider: fb.Provider, model: fb.Model})
+			}
+			s.mu.RUnlock()
+		}
+
+		defer s.activeRetryStatus.Delete(sessionID)
+
+		var lastErr error
+		for i, candidate := range chain {
+			isFallback := i > 0
+			candidateModel := candidate.model
+			candidateIsDefault := strings.EqualFold(candidateModel, "default")
+
+			if isFallback {
+				status := fmt.Sprintf("⚠️ %s 失敗，切換到 %s/%s", providerID, candidate.provider, candidateModel)
+				s.activeRetryStatus.Store(sessionID, status)
+				emit(core.StreamChunk{Type: core.ChunkRetryStatus, RetryStatus: status})
+			}
+
+			resp, err := s.attemptSingleProvider(ctx, attemptSingleProviderParams{
+				providerID:        candidate.provider,
+				modelID:           candidateModel,
+				isDefaultModel:    candidateIsDefault,
+				sessionID:         sessionID,
+				disableSession:    disableSession,
+				isFallback:        isFallback,
+				ephemeralMessages: ephemeralMessages,
+				prompt:            prompt,
+				images:            req.Images,
+				surface:           surface,
+				enableTools:       req.EnableTools,
+				runID:             runID,
+				toolApprovals:     req.ToolApprovals,
+				onStreamRetry: func(status string) {
+					emit(core.StreamChunk{Type: core.ChunkRetryStatus, RetryStatus: status})
+				},
+				onStreamTool: func(evt core.ToolEvent) {
+					emit(core.StreamChunk{
+						Type:      core.ChunkToolStatus,
+						ToolName:  evt.ToolName,
+						ToolPhase: evt.Phase,
+					})
+				},
+				onStreamText: func(text string) {
+					emit(core.StreamChunk{Type: core.ChunkText, Content: text})
+				},
+			})
+			if err == nil {
+				if isFallback {
+					logService.Logf(
+						"fallback success: primary_provider=%s fallback_provider=%s fallback_model=%s actual_model=%s",
+						providerID, candidate.provider, candidateModel, resp.Model,
+					)
+				}
+				// For tool-path responses the text was not streamed; emit the
+				// full reply so the frontend receives the content.
+				if len(resp.ToolEvents) > 0 && strings.TrimSpace(resp.Reply) != "" {
+					emit(core.StreamChunk{Type: core.ChunkText, Content: resp.Reply})
+				}
+				emit(core.StreamChunk{Type: core.ChunkDone, Response: &resp})
+				return
+			}
+			lastErr = err
+
+			if !shouldTryNextProvider(err) {
+				break
+			}
+			if isFallback {
+				logService.Warnf(
+					"fallback exhausted: primary_provider=%s fallback_provider=%s fallback_model=%s error=%q",
+					providerID, candidate.provider, candidateModel, err,
+				)
+			}
+		}
+
+		if lastErr == nil {
+			lastErr = ErrNoAvailableAccount
+		}
+		emit(core.StreamChunk{Type: core.ChunkError, Error: lastErr.Error()})
+	}()
+	return ch
+}
+
 type attemptSingleProviderParams struct {
 	providerID        string
 	modelID           string
@@ -2359,6 +2506,10 @@ type attemptSingleProviderParams struct {
 	enableTools       bool
 	runID             string
 	toolApprovals     []core.ToolApprovalDecision
+	// Streaming callbacks (all optional, nil = disabled).
+	onStreamRetry func(status string)
+	onStreamTool  func(evt core.ToolEvent)
+	onStreamText  func(text string)
 }
 
 // attemptSingleProvider tries all accounts in one provider's pool.
@@ -2533,8 +2684,11 @@ func (s *Service) attemptSingleProvider(
 			}
 			// Transient wait: if the shortest cooldown is within threshold,
 			// wait for it and retry once instead of failing immediately.
-			s.activeRetryStatus.Store(sessionID,
-				fmt.Sprintf("⏳ %s 所有帳號冷卻中，等待恢復...", providerID))
+			cooldownStatus := fmt.Sprintf("⏳ %s 所有帳號冷卻中，等待恢復...", providerID)
+			s.activeRetryStatus.Store(sessionID, cooldownStatus)
+			if params.onStreamRetry != nil {
+				params.onStreamRetry(cooldownStatus)
+			}
 			account, ok = pool.AcquireOrWait(ctx, preferredProfile, transientWaitThreshold)
 			if ok {
 				logService.Logf("transient wait recovered: provider=%s profile_id=%s", providerID, account.ID)
@@ -2575,8 +2729,11 @@ func (s *Service) attemptSingleProvider(
 			pool.MarkFailureWithRetryHint(account.ID, reason, extractRetryHint(refreshErr))
 			logFailureEvent(providerID, account.ID, reason, pool)
 			s.syncProfileState(providerID, account.ID)
-			s.activeRetryStatus.Store(sessionID,
-				fmt.Sprintf("⚠️ %s/%s 帳號 %s 失敗，嘗試下一個帳號...", providerID, attemptModelID, account.ID))
+			refreshStatus := fmt.Sprintf("⚠️ %s/%s 帳號 %s 失敗，嘗試下一個帳號...", providerID, attemptModelID, account.ID)
+			s.activeRetryStatus.Store(sessionID, refreshStatus)
+			if params.onStreamRetry != nil {
+				params.onStreamRetry(refreshStatus)
+			}
 			lastErr = refreshErr
 			if !core.IsRetriable(reason) {
 				break
@@ -2618,6 +2775,9 @@ func (s *Service) attemptSingleProvider(
 						s.activeToolStatus.Store(sessionID, evt.ToolName)
 					case "executed", "failed", "denied":
 						s.activeToolStatus.Delete(sessionID)
+					}
+					if params.onStreamTool != nil {
+						params.onStreamTool(evt)
 					}
 				},
 			})
@@ -2679,8 +2839,11 @@ func (s *Service) attemptSingleProvider(
 				inlineRetried[account.ID] = true
 				logService.Logf("inline retry: provider=%s account=%s delay=%s",
 					providerID, account.ID, retryHint.Round(time.Second))
-				s.activeRetryStatus.Store(sessionID,
-					fmt.Sprintf("⏳ %s/%s 短暫限流，%s 後重試...", providerID, attemptModelID, retryHint.Round(time.Second)))
+				inlineStatus := fmt.Sprintf("⏳ %s/%s 短暫限流，%s 後重試...", providerID, attemptModelID, retryHint.Round(time.Second))
+				s.activeRetryStatus.Store(sessionID, inlineStatus)
+				if params.onStreamRetry != nil {
+					params.onStreamRetry(inlineStatus)
+				}
 				if sleepErr := sleepWithContext(ctx, retryHint); sleepErr != nil {
 					return core.ChatResponse{}, sleepErr
 				}
@@ -2691,8 +2854,11 @@ func (s *Service) attemptSingleProvider(
 			pool.MarkFailureWithRetryHint(account.ID, reason, retryHint)
 			logFailureEvent(providerID, account.ID, reason, pool)
 			s.syncProfileState(providerID, account.ID)
-			s.activeRetryStatus.Store(sessionID,
-				fmt.Sprintf("⚠️ %s/%s 失敗（%s），嘗試下一個帳號...", providerID, attemptModelID, reason))
+			toolFailStatus := fmt.Sprintf("⚠️ %s/%s 失敗（%s），嘗試下一個帳號...", providerID, attemptModelID, reason)
+			s.activeRetryStatus.Store(sessionID, toolFailStatus)
+			if params.onStreamRetry != nil {
+				params.onStreamRetry(toolFailStatus)
+			}
 			lastErr = runErr
 			if !core.IsRetriable(reason) {
 				break
@@ -2701,6 +2867,118 @@ func (s *Service) attemptSingleProvider(
 				preferredProfile = ""
 			}
 			continue
+		}
+
+		// Streaming: relay text chunks if callback is set and provider supports it.
+		if params.onStreamText != nil {
+			if sp, ok := prov.(provider.StreamingProvider); ok {
+				streamCh, streamErr := sp.GenerateStream(ctx, provider.GenerateRequest{
+					Model:      attemptModelID,
+					Messages:   compressedMessages,
+					Account:    account,
+					Generation: generationParams,
+				})
+				if streamErr == nil {
+					var fullText strings.Builder
+					var streamUsage core.UsageInfo
+					var streamEndpoint string
+					streamOK := true
+					for chunk := range streamCh {
+						if chunk.Error != nil {
+							lastErr = chunk.Error
+							streamOK = false
+							break
+						}
+						if chunk.Text != "" {
+							fullText.WriteString(chunk.Text)
+							params.onStreamText(chunk.Text)
+						}
+						if chunk.Done {
+							streamUsage = chunk.Usage
+							streamEndpoint = chunk.Endpoint
+						}
+					}
+					if streamOK {
+						text := strings.TrimSpace(fullText.String())
+						if text != "" {
+							assistant := core.Message{Role: core.RoleAssistant, Content: text, CreatedAt: time.Now()}
+							if !params.disableSession {
+								if hasUserMessage {
+									s.sessions.AppendMessage(sessionID, userMessage, assistant)
+								} else {
+									s.sessions.AppendMessage(sessionID, assistant)
+								}
+								if hasUserMessage {
+									s.generateSessionTitleAsync(providerID, attemptModelID, sessionID, account, userMessage.Content, assistant.Content)
+								}
+								if s.searchIndex != nil {
+									newEntries := make([]core.SessionEntry, 0, 2)
+									if hasUserMessage {
+										newEntries = append(newEntries, core.MessageToEntry(userMessage))
+									}
+									newEntries = append(newEntries, core.MessageToEntry(assistant))
+									go func(entries []core.SessionEntry) {
+										if idxErr := s.searchIndex.Index(sessionID, entries); idxErr != nil {
+											logService.Errorf("search index: session_id=%s error=%q", sessionID, idxErr)
+										}
+									}(newEntries)
+								}
+							}
+							if providerID == "google-gemini-cli" {
+								if endpoint := strings.TrimSpace(streamEndpoint); endpoint != "" {
+									if account.Metadata == nil {
+										account.Metadata = core.Metadata{}
+									}
+									if strings.TrimSpace(account.Metadata["endpoint"]) != endpoint {
+										account.Metadata["endpoint"] = endpoint
+										pool.SetCredential(account.ID, account)
+										if store := s.authStoreSafe(); store != nil {
+											_ = store.UpsertProfile(auth.ProfileMetadata{
+												ProfileID: account.ID,
+												Provider:  providerID,
+												Type:      string(core.AccountOAuth),
+												Email:     account.Email,
+												ProjectID: strings.TrimSpace(account.Metadata["project_id"]),
+												Endpoint:  streamEndpoint,
+											})
+										}
+									}
+								}
+							}
+							pool.MarkUsed(account.ID)
+							s.syncProfileState(providerID, account.ID)
+							return core.ChatResponse{
+								SessionID:   sessionID,
+								Provider:    providerID,
+								Model:       attemptModelID,
+								Reply:       text,
+								Compressed:  compressed,
+								Compression: compressionMeta,
+								AccountID:   account.ID,
+								Usage:       streamUsage,
+								Status:      core.ChatStatusCompleted,
+							}, nil
+						}
+						// Empty stream with no error: fall through to non-streaming Generate.
+					}
+					if lastErr != nil {
+						// Stream failed mid-way: handle like a generation failure.
+						reason := deriveFailureReason(lastErr)
+						retryHint := extractRetryHint(lastErr)
+						pool.MarkFailureWithRetryHint(account.ID, reason, retryHint)
+						logFailureEvent(providerID, account.ID, reason, pool)
+						s.syncProfileState(providerID, account.ID)
+						if !core.IsRetriable(reason) {
+							break
+						}
+						if preferredProfile == account.ID {
+							preferredProfile = ""
+						}
+						continue
+					}
+				}
+				// streamErr != nil: fall through to non-streaming Generate.
+			}
 		}
 
 		resp, err := prov.Generate(ctx, provider.GenerateRequest{
@@ -2779,8 +3057,11 @@ func (s *Service) attemptSingleProvider(
 			inlineRetried[account.ID] = true
 			logService.Logf("inline retry: provider=%s account=%s delay=%s",
 				providerID, account.ID, retryHint.Round(time.Second))
-			s.activeRetryStatus.Store(sessionID,
-				fmt.Sprintf("⏳ %s/%s 短暫限流，%s 後重試...", providerID, attemptModelID, retryHint.Round(time.Second)))
+			genRetryStatus := fmt.Sprintf("⏳ %s/%s 短暫限流，%s 後重試...", providerID, attemptModelID, retryHint.Round(time.Second))
+			s.activeRetryStatus.Store(sessionID, genRetryStatus)
+			if params.onStreamRetry != nil {
+				params.onStreamRetry(genRetryStatus)
+			}
 			if sleepErr := sleepWithContext(ctx, retryHint); sleepErr != nil {
 				return core.ChatResponse{}, sleepErr
 			}
@@ -2791,8 +3072,11 @@ func (s *Service) attemptSingleProvider(
 		pool.MarkFailureWithRetryHint(account.ID, reason, retryHint)
 		logFailureEvent(providerID, account.ID, reason, pool)
 		s.syncProfileState(providerID, account.ID)
-		s.activeRetryStatus.Store(sessionID,
-			fmt.Sprintf("⚠️ %s/%s 失敗（%s），嘗試下一個帳號...", providerID, attemptModelID, reason))
+		genFailStatus := fmt.Sprintf("⚠️ %s/%s 失敗（%s），嘗試下一個帳號...", providerID, attemptModelID, reason)
+		s.activeRetryStatus.Store(sessionID, genFailStatus)
+		if params.onStreamRetry != nil {
+			params.onStreamRetry(genFailStatus)
+		}
 		lastErr = err
 		if !core.IsRetriable(reason) {
 			break

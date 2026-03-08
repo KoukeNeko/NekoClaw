@@ -34,6 +34,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/providers", s.handleProviders)
 	mux.HandleFunc("/v1/accounts", s.handleAccounts)
 	mux.HandleFunc("/v1/chat", s.handleChat)
+	mux.HandleFunc("/v1/chat/stream", s.handleChatStream)
 	mux.HandleFunc("/v1/integrations/discord/events", s.handleDiscordEvent)
 	mux.HandleFunc("/v1/gemini/quota", s.handleGeminiQuota)
 	mux.HandleFunc("/v1/gemini/discover-project", s.handleGeminiDiscoverProject)
@@ -189,6 +190,38 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req core.ChatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if req.Surface == "" {
+		req.Surface = core.SurfaceTUI
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		respondError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	ch := s.svc.HandleChatStream(r.Context(), req)
+	for chunk := range ch {
+		data, _ := json.Marshal(chunk)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
 }
 
 type discordEvent struct {

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -334,6 +335,61 @@ func (c *APIClient) Chat(ctx context.Context, req core.ChatRequest) (core.ChatRe
 		return core.ChatResponse{}, err
 	}
 	return out, nil
+}
+
+// ChatStream sends a streaming chat request and returns a channel of StreamChunks.
+// The channel is closed when the stream ends. If the HTTP request fails, the
+// error is sent as a ChunkError on the channel.
+func (c *APIClient) ChatStream(ctx context.Context, req core.ChatRequest) <-chan core.StreamChunk {
+	ch := make(chan core.StreamChunk, 16)
+	go func() {
+		defer close(ch)
+
+		payload, err := json.Marshal(req)
+		if err != nil {
+			ch <- core.StreamChunk{Type: core.ChunkError, Error: "marshal: " + err.Error()}
+			return
+		}
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/stream", bytes.NewReader(payload))
+		if err != nil {
+			ch <- core.StreamChunk{Type: core.ChunkError, Error: err.Error()}
+			return
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Accept", "text/event-stream")
+
+		resp, err := c.http.Do(httpReq)
+		if err != nil {
+			ch <- core.StreamChunk{Type: core.ChunkError, Error: err.Error()}
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			ch <- core.StreamChunk{Type: core.ChunkError, Error: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))}
+			return
+		}
+
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			data := strings.TrimPrefix(line, "data: ")
+			var chunk core.StreamChunk
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				continue // skip malformed events
+			}
+			select {
+			case ch <- chunk:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch
 }
 
 // ToolStatusResult holds the polled status for a session.

@@ -337,7 +337,7 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// Show typing indicator while processing.
 	stopTyping := b.startTyping(s, m.ChannelID)
 
-	// Send placeholder message and start tool status polling.
+	// Send placeholder message for streaming updates.
 	placeholder := &discordgo.MessageSend{
 		Content: "🔄 處理中...",
 		Reference: &discordgo.MessageReference{
@@ -348,10 +348,17 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 	placeholderMsg, placeholderErr := s.ChannelMessageSendComplex(m.ChannelID, placeholder)
 
-	// Poll tool status and update placeholder while waiting for response.
-	stopToolStatus := b.startToolStatusPolling(s, m.ChannelID, placeholderMsg, placeholderErr, sessionID)
+	// Stream response chunks, updating placeholder in real time.
+	var (
+		fullText     strings.Builder
+		lastEditTime time.Time
+		editInterval = 1500 * time.Millisecond
+		textStarted  bool
+		streamResp   *core.ChatResponse
+		streamErr    string
+	)
 
-	resp, err := b.svc.HandleChat(b.ctx, core.ChatRequest{
+	streamCh := b.svc.HandleChatStream(b.ctx, core.ChatRequest{
 		SessionID:         sessionID,
 		DisableSession:    false,
 		EphemeralMessages: ephemeralMessages,
@@ -363,48 +370,108 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		EnableTools:       true,
 	})
 
-	stopToolStatus()
+	for chunk := range streamCh {
+		switch chunk.Type {
+		case core.ChunkToolStatus:
+			displayName := chunk.ToolName
+			if serverName, toolName, isMCP := mcp.ParseNamespacedTool(chunk.ToolName); isMCP {
+				displayName = serverName + "/" + toolName
+			}
+			content := "🔧 正在使用 " + displayName + "..."
+			if placeholderErr == nil {
+				_, _ = s.ChannelMessageEdit(m.ChannelID, placeholderMsg.ID, content)
+			}
+
+		case core.ChunkRetryStatus:
+			content := "🔄 處理中...（" + chunk.RetryStatus + "）"
+			if placeholderErr == nil {
+				_, _ = s.ChannelMessageEdit(m.ChannelID, placeholderMsg.ID, content)
+			}
+
+		case core.ChunkText:
+			fullText.WriteString(chunk.Content)
+			textStarted = true
+			if time.Since(lastEditTime) >= editInterval {
+				preview := fullText.String()
+				if len(preview) > 1900 {
+					preview = preview[:1900] + "..."
+				}
+				if placeholderErr == nil {
+					_, _ = s.ChannelMessageEdit(m.ChannelID, placeholderMsg.ID, preview)
+				}
+				lastEditTime = time.Now()
+			}
+
+		case core.ChunkError:
+			streamErr = chunk.Error
+
+		case core.ChunkDone:
+			streamResp = chunk.Response
+		}
+	}
+
 	stopTyping()
 
 	// Transition: 🔄 → ✅
 	_ = s.MessageReactionRemove(m.ChannelID, m.ID, emojiProcessing, botID)
 	_ = s.MessageReactionAdd(m.ChannelID, m.ID, emojiDone)
 
-	// Delete the placeholder so it won't conflict with new messages in the channel.
-	// The final reply is always sent as fresh messages to avoid edit-interruption issues.
-	if placeholderErr == nil {
-		_ = s.ChannelMessageDelete(m.ChannelID, placeholderMsg.ID)
+	// Handle error cases.
+	if streamErr != "" {
+		errMsg := "⚠️ " + streamErr
+		logDiscord.Errorf("chat error: channel=%s user=%s error=%s", m.ChannelID, m.Author.ID, streamErr)
+		if placeholderErr == nil {
+			_, _ = s.ChannelMessageEdit(m.ChannelID, placeholderMsg.ID, errMsg)
+		} else {
+			b.sendReply(s, m, errMsg)
+		}
+		b.logToConsole(s, fmt.Sprintf("[錯誤] <#%s> %s: %s", m.ChannelID, m.Author.Username, streamErr))
+		return
 	}
-
-	if err != nil {
-		logDiscord.Errorf("chat error: channel=%s user=%s error=%v", m.ChannelID, m.Author.ID, err)
-		b.sendReply(s, m, "⚠️ "+err.Error())
-		b.logToConsole(s, fmt.Sprintf("[錯誤] <#%s> %s: %s", m.ChannelID, m.Author.Username, err.Error()))
+	if streamResp == nil {
+		errMsg := "⚠️ 未收到回應"
+		logDiscord.Errorf("chat error: channel=%s user=%s error=nil response", m.ChannelID, m.Author.ID)
+		if placeholderErr == nil {
+			_, _ = s.ChannelMessageEdit(m.ChannelID, placeholderMsg.ID, errMsg)
+		} else {
+			b.sendReply(s, m, errMsg)
+		}
 		return
 	}
 
 	elapsed := time.Since(startTime)
 
-	reply := strings.TrimSpace(resp.Reply)
+	// Build final reply from accumulated text or response.
+	reply := strings.TrimSpace(fullText.String())
+	if !textStarted && streamResp != nil {
+		reply = strings.TrimSpace(streamResp.Reply)
+	}
 	if reply == "" {
 		reply = "（無回應）"
 	}
 
 	// Append usage stats and tool summary (Discord -# small text).
 	var footer []string
-	if stats := formatUsageStats(resp.Usage, elapsed, resp.Provider, resp.Model); stats != "" {
+	if stats := formatUsageStats(streamResp.Usage, elapsed, streamResp.Provider, streamResp.Model); stats != "" {
 		footer = append(footer, "-# "+stats)
 	}
-	if summary := formatToolSummary(resp.ToolEvents); summary != "" {
+	if summary := formatToolSummary(streamResp.ToolEvents); summary != "" {
 		footer = append(footer, summary)
 	}
 	if len(footer) > 0 {
 		reply += "\n\n" + strings.Join(footer, "\n")
 	}
 
+	// Always delete the placeholder and resend as fresh messages.
+	// This prevents the "(edited)" tag and handles overflow / message ordering
+	// correctly when someone else sends a message during streaming.
+	if placeholderErr == nil {
+		_ = s.ChannelMessageDelete(m.ChannelID, placeholderMsg.ID)
+	}
 	b.sendReply(s, m, reply)
 
 	// Log detailed traffic to console channel.
+	resp := *streamResp
 	b.logTraffic(s, m, resp, len(images), elapsed)
 }
 

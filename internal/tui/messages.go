@@ -50,6 +50,20 @@ type ChatResultMsg struct {
 	Err      error
 }
 
+// StreamChunkMsg carries a single streaming chunk from the chat API.
+type StreamChunkMsg struct {
+	Chunk core.StreamChunk
+}
+
+// streamStartMsg initiates streaming from the given channel.
+type streamStartMsg struct {
+	ch        <-chan core.StreamChunk
+	sessionID string
+}
+
+// streamDoneMsg marks the end of a streaming response.
+type streamDoneMsg struct{}
+
 // StreamTickMsg drives simulated streaming display.
 type StreamTickMsg struct{}
 
