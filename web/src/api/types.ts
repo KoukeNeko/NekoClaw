@@ -79,6 +79,8 @@ export interface ChatRequest {
   model: string;
   message: string;
   images?: ImageData[];
+  client_timezone?: string;
+  client_sent_at?: string;
   enable_tools?: boolean;
   run_id?: string;
   tool_approvals?: ToolApprovalDecision[];
@@ -145,8 +147,6 @@ export interface SessionMetadata {
   updated_at: string;
 }
 
-// ---------------------------------------------------------------------------
-// Auth — Gemini
 // ---------------------------------------------------------------------------
 // Usage summary
 // ---------------------------------------------------------------------------
@@ -216,6 +216,8 @@ export interface UsageSummary {
   sessions: UsageSummarySession[];
 }
 
+// ---------------------------------------------------------------------------
+// Auth — Gemini
 // ---------------------------------------------------------------------------
 
 export interface GeminiAuthStartRequest {
@@ -626,8 +628,12 @@ export interface ToolStatusResult {
 }
 
 // ---------------------------------------------------------------------------
-// Discord / Telegram config
+// General / Discord / Telegram config
 // ---------------------------------------------------------------------------
+
+export interface GeneralConfig {
+  timezone: string;
+}
 
 export interface DiscordConfig {
   bot_token: string;

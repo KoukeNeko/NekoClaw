@@ -56,6 +56,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/auth/ai-studio/delete", s.handleAIStudioDelete)
 	mux.HandleFunc("/v1/models", s.handleListModels)
 	mux.HandleFunc("/v1/fallbacks", s.handleFallbacks)
+	mux.HandleFunc("/v1/general/config", s.handleGeneralConfig)
 	mux.HandleFunc("/v1/discord/config", s.handleDiscordConfig)
 	mux.HandleFunc("/v1/telegram/config", s.handleTelegramConfig)
 	mux.HandleFunc("/v1/tools/catalog", s.handleToolsCatalog)
@@ -87,8 +88,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/sessions/delete", s.handleSessionDelete)
 	mux.HandleFunc("/v1/sessions/rename", s.handleSessionRename)
 	mux.HandleFunc("/v1/sessions/transcript", s.handleSessionTranscript)
-	mux.HandleFunc("/v1/memory/search", s.handleMemorySearch)
 	mux.HandleFunc("/v1/usage/summary", s.handleUsageSummary)
+	mux.HandleFunc("/v1/memory/search", s.handleMemorySearch)
 	mux.HandleFunc("/v1/mcp/servers", s.handleMCPServers)
 	mux.HandleFunc("/v1/mcp/tools", s.handleMCPTools)
 	mux.HandleFunc("/v1/mcp/builtin", s.handleMCPBuiltin)
@@ -1378,6 +1379,31 @@ func (s *Server) handleDiscordConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		respondJSON(w, http.StatusOK, s.svc.GetDiscordConfig())
+	default:
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleGeneralConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		cfg := s.svc.GetGeneralConfig()
+		respondJSON(w, http.StatusOK, cfg)
+	case http.MethodPut:
+		var cfg core.GeneralConfig
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		if err := s.svc.SaveGeneralConfig(cfg); err != nil {
+			if errors.Is(err, app.ErrInvalidTimezone) {
+				respondError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		respondJSON(w, http.StatusOK, s.svc.GetGeneralConfig())
 	default:
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}

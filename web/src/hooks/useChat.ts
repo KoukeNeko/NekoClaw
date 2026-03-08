@@ -15,6 +15,7 @@ export function useChat() {
   const sessionID = useAppStore((s) => s.sessionID);
   const provider = useAppStore((s) => s.provider);
   const model = useAppStore((s) => s.model);
+  const effectiveTimezone = useAppStore((s) => s.effectiveTimezone);
   const isStreaming = useAppStore((s) => s.isStreaming);
 
   const addMessage = useAppStore((s) => s.addMessage);
@@ -61,6 +62,8 @@ export function useChat() {
         model,
         message: text,
         images,
+        client_timezone: effectiveTimezone,
+        client_sent_at: new Date().toISOString(),
         enable_tools: true,
       };
 
@@ -72,6 +75,7 @@ export function useChat() {
       sessionID,
       provider,
       model,
+      effectiveTimezone,
       isStreaming,
       addMessage,
       setStreaming,
@@ -101,6 +105,7 @@ export function useChat() {
         provider,
         model,
         message: "",
+        client_timezone: effectiveTimezone,
         enable_tools: true,
         run_id: runID,
         tool_approvals: decisions,
@@ -110,7 +115,7 @@ export function useChat() {
         handleChunk(chunk);
       });
     },
-    [sessionID, provider, model, setStreaming, addMessage],
+    [sessionID, provider, model, effectiveTimezone, setStreaming, addMessage],
   );
 
   function handleChunk(chunk: StreamChunk) {

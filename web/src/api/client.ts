@@ -47,6 +47,7 @@ import type {
   UsageSummary,
   MemorySearchRequest,
   MemorySearchResponse,
+  GeneralConfig,
   DiscordConfig,
   TelegramConfig,
   ToolCatalogEntry,
@@ -205,11 +206,11 @@ export async function getTranscript(
   return resp.messages ?? [];
 }
 
-// ---------------------------------------------------------------------------
 export function getUsageSummary(): Promise<UsageSummary> {
   return get("/v1/usage/summary");
 }
 
+// ---------------------------------------------------------------------------
 // Auth — Gemini
 // ---------------------------------------------------------------------------
 
@@ -477,8 +478,16 @@ export function getToolStatus(
 }
 
 // ---------------------------------------------------------------------------
-// Discord / Telegram / Tools config
+// General / Discord / Telegram / Tools config
 // ---------------------------------------------------------------------------
+
+export function getGeneralConfig(): Promise<GeneralConfig> {
+  return get("/v1/general/config");
+}
+
+export function setGeneralConfig(config: GeneralConfig): Promise<void> {
+  return put("/v1/general/config", config);
+}
 
 export function getDiscordConfig(): Promise<DiscordConfig> {
   return get("/v1/discord/config");

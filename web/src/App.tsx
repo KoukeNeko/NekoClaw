@@ -1,9 +1,10 @@
 import { useEffect } from "react";
-import { getActivePersona } from "@/api/client";
+import { getActivePersona, getGeneralConfig } from "@/api/client";
 import { useAppStore, type Route } from "@/store/appStore";
 import { AppLayout } from "@/layouts/AppLayout";
 import { ChatPage } from "@/components/chat/ChatPage";
 import { SettingsPage } from "@/components/settings/SettingsPage";
+import { detectBrowserTimeZone } from "@/utils/timezone";
 
 // Import highlight.js theme for code blocks
 import "highlight.js/styles/github-dark.css";
@@ -16,6 +17,7 @@ import "highlight.js/styles/github-dark.css";
 
 const VALID_ROUTES: Route[] = [
   "chat",
+  "settings/general",
   "settings/provider",
   "settings/persona",
   "settings/auth",
@@ -44,6 +46,10 @@ export function App() {
   const route = useAppStore((s) => s.route);
   const setRoute = useAppStore((s) => s.setRoute);
   const setActivePersona = useAppStore((s) => s.setActivePersona);
+  const setBrowserTimezone = useAppStore((s) => s.setBrowserTimezone);
+  const setGeneralTimezoneOverride = useAppStore(
+    (s) => s.setGeneralTimezoneOverride,
+  );
 
   // Sync hash → store on initial load and popstate
   useEffect(() => {
@@ -67,6 +73,17 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
 
+    setBrowserTimezone(detectBrowserTimeZone());
+
+    getGeneralConfig()
+      .then((config) => {
+        if (cancelled) return;
+        setGeneralTimezoneOverride(config.timezone ?? "");
+      })
+      .catch(() => {
+        if (cancelled) return;
+      });
+
     getActivePersona()
       .then((persona) => {
         if (cancelled) return;
@@ -79,7 +96,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [setActivePersona]);
+  }, [setActivePersona, setBrowserTimezone, setGeneralTimezoneOverride]);
 
   // Global keyboard shortcuts
   useEffect(() => {

@@ -22,7 +22,6 @@ import (
 	"github.com/doeshing/nekoclaw/internal/memory"
 	"github.com/doeshing/nekoclaw/internal/persona"
 	"github.com/doeshing/nekoclaw/internal/provider"
-	"github.com/doeshing/nekoclaw/internal/tokenutil"
 	"github.com/doeshing/nekoclaw/internal/tooling"
 )
 
@@ -39,6 +38,7 @@ var ErrProfileNotFound = errors.New("profile not found")
 var ErrProfileInUse = errors.New("profile in use")
 var ErrProviderNotReady = errors.New("provider not ready")
 var ErrToolsNotSupported = errors.New("tools not supported by provider")
+var ErrInvalidTimezone = errors.New("invalid timezone")
 
 type Service struct {
 	mu                sync.RWMutex
@@ -54,6 +54,7 @@ type Service struct {
 	searchIndex       *memory.SearchIndex
 	preferredProfiles map[string]string
 	fallbacks         []core.FallbackEntry // ordered fallback provider+model pairs
+	generalConfig     core.GeneralConfig   // persisted general settings
 	discordConfig     core.DiscordConfig   // persisted Discord bot settings
 	telegramConfig    core.TelegramConfig  // persisted Telegram bot settings
 	toolsConfig       core.ToolsConfig     // persisted tool settings (web_search API key, etc.)
@@ -467,6 +468,37 @@ func (s *Service) SaveFallbacks(entries []core.FallbackEntry) error {
 	cfg, _ := core.LoadConfig(configDir)
 	cfg.Fallbacks = entries
 	return core.SaveConfig(configDir, cfg)
+}
+
+// GetDiscordConfig returns a copy of the current Discord configuration.
+func (s *Service) GetGeneralConfig() core.GeneralConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.generalConfig
+}
+
+// SaveGeneralConfig persists general settings to config.json and updates in-memory state.
+func (s *Service) SaveGeneralConfig(cfg core.GeneralConfig) error {
+	cfg = sanitizeGeneralConfig(cfg)
+	if err := validateTimezoneName(cfg.Timezone); err != nil {
+		return fmt.Errorf("%w: %s", ErrInvalidTimezone, cfg.Timezone)
+	}
+
+	s.mu.Lock()
+	configDir := s.configDir
+	s.generalConfig = cfg
+	s.mu.Unlock()
+
+	appCfg, _ := core.LoadConfig(configDir)
+	appCfg.General = cfg
+	return core.SaveConfig(configDir, appCfg)
+}
+
+// SetGeneralConfig sets the in-memory general config (used during startup).
+func (s *Service) SetGeneralConfig(cfg core.GeneralConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.generalConfig = sanitizeGeneralConfig(cfg)
 }
 
 // GetDiscordConfig returns a copy of the current Discord configuration.
@@ -2384,6 +2416,8 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 			ephemeralMessages: ephemeralMessages,
 			prompt:            prompt,
 			images:            req.Images,
+			clientTimezone:    req.ClientTimezone,
+			clientSentAt:      req.ClientSentAt,
 			surface:           surface,
 			enableTools:       req.EnableTools,
 			runID:             runID,
@@ -2512,6 +2546,8 @@ func (s *Service) HandleChatStream(ctx context.Context, req core.ChatRequest) <-
 				ephemeralMessages: ephemeralMessages,
 				prompt:            prompt,
 				images:            req.Images,
+				clientTimezone:    req.ClientTimezone,
+				clientSentAt:      req.ClientSentAt,
 				surface:           surface,
 				enableTools:       req.EnableTools,
 				runID:             runID,
@@ -2576,6 +2612,8 @@ type attemptSingleProviderParams struct {
 	ephemeralMessages []core.Message
 	prompt            string
 	images            []core.ImageData
+	clientTimezone    string
+	clientSentAt      string
 	surface           core.Surface
 	enableTools       bool
 	runID             string
@@ -2607,13 +2645,17 @@ func (s *Service) attemptSingleProvider(
 	}
 
 	hasUserMessage := strings.TrimSpace(params.prompt) != "" || len(params.images) > 0
+	effectiveLocation := resolveMessageLocation(
+		params.clientTimezone,
+		s.GetGeneralConfig().Timezone,
+	)
 	userMessage := core.Message{}
 	if hasUserMessage {
 		userMessage = core.Message{
 			Role:      core.RoleUser,
 			Content:   params.prompt,
 			Images:    params.images,
-			CreatedAt: time.Now(),
+			CreatedAt: resolveCurrentUserMessageTime(params.clientSentAt, time.Now()),
 		}
 	}
 
@@ -2745,25 +2787,22 @@ func (s *Service) attemptSingleProvider(
 		compressedMessages = append([]core.Message{systemMsg}, compressedMessages...)
 	}
 
-	// Post-injection guard: the system prompt (persona + memory) was prepended
-	// after compression, so the total may now exceed the context window. Re-trim
-	// the non-system messages if needed.
-	if len(compressedMessages) > 1 && contextWindow > 0 {
-		finalEstimated := contextwindow.EstimateMessagesTokens(compressedMessages)
+	modelMessages := decorateModelMessagesWithSentAt(compressedMessages, time.Now(), effectiveLocation)
+	if len(modelMessages) > 0 && contextWindow > 0 {
+		finalEstimated := contextwindow.EstimateMessagesTokens(modelMessages)
 		finalBudget := contextwindow.ApplySafetyMargin(contextWindow)
 		if finalEstimated > finalBudget {
-			head := compressedMessages[0]
-			rest := compressedMessages[1:]
-			headTokens := tokenutil.EstimateString(head.Content)
-			remainingBudget := finalBudget - headTokens
-			if remainingBudget < 1 {
-				remainingBudget = 1
+			trimmed, dropped := trimMessagesPreservingSystem(modelMessages, finalBudget)
+			if len(dropped) > 0 {
+				modelMessages = trimmed
+				compressionMeta.DroppedMessages += len(dropped)
+				compressionMeta.SoftTrimmed += len(dropped)
+				compressed = true
 			}
-			trimmed, _ := contextwindow.KeepNewest(rest, remainingBudget)
-			compressedMessages = append([]core.Message{head}, trimmed...)
-			logService.Warnf("post-injection trim: context_window=%d estimated=%d budget=%d head_tokens=%d kept=%d",
-				contextWindow, finalEstimated, finalBudget, headTokens, len(trimmed))
+			logService.Warnf("final model trim: context_window=%d estimated=%d budget=%d dropped=%d kept=%d",
+				contextWindow, finalEstimated, finalBudget, len(dropped), len(modelMessages))
 		}
+		compressionMeta.CompressedTokens = contextwindow.EstimateMessagesTokens(modelMessages)
 	}
 
 	attemptLimit := len(pool.Snapshot())
@@ -2860,7 +2899,7 @@ func (s *Service) attemptSingleProvider(
 				ModelID:      attemptModelID,
 				Account:      account,
 				ToolProvider: toolProv,
-				Messages:     compressedMessages,
+				Messages:     modelMessages,
 				UserMessage:  userMessage,
 				EnableTools:  true,
 				RunID:        params.runID,
@@ -2995,7 +3034,7 @@ func (s *Service) attemptSingleProvider(
 			if sp, ok := prov.(provider.StreamingProvider); ok {
 				streamCh, streamErr := sp.GenerateStream(ctx, provider.GenerateRequest{
 					Model:      attemptModelID,
-					Messages:   compressedMessages,
+					Messages:   modelMessages,
 					Account:    account,
 					Generation: generationParams,
 				})
@@ -3107,7 +3146,7 @@ func (s *Service) attemptSingleProvider(
 
 		resp, err := prov.Generate(ctx, provider.GenerateRequest{
 			Model:      attemptModelID,
-			Messages:   compressedMessages,
+			Messages:   modelMessages,
 			Account:    account,
 			Generation: generationParams,
 		})

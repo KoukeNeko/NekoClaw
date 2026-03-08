@@ -1,5 +1,6 @@
 import { Fragment } from "react";
 import { useAppStore, type Route } from "@/store/appStore";
+import { GeneralPanel } from "./GeneralPanel";
 import { PersonaPanel } from "./PersonaPanel";
 import { ProviderPanel } from "./ProviderPanel";
 import { DiscordPanel } from "./DiscordPanel";
@@ -8,8 +9,8 @@ import { AuthPanel } from "./AuthPanel";
 import { ToolsPanel } from "./ToolsPanel";
 import { MemoryPanel } from "./MemoryPanel";
 import { MCPPanel } from "./MCPPanel";
-
 import { UsagePanel } from "./UsagePanel";
+
 /**
  * Settings page — daisyUI tabs (official radio + tab-content pattern).
  * Tabs structure matches https://daisyui.com/components/tab/ exactly.
@@ -21,6 +22,7 @@ interface TabDef {
 }
 
 const TABS: TabDef[] = [
+  { route: "settings/general", label: "一般" },
   { route: "settings/provider", label: "Provider" },
   { route: "settings/persona", label: "Persona" },
   { route: "settings/auth", label: "認證" },
@@ -35,6 +37,8 @@ const TABS: TabDef[] = [
 /** Resolve active route to the corresponding panel component. */
 function renderPanel(route: Route) {
   switch (route) {
+    case "settings/general":
+      return <GeneralPanel />;
     case "settings/provider":
       return <ProviderPanel />;
     case "settings/persona":
@@ -43,12 +47,12 @@ function renderPanel(route: Route) {
       return <AuthPanel />;
     case "settings/memory":
       return <MemoryPanel />;
+    case "settings/usage":
+      return <UsagePanel />;
     case "settings/mcp":
       return <MCPPanel />;
     case "settings/discord":
       return <DiscordPanel />;
-    case "settings/usage":
-      return <UsagePanel />;
     case "settings/telegram":
       return <TelegramPanel />;
     case "settings/tools":
@@ -64,15 +68,16 @@ export function SettingsPage() {
   const route = useAppStore((s) => s.route);
   const setRoute = useAppStore((s) => s.setRoute);
   const panelWidth =
+    route === "settings/general" ||
     route === "settings/persona" ||
     route === "settings/auth" ||
     route === "settings/memory" ||
+    route === "settings/usage" ||
     route === "settings/mcp" ||
     route === "settings/provider" ||
     route === "settings/discord" ||
     route === "settings/telegram" ||
     route === "settings/tools"
-    route === "settings/usage" ||
       ? route === "settings/usage"
         ? "max-w-7xl"
         : "max-w-6xl"

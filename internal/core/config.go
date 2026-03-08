@@ -34,6 +34,11 @@ type TelegramConfig struct {
 	BotToken string `json:"bot_token,omitempty"`
 }
 
+// GeneralConfig holds global application preferences.
+type GeneralConfig struct {
+	Timezone string `json:"timezone,omitempty"`
+}
+
 // ToolsConfig holds settings for built-in AI assistant tools.
 type ToolsConfig struct {
 	BraveSearchAPIKey string `json:"brave_search_api_key,omitempty"`
@@ -42,6 +47,7 @@ type ToolsConfig struct {
 // AppConfig holds user-configurable settings persisted to config.json.
 type AppConfig struct {
 	Fallbacks []FallbackEntry `json:"fallbacks,omitempty"`
+	General   GeneralConfig   `json:"general,omitempty"`
 	Discord   DiscordConfig   `json:"discord,omitempty"`
 	Telegram  TelegramConfig  `json:"telegram,omitempty"`
 	Tools     ToolsConfig     `json:"tools,omitempty"`
@@ -64,6 +70,7 @@ func LoadConfig(configDir string) (AppConfig, error) {
 		return AppConfig{}, err
 	}
 	cfg.Fallbacks = sanitizeFallbacks(cfg.Fallbacks)
+	cfg.General = sanitizeGeneralConfig(cfg.General)
 	return cfg, nil
 }
 
@@ -74,6 +81,7 @@ func SaveConfig(configDir string, cfg AppConfig) error {
 		return err
 	}
 	cfg.Fallbacks = sanitizeFallbacks(cfg.Fallbacks)
+	cfg.General = sanitizeGeneralConfig(cfg.General)
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -113,4 +121,9 @@ func sanitizeFallbacks(entries []FallbackEntry) []FallbackEntry {
 		}
 	}
 	return result
+}
+
+func sanitizeGeneralConfig(cfg GeneralConfig) GeneralConfig {
+	cfg.Timezone = strings.TrimSpace(cfg.Timezone)
+	return cfg
 }

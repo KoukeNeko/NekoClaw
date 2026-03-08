@@ -39,6 +39,7 @@ const (
 	SurfaceTUI      Surface = "tui"
 	SurfaceDiscord  Surface = "discord"
 	SurfaceTelegram Surface = "telegram"
+	SurfaceWeb      Surface = "web"
 )
 
 type AccountType string
@@ -107,6 +108,8 @@ type ChatRequest struct {
 	Model             string                 `json:"model"`
 	Message           string                 `json:"message"`
 	Images            []ImageData            `json:"images,omitempty"`
+	ClientTimezone    string                 `json:"client_timezone,omitempty"`
+	ClientSentAt      string                 `json:"client_sent_at,omitempty"`
 	EnableTools       bool                   `json:"enable_tools,omitempty"`
 	RunID             string                 `json:"run_id,omitempty"`
 	ToolApprovals     []ToolApprovalDecision `json:"tool_approvals,omitempty"`

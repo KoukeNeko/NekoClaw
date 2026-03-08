@@ -522,8 +522,9 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		svc.RegisterPool(core.NewAccountPool("openai-codex", nil, nil, core.DefaultCooldownConfig()))
 	}
 
-	// Apply remaining config (fallbacks, Discord, Telegram) from the earlier load.
+	// Apply remaining config (fallbacks, general settings, Discord, Telegram) from the earlier load.
 	svc.SetConfigDir(configDir)
+	svc.SetGeneralConfig(appConfig.General)
 	svc.SetDiscordConfig(appConfig.Discord)
 	svc.SetTelegramConfig(appConfig.Telegram)
 	svc.SetToolsConfig(appConfig.Tools)

@@ -33,7 +33,7 @@ func (p *fakeDiscordEventProvider) Generate(_ context.Context, req provider.Gene
 	p.chatRequests = append(p.chatRequests, copyGenerateRequest(req))
 	p.mu.Unlock()
 	return provider.GenerateResponse{
-		Text: "ok:" + req.Messages[len(req.Messages)-1].Content,
+		Text: "ok:" + stripTestSentAtPrefix(req.Messages[len(req.Messages)-1].Content),
 	}, nil
 }
 
@@ -71,6 +71,18 @@ func copyGenerateRequest(req provider.GenerateRequest) provider.GenerateRequest 
 		}
 	}
 	return dup
+}
+
+func stripTestSentAtPrefix(content string) string {
+	const prefix = "[sent_at: "
+	if !strings.HasPrefix(content, prefix) {
+		return content
+	}
+	end := strings.Index(content, "]")
+	if end < 0 {
+		return content
+	}
+	return strings.TrimPrefix(content[end+1:], "\n")
 }
 
 func newDiscordEventTestServer(t *testing.T) (*app.Service, *fakeDiscordEventProvider, *Server) {
@@ -158,10 +170,10 @@ func TestDiscordEvent_UsesSessionHistoryWhenSameChannel(t *testing.T) {
 	if len(reqs[1].Messages) < 3 {
 		t.Fatalf("expected history to be present in second request, got %d messages", len(reqs[1].Messages))
 	}
-	if reqs[1].Messages[0].Content != "first message" {
+	if stripTestSentAtPrefix(reqs[1].Messages[0].Content) != "first message" {
 		t.Fatalf("expected first user message in history, got %q", reqs[1].Messages[0].Content)
 	}
-	if reqs[1].Messages[len(reqs[1].Messages)-1].Content != "second message" {
+	if stripTestSentAtPrefix(reqs[1].Messages[len(reqs[1].Messages)-1].Content) != "second message" {
 		t.Fatalf("expected current message at end, got %q", reqs[1].Messages[len(reqs[1].Messages)-1].Content)
 	}
 }

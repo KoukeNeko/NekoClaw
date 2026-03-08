@@ -31,7 +31,7 @@ export function Sidebar() {
   }
 
   function handleNavSettings() {
-    setRoute("settings/provider");
+    setRoute("settings/general");
     closeSidebarOnMobile();
   }
 

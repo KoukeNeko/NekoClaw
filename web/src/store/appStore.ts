@@ -5,6 +5,11 @@ import type {
   ToolEvent,
   PendingToolApproval,
 } from "@/api/types";
+import {
+  detectBrowserTimeZone,
+  normalizeTimeZoneOverride,
+  resolveEffectiveTimeZone,
+} from "@/utils/timezone";
 
 // ---------------------------------------------------------------------------
 // Chat message as displayed in the UI (superset of API Message)
@@ -29,6 +34,7 @@ export interface ChatMessage {
 
 export type Route =
   | "chat"
+  | "settings/general"
   | "settings/provider"
   | "settings/persona"
   | "settings/auth"
@@ -91,6 +97,13 @@ interface AppState {
   // Persona
   activePersona: string;
   setActivePersona: (name: string) => void;
+
+  // General settings
+  browserTimezone: string;
+  generalTimezoneOverride: string;
+  effectiveTimezone: string;
+  setBrowserTimezone: (timezone: string) => void;
+  setGeneralTimezoneOverride: (timezone: string) => void;
 
   // Usage totals for current session
   totalUsage: UsageInfo;
@@ -167,6 +180,32 @@ export const useAppStore = create<AppState>((set) => ({
     set({ pendingApprovals: approvals, currentRunID: runID }),
   clearApprovals: () =>
     set({ pendingApprovals: [], currentRunID: "" }),
+
+  browserTimezone: detectBrowserTimeZone(),
+  generalTimezoneOverride: "",
+  effectiveTimezone: detectBrowserTimeZone(),
+  setBrowserTimezone: (timezone) =>
+    set((state) => {
+      const browserTimezone = resolveEffectiveTimeZone(timezone, "");
+      return {
+        browserTimezone,
+        effectiveTimezone: resolveEffectiveTimeZone(
+          browserTimezone,
+          state.generalTimezoneOverride,
+        ),
+      };
+    }),
+  setGeneralTimezoneOverride: (timezone) =>
+    set((state) => {
+      const generalTimezoneOverride = normalizeTimeZoneOverride(timezone);
+      return {
+        generalTimezoneOverride,
+        effectiveTimezone: resolveEffectiveTimeZone(
+          state.browserTimezone,
+          generalTimezoneOverride,
+        ),
+      };
+    }),
 
   // Persona
   activePersona: "",
