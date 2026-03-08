@@ -4,6 +4,7 @@ import { PersonaPanel } from "./PersonaPanel";
 import { ProviderPanel } from "./ProviderPanel";
 import { DiscordPanel } from "./DiscordPanel";
 import { TelegramPanel } from "./TelegramPanel";
+import { AuthPanel } from "./AuthPanel";
 import { MemoryPanel } from "./MemoryPanel";
 
 /**
@@ -35,6 +36,8 @@ function renderPanel(route: Route) {
       return <ProviderPanel />;
     case "settings/persona":
       return <PersonaPanel />;
+    case "settings/auth":
+      return <AuthPanel />;
     case "settings/memory":
       return <MemoryPanel />;
     case "settings/discord":
@@ -52,6 +55,7 @@ export function SettingsPage() {
   const route = useAppStore((s) => s.route);
   const setRoute = useAppStore((s) => s.setRoute);
   const panelWidth =
+    route === "settings/auth" ||
     route === "settings/persona" ||
     route === "settings/memory" ||
     route === "settings/provider" ||
