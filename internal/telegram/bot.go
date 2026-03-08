@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/doeshing/nekoclaw/internal/app"
 	"github.com/doeshing/nekoclaw/internal/binding"
 	"github.com/doeshing/nekoclaw/internal/core"
 	"github.com/doeshing/nekoclaw/internal/logger"
 	"github.com/doeshing/nekoclaw/internal/mcp"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 var logTelegram = logger.New("telegram", logger.Blue)
@@ -487,7 +487,7 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 		return
 	}
 
-	elapsed := time.Since(startTime)
+	elapsed := responseElapsed(*streamResp, time.Since(startTime))
 
 	reply := strings.TrimSpace(streamResp.Reply)
 	// If streaming accumulated text but the response reply is empty, use accumulated text.
@@ -1021,6 +1021,13 @@ func (b *Bot) sendReply(chatID int64, replyToID int, content string) {
 // ---------------------------------------------------------------------------
 // Usage stats
 // ---------------------------------------------------------------------------
+
+func responseElapsed(resp core.ChatResponse, fallback time.Duration) time.Duration {
+	if resp.ElapsedMs > 0 {
+		return time.Duration(resp.ElapsedMs) * time.Millisecond
+	}
+	return fallback
+}
 
 // formatUsageStats builds a TUI-style usage summary:
 // ⏱ 2.3s · ↑1.2K ↓567 · 245 tok/s · google-gemini-cli/gemini-2.0-flash

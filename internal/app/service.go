@@ -325,15 +325,15 @@ func (s *Service) RenameSession(sessionID, title string) error {
 // TranscriptMessage is a lightweight message for display (no base64 image data).
 // Assistant messages include per-message metadata (provider, model, usage, tool events).
 type TranscriptMessage struct {
-	Role       string            `json:"role"`
-	Content    string            `json:"content"`
-	ImageNames []string          `json:"image_names,omitempty"`
-	CreatedAt  string            `json:"created_at"`
-	Provider   string            `json:"provider,omitempty"`
-	Model      string            `json:"model,omitempty"`
-	Usage      *core.UsageInfo   `json:"usage,omitempty"`
-	ToolEvents []core.ToolEvent  `json:"tool_events,omitempty"`
-	ElapsedMs  int64             `json:"elapsed_ms,omitempty"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content"`
+	ImageNames []string         `json:"image_names,omitempty"`
+	CreatedAt  string           `json:"created_at"`
+	Provider   string           `json:"provider,omitempty"`
+	Model      string           `json:"model,omitempty"`
+	Usage      *core.UsageInfo  `json:"usage,omitempty"`
+	ToolEvents []core.ToolEvent `json:"tool_events,omitempty"`
+	ElapsedMs  int64            `json:"elapsed_ms,omitempty"`
 }
 
 // GetSessionTranscript returns user and assistant messages for display.
@@ -2546,6 +2546,9 @@ func (s *Service) attemptSingleProvider(
 	isDefaultModel := params.isDefaultModel
 	sessionID := params.sessionID
 	startTime := time.Now()
+	elapsedMs := func() int64 {
+		return time.Since(startTime).Milliseconds()
+	}
 
 	prov, pool, err := s.resolveProviderPool(providerID)
 	if err != nil {
@@ -2827,6 +2830,7 @@ func (s *Service) attemptSingleProvider(
 				},
 			})
 			if runErr == nil {
+				responseElapsedMs := elapsedMs()
 				if !params.disableSession && !runResult.Pending && len(runResult.SessionMessages) > 0 {
 					// Build entries with per-message metadata for assistant messages
 					toolMeta := core.AssistantResponseMeta{
@@ -2834,7 +2838,7 @@ func (s *Service) attemptSingleProvider(
 						Model:      attemptModelID,
 						Usage:      runResult.Response.Usage,
 						ToolEvents: runResult.Response.ToolEvents,
-						ElapsedMs:  time.Since(startTime).Milliseconds(),
+						ElapsedMs:  responseElapsedMs,
 					}
 					entries := make([]core.SessionEntry, 0, len(runResult.SessionMessages))
 					for _, msg := range runResult.SessionMessages {
@@ -2884,6 +2888,7 @@ func (s *Service) attemptSingleProvider(
 				if resp.Status == "" {
 					resp.Status = core.ChatStatusCompleted
 				}
+				resp.ElapsedMs = responseElapsedMs
 				return resp, nil
 			}
 			reason := deriveFailureReason(runErr)
@@ -2966,11 +2971,12 @@ func (s *Service) attemptSingleProvider(
 					if streamOK {
 						text := strings.TrimSpace(fullText.String())
 						if text != "" {
+							responseElapsedMs := elapsedMs()
 							assistantEntry := core.NewAssistantEntryWithMeta(text, core.AssistantResponseMeta{
 								Provider:  providerID,
 								Model:     attemptModelID,
 								Usage:     streamUsage,
-								ElapsedMs: time.Since(startTime).Milliseconds(),
+								ElapsedMs: responseElapsedMs,
 							})
 							if !params.disableSession {
 								sessionEntries := make([]core.SessionEntry, 0, 2)
@@ -3022,6 +3028,7 @@ func (s *Service) attemptSingleProvider(
 								Compression: compressionMeta,
 								AccountID:   account.ID,
 								Usage:       streamUsage,
+								ElapsedMs:   responseElapsedMs,
 								Status:      core.ChatStatusCompleted,
 							}, nil
 						}
@@ -3054,11 +3061,12 @@ func (s *Service) attemptSingleProvider(
 			Generation: generationParams,
 		})
 		if err == nil {
+			responseElapsedMs := elapsedMs()
 			assistantEntry := core.NewAssistantEntryWithMeta(resp.Text, core.AssistantResponseMeta{
-				Provider: providerID,
-				Model:    attemptModelID,
-				Usage:    resp.Usage,
-				ElapsedMs: time.Since(startTime).Milliseconds(),
+				Provider:  providerID,
+				Model:     attemptModelID,
+				Usage:     resp.Usage,
+				ElapsedMs: responseElapsedMs,
 			})
 			if !params.disableSession {
 				sessionEntries := make([]core.SessionEntry, 0, 2)
@@ -3112,6 +3120,7 @@ func (s *Service) attemptSingleProvider(
 				Compression: compressionMeta,
 				AccountID:   account.ID,
 				Usage:       resp.Usage,
+				ElapsedMs:   responseElapsedMs,
 				Status:      core.ChatStatusCompleted,
 			}, nil
 		}

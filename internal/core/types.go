@@ -121,6 +121,7 @@ type ChatResponse struct {
 	Compression      CompressionMeta       `json:"compression"`
 	AccountID        string                `json:"account_id,omitempty"`
 	Usage            UsageInfo             `json:"usage"`
+	ElapsedMs        int64                 `json:"elapsed_ms,omitempty"`
 	Status           ChatStatus            `json:"status,omitempty"`
 	RunID            string                `json:"run_id,omitempty"`
 	PendingApprovals []PendingToolApproval `json:"pending_approvals,omitempty"`
@@ -238,9 +239,9 @@ type SessionEntry struct {
 	ToolCallID string      `json:"tool_call_id,omitempty"`
 
 	// type=message (assistant response metadata — populated for role=assistant)
-	MsgProvider  string      `json:"msg_provider,omitempty"`
-	MsgModel     string      `json:"msg_model,omitempty"`
-	MsgUsage     *UsageInfo  `json:"msg_usage,omitempty"`
+	MsgProvider   string      `json:"msg_provider,omitempty"`
+	MsgModel      string      `json:"msg_model,omitempty"`
+	MsgUsage      *UsageInfo  `json:"msg_usage,omitempty"`
 	MsgToolEvents []ToolEvent `json:"msg_tool_events,omitempty"`
 	MsgElapsedMs  int64       `json:"msg_elapsed_ms,omitempty"`
 

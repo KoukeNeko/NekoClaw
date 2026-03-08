@@ -147,13 +147,13 @@ export function useChat() {
         break;
 
       case "done": {
-        const elapsed = Date.now() - startTimeRef.current;
         const resp = chunk.response;
         setStreaming(false);
         setActiveToolName("");
         setRetryStatus("");
 
         if (resp) {
+          const elapsed = resp.elapsed_ms ?? (Date.now() - startTimeRef.current);
           // Check for approval-required status
           if (
             resp.status === "approval_required" &&

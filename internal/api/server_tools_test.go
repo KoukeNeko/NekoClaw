@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/doeshing/nekoclaw/internal/app"
 	"github.com/doeshing/nekoclaw/internal/core"
@@ -31,6 +32,7 @@ func (p *fakeToolChatProvider) ToolCapabilities() provider.ToolCapabilities {
 }
 
 func (p *fakeToolChatProvider) GenerateToolTurn(_ context.Context, _ provider.ToolTurnRequest) (provider.ToolTurnResponse, error) {
+	time.Sleep(5 * time.Millisecond)
 	if p.turn == 0 {
 		p.turn++
 		return provider.ToolTurnResponse{
@@ -76,6 +78,9 @@ func TestChatToolApprovalFlow(t *testing.T) {
 	if strings.TrimSpace(firstPayload.RunID) == "" {
 		t.Fatalf("missing run_id in first response")
 	}
+	if firstPayload.ElapsedMs <= 0 {
+		t.Fatalf("expected approval_required elapsed_ms > 0, got %d", firstPayload.ElapsedMs)
+	}
 
 	secondReq := `{"session_id":"tool-1","surface":"tui","provider":"anthropic","model":"default","enable_tools":true,"run_id":"` + firstPayload.RunID + `","tool_approvals":[{"approval_id":"call-1","decision":"allow"}]}`
 	secondResp := performJSONRequest(t, handler, http.MethodPost, "/v1/chat", secondReq)
@@ -85,7 +90,14 @@ func TestChatToolApprovalFlow(t *testing.T) {
 	if !strings.Contains(secondResp.Body.String(), `"status":"completed"`) {
 		t.Fatalf("expected completed status: %s", secondResp.Body.String())
 	}
-	if !strings.Contains(secondResp.Body.String(), `"reply":"tool done"`) {
-		t.Fatalf("expected final reply: %s", secondResp.Body.String())
+	var secondPayload core.ChatResponse
+	if err := json.Unmarshal(secondResp.Body.Bytes(), &secondPayload); err != nil {
+		t.Fatalf("decode second response: %v", err)
+	}
+	if secondPayload.Reply != "tool done" {
+		t.Fatalf("expected final reply, got %+v", secondPayload)
+	}
+	if secondPayload.ElapsedMs <= 0 {
+		t.Fatalf("expected completed elapsed_ms > 0, got %d", secondPayload.ElapsedMs)
 	}
 }

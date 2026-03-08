@@ -477,7 +477,7 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	elapsed := time.Since(startTime)
+	elapsed := responseElapsed(*streamResp, time.Since(startTime))
 
 	// Build final reply from accumulated text or response.
 	reply := strings.TrimSpace(fullText.String())
@@ -1039,6 +1039,13 @@ func (b *Bot) logTraffic(s *discordgo.Session, m *discordgo.MessageCreate, resp 
 	sb.WriteString(fmt.Sprintf("  耗時: %s", elapsed.Round(time.Millisecond)))
 
 	b.logToConsole(s, sb.String())
+}
+
+func responseElapsed(resp core.ChatResponse, fallback time.Duration) time.Duration {
+	if resp.ElapsedMs > 0 {
+		return time.Duration(resp.ElapsedMs) * time.Millisecond
+	}
+	return fallback
 }
 
 // formatUsageStats builds a TUI-style usage summary:

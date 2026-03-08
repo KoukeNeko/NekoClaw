@@ -165,3 +165,30 @@ func TestBuildEphemeralMessages_RoleMapping_BotAsAssistant(t *testing.T) {
 		t.Fatalf("expected user history prefix, got %q", ephemeral[1].Content)
 	}
 }
+
+func TestResponseElapsedPrefersServerValue(t *testing.T) {
+	resp := core.ChatResponse{ElapsedMs: 27_500}
+	fallback := 31 * time.Second
+
+	got := responseElapsed(resp, fallback)
+	if got != 27_500*time.Millisecond {
+		t.Fatalf("responseElapsed = %s, want 27.5s", got)
+	}
+
+	stats := formatUsageStats(core.UsageInfo{OutputTokens: 550}, got, "google-gemini-cli", "gemini-3-pro-preview")
+	if !strings.Contains(stats, "⏱ 27.5s") {
+		t.Fatalf("usage stats should use server elapsed, got %q", stats)
+	}
+	if strings.Contains(stats, "31.0s") {
+		t.Fatalf("usage stats should not use fallback elapsed, got %q", stats)
+	}
+}
+
+func TestResponseElapsedFallsBackWhenMissing(t *testing.T) {
+	fallback := 31 * time.Second
+
+	got := responseElapsed(core.ChatResponse{}, fallback)
+	if got != fallback {
+		t.Fatalf("responseElapsed = %s, want %s", got, fallback)
+	}
+}

@@ -93,6 +93,7 @@ export interface ChatResponse {
   compression: CompressionMeta;
   account_id?: string;
   usage: UsageInfo;
+  elapsed_ms?: number;
   status?: ChatStatus;
   run_id?: string;
   pending_approvals?: PendingToolApproval[];
