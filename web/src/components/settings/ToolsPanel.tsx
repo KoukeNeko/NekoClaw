@@ -4,6 +4,7 @@ import {
   getToolsConfig,
   setToolsConfig,
 } from "@/api/client";
+import { SelectionList, SelectionListItem } from "@/components/settings/SelectionList";
 import type {
   ToolCatalogEntry,
   ToolConfigField,
@@ -471,15 +472,15 @@ export function ToolsPanel() {
                 </div>
               </div>
             ) : (
-              <ul className="menu rounded-box border border-base-300 bg-base-100 p-2">
+              <SelectionList>
                 {filteredTools.map((tool) => {
                   const isSelected = selectedToolName === tool.name;
                   return (
-                    <li key={tool.name}>
-                      <button
-                        className={isSelected ? "active" : ""}
+                    <SelectionListItem
+                      key={tool.name}
+                      selected={isSelected}
                         onClick={() => setSelectedToolName(tool.name)}
-                      >
+                    >
                         <div className="min-w-0 flex-1 text-left">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="truncate font-semibold">{tool.name}</span>
@@ -503,11 +504,10 @@ export function ToolsPanel() {
                             {tool.description}
                           </div>
                         </div>
-                      </button>
-                    </li>
+                    </SelectionListItem>
                   );
                 })}
-              </ul>
+              </SelectionList>
             )}
           </div>
         </div>

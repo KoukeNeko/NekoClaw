@@ -10,6 +10,7 @@ import {
   saveMCPConfig,
   toggleMCPBuiltin,
 } from "@/api/client";
+import { SelectionList, SelectionListItem } from "@/components/settings/SelectionList";
 import type {
   MCPBuiltinServer,
   MCPConfigDocument,
@@ -805,20 +806,16 @@ export function MCPPanel() {
                     <span>沒有符合搜尋條件的 builtin server。</span>
                   </div>
                 ) : (
-                  <ul className="space-y-2 rounded-box border border-base-300 bg-base-100 p-2">
+                  <SelectionList>
                     {filteredBuiltins.map((item) => {
                       const isSelected =
                         selected?.kind === "builtin" && selected.name === item.name;
                       return (
-                        <li key={item.name} className="w-full">
-                          <button
-                            className={`flex w-full rounded-box border border-base-300 px-4 py-3 text-left transition-colors ${
-                              isSelected
-                                ? "border-primary/60 bg-base-300"
-                                : "bg-base-100 hover:bg-base-200"
-                            }`}
+                        <SelectionListItem
+                          key={item.name}
+                          selected={isSelected}
                             onClick={() => setSelected({ kind: "builtin", name: item.name })}
-                          >
+                        >
                             <div className="min-w-0 flex-1 text-left">
                               <div className="flex flex-wrap items-center gap-2">
                                 <span className="truncate font-semibold">{item.name}</span>
@@ -836,11 +833,10 @@ export function MCPPanel() {
                                 tools: {item.tool_count}
                               </div>
                             </div>
-                          </button>
-                        </li>
+                        </SelectionListItem>
                       );
                     })}
-                  </ul>
+                  </SelectionList>
                 )}
               </div>
 
@@ -860,7 +856,7 @@ export function MCPPanel() {
                     </span>
                   </div>
                 ) : (
-                  <ul className="space-y-2 rounded-box border border-base-300 bg-base-100 p-2">
+                  <SelectionList>
                     {filteredDocuments.map((doc) => {
                       const runtime = doc.config?.name
                         ? customRuntimeServers.find((server) => server.name === doc.config?.name)
@@ -869,17 +865,13 @@ export function MCPPanel() {
                       const isSelected =
                         selected?.kind === "custom" && selected.fileName === doc.file_name;
                       return (
-                        <li key={doc.file_name} className="w-full">
-                          <button
-                            className={`flex w-full rounded-box border border-base-300 px-4 py-3 text-left transition-colors ${
-                              isSelected
-                                ? "border-primary/60 bg-base-300"
-                                : "bg-base-100 hover:bg-base-200"
-                            }`}
+                        <SelectionListItem
+                          key={doc.file_name}
+                          selected={isSelected}
                             onClick={() =>
                               setSelected({ kind: "custom", fileName: doc.file_name })
                             }
-                          >
+                        >
                             <div className="min-w-0 flex-1 text-left">
                               <div className="flex flex-wrap items-center gap-2">
                                 <span className="truncate font-semibold">
@@ -903,11 +895,10 @@ export function MCPPanel() {
                                   `${doc.config?.transport ?? "unknown"} · ${doc.config?.trust ?? "unknown"}`}
                               </div>
                             </div>
-                          </button>
-                        </li>
+                        </SelectionListItem>
                       );
                     })}
-                  </ul>
+                  </SelectionList>
                 )}
               </div>
             </div>
