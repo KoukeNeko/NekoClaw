@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/doeshing/nekoclaw/internal/core"
 	"github.com/doeshing/nekoclaw/internal/logger"
 	"github.com/doeshing/nekoclaw/internal/provider"
+	"github.com/doeshing/nekoclaw/internal/tokenutil"
 )
 
 var logCompact = logger.New("compact", logger.Cyan)
@@ -16,8 +16,6 @@ var logCompact = logger.New("compact", logger.Cyan)
 const (
 	DefaultReserveTokens    = 16384
 	defaultKeepRecentTokens = 20000
-	charsPerToken           = 4
-	entryEnvelopeOverhead   = 24
 )
 
 // Compactor performs LLM-based compaction of session history.
@@ -141,19 +139,14 @@ func splitByTokenBudget(entries []core.SessionEntry, keepTokens int) (kept, drop
 // Token estimation for SessionEntry
 // ---------------------------------------------------------------------------
 
-// EstimateEntryTokens estimates the token count for a single entry.
+// EstimateEntryTokens estimates the token count for a single entry
+// using CJK-aware counting (delegated to tokenutil).
 func EstimateEntryTokens(e core.SessionEntry) int {
-	contentRunes := utf8.RuneCountInString(strings.TrimSpace(e.Content))
-	roleRunes := utf8.RuneCountInString(string(e.Role))
-	toolRunes := utf8.RuneCountInString(strings.TrimSpace(e.ToolName))
-	summaryRunes := utf8.RuneCountInString(strings.TrimSpace(e.Summary))
-
-	runeBudget := contentRunes + roleRunes + toolRunes + summaryRunes + entryEnvelopeOverhead
-	t := (runeBudget + (charsPerToken - 1)) / charsPerToken
-	if t < 1 {
-		return 1
-	}
-	return t
+	combined := strings.TrimSpace(e.Content) + " " +
+		string(e.Role) + " " +
+		strings.TrimSpace(e.ToolName) + " " +
+		strings.TrimSpace(e.Summary)
+	return tokenutil.EstimateStringWithOverhead(combined)
 }
 
 // EstimateEntriesTokens estimates the total token count for a slice of entries.
@@ -169,12 +162,7 @@ func EstimateEntriesTokens(entries []core.SessionEntry) int {
 }
 
 func estimateStringTokens(s string) int {
-	runes := utf8.RuneCountInString(strings.TrimSpace(s))
-	t := (runes + entryEnvelopeOverhead + charsPerToken - 1) / charsPerToken
-	if t < 1 {
-		return 1
-	}
-	return t
+	return tokenutil.EstimateStringWithOverhead(s)
 }
 
 // ---------------------------------------------------------------------------

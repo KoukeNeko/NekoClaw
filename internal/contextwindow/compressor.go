@@ -3,13 +3,12 @@ package contextwindow
 import (
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/doeshing/nekoclaw/internal/core"
+	"github.com/doeshing/nekoclaw/internal/tokenutil"
 )
 
 const (
-	charsPerToken          = 4
 	tokenSafetyMargin      = 1.2
 	defaultMaxHistoryShare = 0.5
 	defaultPruneParts      = 2
@@ -70,7 +69,7 @@ func Compress(messages []core.Message, policy Policy) ([]core.Message, core.Comp
 	}
 
 	working := append([]core.Message(nil), messages...)
-	originalTokens := estimateMessagesTokens(working)
+	originalTokens := EstimateMessagesTokens(working)
 	if policy.MaxContextTokens <= 0 {
 		return working, core.CompressionMeta{OriginalTokens: originalTokens, CompressedTokens: originalTokens}, false
 	}
@@ -87,13 +86,13 @@ func Compress(messages []core.Message, policy Policy) ([]core.Message, core.Comp
 	if budgetTokens < minSlidingBudgetTokens {
 		budgetTokens = minSlidingBudgetTokens
 	}
-	effectiveBudget := applySafetyMargin(budgetTokens)
+	effectiveBudget := ApplySafetyMargin(budgetTokens)
 	if effectiveBudget < 1 {
 		effectiveBudget = 1
 	}
 
 	var extraDropped []core.Message
-	working, extraDropped = keepNewestByTokenBudget(working, effectiveBudget)
+	working, extraDropped = KeepNewest(working, effectiveBudget)
 	if len(extraDropped) > 0 {
 		droppedMessagesList = append(droppedMessagesList, extraDropped...)
 		droppedMessages += len(extraDropped)
@@ -104,12 +103,12 @@ func Compress(messages []core.Message, policy Policy) ([]core.Message, core.Comp
 			Role:    core.RoleSystem,
 			Content: buildDroppedHistorySummary(droppedMessagesList, droppedMessages),
 		}
-		remainingBudget := effectiveBudget - estimateMessageTokens(summaryMessage)
+		remainingBudget := effectiveBudget - EstimateMessageTokens(summaryMessage)
 		if remainingBudget < 1 {
 			working = []core.Message{}
 		} else {
 			var fitDropped []core.Message
-			working, fitDropped = keepNewestByTokenBudget(working, remainingBudget)
+			working, fitDropped = KeepNewest(working, remainingBudget)
 			if len(fitDropped) > 0 {
 				droppedMessagesList = append(droppedMessagesList, fitDropped...)
 				droppedMessages += len(fitDropped)
@@ -119,7 +118,7 @@ func Compress(messages []core.Message, policy Policy) ([]core.Message, core.Comp
 		working = append([]core.Message{summaryMessage}, working...)
 	}
 
-	compressedTokens := estimateMessagesTokens(working)
+	compressedTokens := EstimateMessagesTokens(working)
 	meta := core.CompressionMeta{
 		OriginalTokens:   originalTokens,
 		CompressedTokens: compressedTokens,
@@ -141,7 +140,9 @@ type pruneResult struct {
 	BudgetTokens        int
 }
 
-func applySafetyMargin(tokens int) int {
+// ApplySafetyMargin reduces a token budget by the standard safety factor
+// (1.2x divisor) to provide headroom for estimation inaccuracies.
+func ApplySafetyMargin(tokens int) int {
 	if tokens <= 0 {
 		return 1
 	}
@@ -152,7 +153,10 @@ func applySafetyMargin(tokens int) int {
 	return effective
 }
 
-func keepNewestByTokenBudget(messages []core.Message, budgetTokens int) ([]core.Message, []core.Message) {
+// KeepNewest retains the most recent messages that fit within the given
+// token budget, dropping older messages from the front. It returns the
+// kept messages and the dropped messages separately.
+func KeepNewest(messages []core.Message, budgetTokens int) ([]core.Message, []core.Message) {
 	if budgetTokens <= 0 {
 		return []core.Message{}, append([]core.Message(nil), messages...)
 	}
@@ -160,7 +164,7 @@ func keepNewestByTokenBudget(messages []core.Message, budgetTokens int) ([]core.
 	total := 0
 	result := make([]core.Message, 0, len(messages))
 	for i := len(messages) - 1; i >= 0; i-- {
-		msgTokens := estimateMessageTokens(messages[i])
+		msgTokens := EstimateMessageTokens(messages[i])
 		if len(result) > 0 && total+msgTokens > budgetTokens {
 			break
 		}
@@ -188,14 +192,14 @@ func splitMessagesByTokenShare(messages []core.Message, parts int) [][]core.Mess
 		return [][]core.Message{append([]core.Message(nil), messages...)}
 	}
 
-	totalTokens := estimateMessagesTokens(messages)
+	totalTokens := EstimateMessagesTokens(messages)
 	targetTokens := float64(totalTokens) / float64(parts)
 	chunks := make([][]core.Message, 0, parts)
 	current := make([]core.Message, 0)
 	currentTokens := 0
 
 	for _, message := range messages {
-		messageTokens := estimateMessageTokens(message)
+		messageTokens := EstimateMessageTokens(message)
 		if len(chunks) < parts-1 && len(current) > 0 && float64(currentTokens+messageTokens) > targetTokens {
 			chunks = append(chunks, current)
 			current = make([]core.Message, 0)
@@ -248,7 +252,7 @@ func pruneHistoryForContextShare(
 	droppedTokens := 0
 	parts = normalizeParts(parts, len(keptMessages))
 
-	for len(keptMessages) > 0 && estimateMessagesTokens(keptMessages) > budgetTokens {
+	for len(keptMessages) > 0 && EstimateMessagesTokens(keptMessages) > budgetTokens {
 		chunks := splitMessagesByTokenShare(keptMessages, parts)
 		if len(chunks) <= 1 {
 			break
@@ -260,7 +264,7 @@ func pruneHistoryForContextShare(
 		}
 		droppedChunks++
 		droppedMessages += len(droppedChunk)
-		droppedTokens += estimateMessagesTokens(droppedChunk)
+		droppedTokens += EstimateMessagesTokens(droppedChunk)
 		allDropped = append(allDropped, droppedChunk...)
 		keptMessages = kept
 	}
@@ -271,7 +275,7 @@ func pruneHistoryForContextShare(
 		DroppedChunks:       droppedChunks,
 		DroppedMessages:     droppedMessages,
 		DroppedTokens:       droppedTokens,
-		KeptTokens:          estimateMessagesTokens(keptMessages),
+		KeptTokens:          EstimateMessagesTokens(keptMessages),
 		BudgetTokens:        budgetTokens,
 	}
 }
@@ -280,7 +284,7 @@ func buildDroppedHistorySummary(dropped []core.Message, droppedMessages int) str
 	if droppedMessages <= 0 {
 		return "History compacted."
 	}
-	droppedTokens := estimateMessagesTokens(dropped)
+	droppedTokens := EstimateMessagesTokens(dropped)
 	lines := []string{
 		fmt.Sprintf(
 			"History compacted: dropped %d older messages (~%d tokens) to stay within context limits.",
@@ -330,10 +334,12 @@ func inlineSnippet(text string, maxChars int) string {
 	return string(runes[:maxChars-1]) + "…"
 }
 
-func estimateMessagesTokens(messages []core.Message) int {
+// EstimateMessagesTokens estimates total tokens for a slice of messages
+// using CJK-aware counting (delegated to tokenutil).
+func EstimateMessagesTokens(messages []core.Message) int {
 	total := 0
 	for _, msg := range messages {
-		total += estimateMessageTokens(msg)
+		total += EstimateMessageTokens(msg)
 	}
 	if total == 0 {
 		return 1
@@ -341,20 +347,16 @@ func estimateMessagesTokens(messages []core.Message) int {
 	return total
 }
 
-func estimateMessageTokens(msg core.Message) int {
-	contentRunes := utf8.RuneCountInString(strings.TrimSpace(msg.Content))
-	roleRunes := utf8.RuneCountInString(string(msg.Role))
-	toolRunes := utf8.RuneCountInString(strings.TrimSpace(msg.ToolName))
-
-	// OpenClaw-style accounting includes message envelope overhead (role, wrapper
-	// structure, and per-message framing), not only plain content length.
-	runeBudget := contentRunes + roleRunes + toolRunes + 24
-	t := (runeBudget + (charsPerToken - 1)) / charsPerToken
+// EstimateMessageTokens estimates tokens for a single message using
+// CJK-aware counting for the content, plus image and tool overhead.
+func EstimateMessageTokens(msg core.Message) int {
+	// Combine all text fields for CJK-aware estimation with envelope overhead.
+	combined := strings.TrimSpace(msg.Content) + " " + string(msg.Role) + " " + strings.TrimSpace(msg.ToolName)
+	t := tokenutil.EstimateStringWithOverhead(combined)
 
 	// Account for image data: base64 is ~1.33× the raw bytes, and typical vision
 	// models charge ~85 tokens per 512×512 tile. A rough heuristic: treat each
-	// image's base64 length ÷ 750 as the estimated token cost (approximately
-	// 1 token per 3 base64 chars × 0.25 vision overhead factor).
+	// image's base64 length ÷ 750 as the estimated token cost.
 	for _, img := range msg.Images {
 		imageTokens := len(img.Data) / 750
 		if imageTokens < 85 {

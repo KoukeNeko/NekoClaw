@@ -21,6 +21,7 @@ import (
 	"github.com/doeshing/nekoclaw/internal/memory"
 	"github.com/doeshing/nekoclaw/internal/persona"
 	"github.com/doeshing/nekoclaw/internal/provider"
+	"github.com/doeshing/nekoclaw/internal/tokenutil"
 	"github.com/doeshing/nekoclaw/internal/tooling"
 )
 
@@ -2665,6 +2666,27 @@ func (s *Service) attemptSingleProvider(
 			Content: memoryPrompt,
 		}
 		compressedMessages = append([]core.Message{systemMsg}, compressedMessages...)
+	}
+
+	// Post-injection guard: the system prompt (persona + memory) was prepended
+	// after compression, so the total may now exceed the context window. Re-trim
+	// the non-system messages if needed.
+	if len(compressedMessages) > 1 && contextWindow > 0 {
+		finalEstimated := contextwindow.EstimateMessagesTokens(compressedMessages)
+		finalBudget := contextwindow.ApplySafetyMargin(contextWindow)
+		if finalEstimated > finalBudget {
+			head := compressedMessages[0]
+			rest := compressedMessages[1:]
+			headTokens := tokenutil.EstimateString(head.Content)
+			remainingBudget := finalBudget - headTokens
+			if remainingBudget < 1 {
+				remainingBudget = 1
+			}
+			trimmed, _ := contextwindow.KeepNewest(rest, remainingBudget)
+			compressedMessages = append([]core.Message{head}, trimmed...)
+			logService.Warnf("post-injection trim: context_window=%d estimated=%d budget=%d head_tokens=%d kept=%d",
+				contextWindow, finalEstimated, finalBudget, headTokens, len(trimmed))
+		}
 	}
 
 	attemptLimit := len(pool.Snapshot())
