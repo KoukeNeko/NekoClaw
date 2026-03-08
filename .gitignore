@@ -1,2 +1,6 @@
 # OpenClaw upstream reference (not tracked)
 .openclaw-tmp/
+
+# Web UI build artifacts
+web/node_modules/
+web/dist/

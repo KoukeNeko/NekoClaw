@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"strings"
 	"time"
@@ -20,11 +21,18 @@ import (
 )
 
 type Server struct {
-	svc *app.Service
+	svc    *app.Service
+	webFS  fs.FS // embedded frontend assets (nil = no SPA serving)
 }
 
 func NewServer(svc *app.Service) *Server {
 	return &Server{svc: svc}
+}
+
+// SetWebFS enables SPA serving from an embedded filesystem.
+// The fs.FS should expose files at the root (e.g. index.html, assets/).
+func (s *Server) SetWebFS(webFS fs.FS) {
+	s.webFS = webFS
 }
 
 func (s *Server) Handler() http.Handler {
@@ -89,7 +97,36 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/personas/clear", s.handlePersonaClear)
 	mux.HandleFunc("/v1/personas/reload", s.handlePersonaReload)
 	mux.HandleFunc("/v1/tool-status", s.handleToolStatus)
+
+	// SPA fallback: serve embedded frontend when webFS is configured.
+	// API routes (/v1/*, /healthz, /oauth2callback) are matched first by
+	// the mux; all other paths fall through to the static file server
+	// with index.html fallback for client-side routing.
+	if s.webFS != nil {
+		mux.Handle("/", spaHandler(s.webFS))
+	}
+
 	return mux
+}
+
+// spaHandler serves static files from the embedded FS. If the requested
+// file does not exist, it falls back to index.html for client-side routing.
+func spaHandler(webFS fs.FS) http.Handler {
+	fileServer := http.FileServer(http.FS(webFS))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Try to serve the exact file
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			path = "index.html"
+		}
+		if _, err := fs.Stat(webFS, path); err == nil {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		// Fallback to index.html for SPA client-side routing
+		r.URL.Path = "/"
+		fileServer.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) Run(ctx context.Context, addr string) error {

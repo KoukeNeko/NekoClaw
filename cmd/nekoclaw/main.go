@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"os"
@@ -27,6 +28,7 @@ import (
 	"github.com/doeshing/nekoclaw/internal/provider"
 	"github.com/doeshing/nekoclaw/internal/telegram"
 	"github.com/doeshing/nekoclaw/internal/tui"
+	"github.com/doeshing/nekoclaw/web"
 )
 
 var logSystem = logger.New("system", logger.White)
@@ -39,7 +41,7 @@ func main() {
 	ensureGeminiOAuthEnvAliases()
 
 	var (
-		mode               = flag.String("mode", envOr("NEKOCLAW_MODE", "both"), "run mode: api | tui | both")
+		mode               = flag.String("mode", envOr("NEKOCLAW_MODE", "both"), "run mode: api | tui | both | web")
 		addr               = flag.String("addr", envOr("NEKOCLAW_ADDR", "127.0.0.1:8085"), "api listen address")
 		apiBaseURL         = flag.String("api-base-url", envOr("NEKOCLAW_API_BASE_URL", "http://127.0.0.1:8085"), "api base url for tui")
 		defaultProvider    = flag.String("provider", envOr("NEKOCLAW_PROVIDER", "google-gemini-cli"), "default provider")
@@ -204,6 +206,43 @@ func main() {
 		if apiErr != nil && !errors.Is(apiErr, context.Canceled) {
 			fatal(apiErr)
 		}
+	case "web":
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		var wg sync.WaitGroup
+
+		if discordBot != nil {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := discordBot.Start(ctx); err != nil {
+					logSystem.Errorf("discord bot: %v", err)
+				}
+			}()
+		}
+		if telegramBot != nil {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := telegramBot.Start(ctx); err != nil {
+					logSystem.Errorf("telegram bot: %v", err)
+				}
+			}()
+		}
+
+		server := api.NewServer(service)
+		webFS, fsErr := fs.Sub(web.DistFS, "dist")
+		if fsErr != nil {
+			fatal(fmt.Errorf("embed web dist: %w", fsErr))
+		}
+		server.SetWebFS(webFS)
+
+		fmt.Printf("NekoClaw Web UI listening on http://%s\n", *addr)
+		apiErr := server.Run(ctx, *addr)
+		cancel()
+		wg.Wait()
+		fatal(apiErr)
 	default:
 		fatal(fmt.Errorf("unsupported mode %q", *mode))
 	}
@@ -268,7 +307,7 @@ func configureRuntimeLogging(runMode string, authDir string) func() {
 		return func() {}
 	}
 	switch runMode {
-	case "tui", "both":
+	case "tui", "both", "web":
 		logPath := strings.TrimSpace(os.Getenv("NEKOCLAW_LOG_FILE"))
 		if logPath == "" {
 			logPath = resolveDefaultLogFilePath(authDir)
