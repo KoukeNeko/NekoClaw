@@ -1,6 +1,11 @@
 # OpenClaw upstream reference (not tracked)
 .openclaw-tmp/
 
+# Local tooling and OS metadata
+.DS_Store
+.playwright-cli/
+.claude/worktrees/
+
 # Web UI build artifacts
 web/node_modules/
 web/dist/
