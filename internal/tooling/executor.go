@@ -31,38 +31,9 @@ type ExecutorConfig struct {
 }
 
 func NewRuntimeExecutor(backend Backend, policy Policy, cfg ExecutorConfig) *RuntimeExecutor {
-	specs := map[string]ToolSpec{
-		"file_list":      {Definition: toolDef("file_list", "List files in the workspace.", `{"type":"object","properties":{"path":{"type":"string"},"recursive":{"type":"boolean"},"max_entries":{"type":"integer","minimum":1}}}`)},
-		"file_read":      {Definition: toolDef("file_read", "Read file content.", `{"type":"object","required":["path"],"properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1}}}`)},
-		"file_search":    {Definition: toolDef("file_search", "Search text in files.", `{"type":"object","required":["query"],"properties":{"query":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string"},"max_results":{"type":"integer","minimum":1}}}`)},
-		"sessions_list":  {Definition: toolDef("sessions_list", "List chat sessions.", `{"type":"object","properties":{"limit":{"type":"integer","minimum":1}}}`)},
-		"memory_search":  {Definition: toolDef("memory_search", "Search memory index.", `{"type":"object","required":["query"],"properties":{"query":{"type":"string"},"limit":{"type":"integer","minimum":1}}}`)},
-		"memory_get":     {Definition: toolDef("memory_get", "Read a memory file by relative path. Optionally specify line range.", `{"type":"object","required":["path"],"properties":{"path":{"type":"string","description":"Relative path to memory file (e.g. MEMORY.md, memory/2026-03-06-auth.md)"},"from":{"type":"integer","description":"Starting line number (1-based)","minimum":1},"lines":{"type":"integer","description":"Number of lines to read","minimum":1}}}`)},
-		"memory_save":    {Definition: toolDef("memory_save", "Save a note to the daily memory log. Use this when the user asks you to remember something.", `{"type":"object","required":["content"],"properties":{"content":{"type":"string","description":"The content to save to memory"}}}`)},
-		"providers_list": {Definition: toolDef("providers_list", "List providers.", `{"type":"object","properties":{}}`)},
-		"accounts_list":  {Definition: toolDef("accounts_list", "List provider accounts.", `{"type":"object","required":["provider"],"properties":{"provider":{"type":"string"}}}`)},
-		"git_status":     {Definition: toolDef("git_status", "Run git status.", `{"type":"object","properties":{}}`)},
-		"git_diff":       {Definition: toolDef("git_diff", "Run git diff.", `{"type":"object","properties":{"pathspec":{"type":"string"},"staged":{"type":"boolean"}}}`)},
-		"git_log":        {Definition: toolDef("git_log", "Run git log.", `{"type":"object","properties":{"limit":{"type":"integer","minimum":1}}}`)},
-		"git_show":       {Definition: toolDef("git_show", "Run git show.", `{"type":"object","properties":{"rev":{"type":"string"}}}`)},
-		"exec_command":   {Definition: toolDef("exec_command", "Execute an allowlisted command.", `{"type":"object","required":["argv"],"properties":{"argv":{"type":"array","items":{"type":"string"}},"workdir":{"type":"string"},"timeout_sec":{"type":"integer","minimum":1}}}`)},
-		"file_write":     {Definition: toolDef("file_write", "Write file content.", `{"type":"object","required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"},"mode":{"type":"string","enum":["overwrite","append"]}}}`), Mutating: true},
-		"file_replace":   {Definition: toolDef("file_replace", "Replace text in a file.", `{"type":"object","required":["path","old","new"],"properties":{"path":{"type":"string"},"old":{"type":"string"},"new":{"type":"string"},"replace_all":{"type":"boolean"}}}`), Mutating: true},
-		"git_add":        {Definition: toolDef("git_add", "Run git add.", `{"type":"object","required":["pathspecs"],"properties":{"pathspecs":{"type":"array","items":{"type":"string"}}}}`), Mutating: true},
-		"git_restore":    {Definition: toolDef("git_restore", "Run git restore.", `{"type":"object","required":["pathspecs"],"properties":{"pathspecs":{"type":"array","items":{"type":"string"}},"staged":{"type":"boolean"}}}`), Mutating: true},
-		"git_commit":     {Definition: toolDef("git_commit", "Run git commit.", `{"type":"object","required":["message"],"properties":{"message":{"type":"string"}}}`), Mutating: true},
-		// AI assistant tools — always available, no external dependencies.
-		"datetime":  {Definition: toolDef("datetime", "Get current date, time, timezone, and unix timestamp.", `{"type":"object","properties":{}}`)},
-		"web_fetch": {Definition: toolDef("web_fetch", "Fetch a web page and return its text content. Useful for reading articles, documentation, or URLs shared by the user.", `{"type":"object","required":["url"],"properties":{"url":{"type":"string"},"max_chars":{"type":"integer","minimum":100}}}`)},
-	}
-
-	// web_search requires an API key; only register when configured.
-	braveKey := strings.TrimSpace(cfg.BraveSearchAPIKey)
-	if braveKey != "" {
-		specs["web_search"] = ToolSpec{Definition: toolDef("web_search",
-			"Search the web using Brave Search. Returns titles, URLs, and snippets.",
-			`{"type":"object","required":["query"],"properties":{"query":{"type":"string"},"count":{"type":"integer","minimum":1,"maximum":20}}}`)}
-	}
+	cfg = normalizeExecutorConfig(cfg)
+	specs := builtinRuntimeSpecs(cfg)
+	braveKey := cfg.BraveSearchAPIKey
 
 	return &RuntimeExecutor{
 		backend:        backend,
@@ -70,14 +41,6 @@ func NewRuntimeExecutor(backend Backend, policy Policy, cfg ExecutorConfig) *Run
 		specs:          specs,
 		httpClient:     &http.Client{Timeout: 15 * time.Second},
 		braveSearchKey: braveKey,
-	}
-}
-
-func toolDef(name, description, schema string) provider.ToolDefinition {
-	return provider.ToolDefinition{
-		Name:        name,
-		Description: description,
-		InputSchema: json.RawMessage(schema),
 	}
 }
 
