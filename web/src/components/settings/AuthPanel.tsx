@@ -110,6 +110,18 @@ function formatLongDateTime(value?: string | null): string {
   });
 }
 
+function normalizeUntilTimestamp(value?: string | null): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) return undefined;
+  if (date.getUTCFullYear() <= 1) return undefined;
+  if (date.getTime() <= Date.now()) return undefined;
+
+  return trimmed;
+}
+
 function geminiProfileKey(profile: GeminiAuthProfile): string {
   return profile.profile_id;
 }
@@ -182,15 +194,18 @@ function availabilityBadge(
   cooldownUntil?: string,
   disabledUntil?: string,
 ): NavBadge {
-  if (disabledUntil) {
+  const activeDisabledUntil = normalizeUntilTimestamp(disabledUntil);
+  const activeCooldownUntil = normalizeUntilTimestamp(cooldownUntil);
+
+  if (!available && activeDisabledUntil) {
     return {
-      label: `Disabled ${formatDateTime(disabledUntil)}`,
+      label: `Disabled ${formatDateTime(activeDisabledUntil)}`,
       className: "badge-error",
     };
   }
-  if (cooldownUntil) {
+  if (!available && activeCooldownUntil) {
     return {
-      label: `Cooldown ${formatDateTime(cooldownUntil)}`,
+      label: `Cooldown ${formatDateTime(activeCooldownUntil)}`,
       className: "badge-warning",
     };
   }
@@ -399,7 +414,9 @@ function ProviderNavCard(props: {
             </div>
             <p className="text-sm text-base-content/60">{description}</p>
           </div>
-          <div className="badge badge-outline badge-sm">{profileCount}</div>
+          <div className="badge badge-outline badge-sm shrink-0 whitespace-nowrap">
+            {profileCount}
+          </div>
         </button>
 
         <div className="rounded-box border border-base-300 bg-base-100 px-3 py-2">
@@ -428,14 +445,16 @@ function ProviderNavCard(props: {
               >
                 <div className="card-body gap-3 p-3">
                   <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="truncate font-medium">{profile.title}</div>
                       <div className="mt-1 truncate text-xs text-base-content/55">
                         {profile.subtitle}
                       </div>
                     </div>
                     {selectedKey === profile.key && (
-                      <div className="badge badge-primary badge-sm">選取中</div>
+                      <div className="badge badge-primary badge-sm shrink-0 whitespace-nowrap leading-none">
+                        選取中
+                      </div>
                     )}
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -1523,7 +1542,7 @@ export function AuthPanel() {
       <div className="card border border-base-300 bg-base-200 shadow-sm">
         <div className="card-body gap-4">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="space-y-2">
+            <div className="min-w-0 flex-1 space-y-2">
               <div className="flex flex-wrap items-center gap-2">
                 <div className="badge badge-outline badge-sm">Auth</div>
                 <div className="badge badge-info badge-sm">Profiles</div>
@@ -1542,17 +1561,19 @@ export function AuthPanel() {
               </div>
             </div>
 
-            <div className="join">
-              <button
-                className="btn btn-sm join-item"
-                onClick={handleRefresh}
-                disabled={busyAction !== ""}
-              >
-                {busyAction === "reload" && (
-                  <span className="loading loading-spinner loading-xs" />
-                )}
-                重新整理
-              </button>
+            <div className="shrink-0">
+              <div className="join">
+                <button
+                  className="btn btn-sm join-item"
+                  onClick={handleRefresh}
+                  disabled={busyAction !== ""}
+                >
+                  {busyAction === "reload" && (
+                    <span className="loading loading-spinner loading-xs" />
+                  )}
+                  重新整理
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1606,7 +1627,7 @@ export function AuthPanel() {
               <div className="card border border-base-300 bg-base-200 shadow-sm">
                 <div className="card-body gap-4">
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="space-y-2">
+                    <div className="min-w-0 flex-1 space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="badge badge-outline badge-sm">Gemini OAuth</div>
                         {selectedGemini?.preferred && (
@@ -1640,34 +1661,36 @@ export function AuthPanel() {
                       </div>
                     </div>
 
-                    <div className="join">
-                      <button
-                        className="btn btn-sm join-item"
-                        onClick={handleStartGeminiOAuth}
-                        disabled={busyAction !== ""}
-                      >
-                        {busyAction === "gemini-start" && (
-                          <span className="loading loading-spinner loading-xs" />
-                        )}
-                        開始 OAuth
-                      </button>
-                      <button
-                        className="btn btn-ghost btn-sm join-item"
-                        onClick={handleRefresh}
-                        disabled={busyAction !== ""}
-                      >
-                        重新整理
-                      </button>
-                      <button
-                        className="btn btn-primary btn-sm join-item"
-                        onClick={handleUseGeminiProfile}
-                        disabled={!selectedGemini || busyAction !== ""}
-                      >
-                        {busyAction === "gemini-use" && (
-                          <span className="loading loading-spinner loading-xs" />
-                        )}
-                        使用此 profile
-                      </button>
+                    <div className="max-w-full overflow-x-auto lg:shrink-0">
+                      <div className="join w-max">
+                        <button
+                          className="btn btn-sm join-item"
+                          onClick={handleStartGeminiOAuth}
+                          disabled={busyAction !== ""}
+                        >
+                          {busyAction === "gemini-start" && (
+                            <span className="loading loading-spinner loading-xs" />
+                          )}
+                          開始 OAuth
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-sm join-item"
+                          onClick={handleRefresh}
+                          disabled={busyAction !== ""}
+                        >
+                          重新整理
+                        </button>
+                        <button
+                          className="btn btn-primary btn-sm join-item"
+                          onClick={handleUseGeminiProfile}
+                          disabled={!selectedGemini || busyAction !== ""}
+                        >
+                          {busyAction === "gemini-use" && (
+                            <span className="loading loading-spinner loading-xs" />
+                          )}
+                          使用此 profile
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -1963,7 +1986,7 @@ export function AuthPanel() {
               <div className="card border border-base-300 bg-base-200 shadow-sm">
                 <div className="card-body gap-4">
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="space-y-2">
+                    <div className="min-w-0 flex-1 space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="badge badge-outline badge-sm">AI Studio</div>
                         {selectedAIStudio?.preferred && (
@@ -1993,34 +2016,36 @@ export function AuthPanel() {
                       </div>
                     </div>
 
-                    <div className="join">
-                      <button
-                        className="btn btn-sm join-item"
-                        onClick={handleRefresh}
-                        disabled={busyAction !== ""}
-                      >
-                        重新整理
-                      </button>
-                      <button
-                        className="btn btn-ghost btn-sm join-item"
-                        onClick={handleDeleteAIStudioProfile}
-                        disabled={!selectedAIStudio || busyAction !== ""}
-                      >
-                        {busyAction === "ai-studio-delete" && (
-                          <span className="loading loading-spinner loading-xs" />
-                        )}
-                        刪除
-                      </button>
-                      <button
-                        className="btn btn-primary btn-sm join-item"
-                        onClick={handleUseAIStudioProfile}
-                        disabled={!selectedAIStudio || busyAction !== ""}
-                      >
-                        {busyAction === "ai-studio-use" && (
-                          <span className="loading loading-spinner loading-xs" />
-                        )}
-                        使用此 profile
-                      </button>
+                    <div className="max-w-full overflow-x-auto lg:shrink-0">
+                      <div className="join w-max">
+                        <button
+                          className="btn btn-sm join-item"
+                          onClick={handleRefresh}
+                          disabled={busyAction !== ""}
+                        >
+                          重新整理
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-sm join-item"
+                          onClick={handleDeleteAIStudioProfile}
+                          disabled={!selectedAIStudio || busyAction !== ""}
+                        >
+                          {busyAction === "ai-studio-delete" && (
+                            <span className="loading loading-spinner loading-xs" />
+                          )}
+                          刪除
+                        </button>
+                        <button
+                          className="btn btn-primary btn-sm join-item"
+                          onClick={handleUseAIStudioProfile}
+                          disabled={!selectedAIStudio || busyAction !== ""}
+                        >
+                          {busyAction === "ai-studio-use" && (
+                            <span className="loading loading-spinner loading-xs" />
+                          )}
+                          使用此 profile
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -2183,7 +2208,7 @@ export function AuthPanel() {
               <div className="card border border-base-300 bg-base-200 shadow-sm">
                 <div className="card-body gap-4">
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="space-y-2">
+                    <div className="min-w-0 flex-1 space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="badge badge-outline badge-sm">Anthropic</div>
                         {selectedAnthropic?.preferred && (
@@ -2221,34 +2246,36 @@ export function AuthPanel() {
                       </div>
                     </div>
 
-                    <div className="join">
-                      <button
-                        className="btn btn-sm join-item"
-                        onClick={handleRefresh}
-                        disabled={busyAction !== ""}
-                      >
-                        重新整理
-                      </button>
-                      <button
-                        className="btn btn-ghost btn-sm join-item"
-                        onClick={handleDeleteAnthropicProfile}
-                        disabled={!selectedAnthropic || busyAction !== ""}
-                      >
-                        {busyAction === "anthropic-delete" && (
-                          <span className="loading loading-spinner loading-xs" />
-                        )}
-                        刪除
-                      </button>
-                      <button
-                        className="btn btn-primary btn-sm join-item"
-                        onClick={handleUseAnthropicProfile}
-                        disabled={!selectedAnthropic || busyAction !== ""}
-                      >
-                        {busyAction === "anthropic-use" && (
-                          <span className="loading loading-spinner loading-xs" />
-                        )}
-                        使用此 profile
-                      </button>
+                    <div className="max-w-full overflow-x-auto lg:shrink-0">
+                      <div className="join w-max">
+                        <button
+                          className="btn btn-sm join-item"
+                          onClick={handleRefresh}
+                          disabled={busyAction !== ""}
+                        >
+                          重新整理
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-sm join-item"
+                          onClick={handleDeleteAnthropicProfile}
+                          disabled={!selectedAnthropic || busyAction !== ""}
+                        >
+                          {busyAction === "anthropic-delete" && (
+                            <span className="loading loading-spinner loading-xs" />
+                          )}
+                          刪除
+                        </button>
+                        <button
+                          className="btn btn-primary btn-sm join-item"
+                          onClick={handleUseAnthropicProfile}
+                          disabled={!selectedAnthropic || busyAction !== ""}
+                        >
+                          {busyAction === "anthropic-use" && (
+                            <span className="loading loading-spinner loading-xs" />
+                          )}
+                          使用此 profile
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -2495,33 +2522,35 @@ export function AuthPanel() {
                   <div className="card border border-base-300 bg-base-200 shadow-sm">
                     <div className="card-body gap-4">
                       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                        <div>
+                        <div className="min-w-0 flex-1">
                           <h3 className="card-title text-lg">Browser Login</h3>
                           <p className="text-sm text-base-content/60">
                             啟動外部登入流程並輪詢狀態；若需要 manual fallback，會在此頁顯示 setup-token 輸入區塊。
                           </p>
                         </div>
-                        <div className="join">
-                          <button
-                            className="btn btn-sm join-item"
-                            onClick={handleStartAnthropicBrowserLogin}
-                            disabled={busyAction !== ""}
-                          >
-                            {busyAction === "anthropic-browser-start" && (
-                              <span className="loading loading-spinner loading-xs" />
-                            )}
-                            啟動 Browser Login
-                          </button>
-                          <button
-                            className="btn btn-ghost btn-sm join-item"
-                            onClick={handleCancelAnthropicBrowserLogin}
-                            disabled={!anthropicJob || busyAction !== ""}
-                          >
-                            {busyAction === "anthropic-browser-cancel" && (
-                              <span className="loading loading-spinner loading-xs" />
-                            )}
-                            取消
-                          </button>
+                        <div className="max-w-full overflow-x-auto lg:shrink-0">
+                          <div className="join w-max">
+                            <button
+                              className="btn btn-sm join-item"
+                              onClick={handleStartAnthropicBrowserLogin}
+                              disabled={busyAction !== ""}
+                            >
+                              {busyAction === "anthropic-browser-start" && (
+                                <span className="loading loading-spinner loading-xs" />
+                              )}
+                              啟動 Browser Login
+                            </button>
+                            <button
+                              className="btn btn-ghost btn-sm join-item"
+                              onClick={handleCancelAnthropicBrowserLogin}
+                              disabled={!anthropicJob || busyAction !== ""}
+                            >
+                              {busyAction === "anthropic-browser-cancel" && (
+                                <span className="loading loading-spinner loading-xs" />
+                              )}
+                              取消
+                            </button>
+                          </div>
                         </div>
                       </div>
 
@@ -2634,11 +2663,13 @@ export function AuthPanel() {
               <div className="card border border-base-300 bg-base-200 shadow-sm">
                 <div className="card-body gap-4">
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="space-y-2">
+                    <div className="min-w-0 flex-1 space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <div className="badge badge-outline badge-sm">OpenAI / Codex</div>
+                        <div className="badge badge-outline badge-sm shrink-0 whitespace-nowrap">
+                          OpenAI / Codex
+                        </div>
                         {selectedOpenAI && (
-                          <div className="badge badge-accent badge-sm">
+                          <div className="badge badge-accent badge-sm shrink-0 whitespace-nowrap">
                             {selectedOpenAI.provider}
                           </div>
                         )}
@@ -2675,34 +2706,36 @@ export function AuthPanel() {
                       </div>
                     </div>
 
-                    <div className="join">
-                      <button
-                        className="btn btn-sm join-item"
-                        onClick={handleRefresh}
-                        disabled={busyAction !== ""}
-                      >
-                        重新整理
-                      </button>
-                      <button
-                        className="btn btn-ghost btn-sm join-item"
-                        onClick={handleDeleteOpenAIProfile}
-                        disabled={!selectedOpenAI || busyAction !== ""}
-                      >
-                        {busyAction === "openai-delete" && (
-                          <span className="loading loading-spinner loading-xs" />
-                        )}
-                        刪除
-                      </button>
-                      <button
-                        className="btn btn-primary btn-sm join-item"
-                        onClick={handleUseOpenAIProfile}
-                        disabled={!selectedOpenAI || busyAction !== ""}
-                      >
-                        {busyAction === "openai-use" && (
-                          <span className="loading loading-spinner loading-xs" />
-                        )}
-                        使用此 profile
-                      </button>
+                    <div className="max-w-full overflow-x-auto lg:shrink-0">
+                      <div className="join w-max">
+                        <button
+                          className="btn btn-sm join-item"
+                          onClick={handleRefresh}
+                          disabled={busyAction !== ""}
+                        >
+                          重新整理
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-sm join-item"
+                          onClick={handleDeleteOpenAIProfile}
+                          disabled={!selectedOpenAI || busyAction !== ""}
+                        >
+                          {busyAction === "openai-delete" && (
+                            <span className="loading loading-spinner loading-xs" />
+                          )}
+                          刪除
+                        </button>
+                        <button
+                          className="btn btn-primary btn-sm join-item"
+                          onClick={handleUseOpenAIProfile}
+                          disabled={!selectedOpenAI || busyAction !== ""}
+                        >
+                          {busyAction === "openai-use" && (
+                            <span className="loading loading-spinner loading-xs" />
+                          )}
+                          使用此 profile
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -2744,7 +2777,9 @@ export function AuthPanel() {
                     >
                       <div className="flex items-center justify-between gap-3">
                         <h3 className="card-title text-lg">新增 OpenAI API key</h3>
-                        <div className="badge badge-outline badge-sm">openai</div>
+                        <div className="badge badge-outline badge-sm shrink-0 whitespace-nowrap">
+                          openai
+                        </div>
                       </div>
 
                       <SecretField
@@ -2812,7 +2847,7 @@ export function AuthPanel() {
                     >
                       <div className="flex items-center justify-between gap-3">
                         <h3 className="card-title text-lg">新增 OpenAI Codex token</h3>
-                        <div className="badge badge-outline badge-sm">
+                        <div className="badge badge-outline badge-sm shrink-0 whitespace-nowrap">
                           openai-codex
                         </div>
                       </div>
@@ -2937,33 +2972,35 @@ export function AuthPanel() {
                   <div className="card border border-base-300 bg-base-200 shadow-sm">
                     <div className="card-body gap-4">
                       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                        <div>
+                        <div className="min-w-0 flex-1">
                           <h3 className="card-title text-lg">Codex Browser Login</h3>
                           <p className="text-sm text-base-content/60">
                             啟動 `openai-codex` browser login job，保留 recent events 與 manual fallback token 輸入。
                           </p>
                         </div>
-                        <div className="join">
-                          <button
-                            className="btn btn-sm join-item"
-                            onClick={handleStartOpenAIBrowserLogin}
-                            disabled={busyAction !== ""}
-                          >
-                            {busyAction === "openai-browser-start" && (
-                              <span className="loading loading-spinner loading-xs" />
-                            )}
-                            啟動 Browser Login
-                          </button>
-                          <button
-                            className="btn btn-ghost btn-sm join-item"
-                            onClick={handleCancelOpenAIBrowserLogin}
-                            disabled={!openAIBrowserJob || busyAction !== ""}
-                          >
-                            {busyAction === "openai-browser-cancel" && (
-                              <span className="loading loading-spinner loading-xs" />
-                            )}
-                            取消
-                          </button>
+                        <div className="max-w-full overflow-x-auto lg:shrink-0">
+                          <div className="join w-max">
+                            <button
+                              className="btn btn-sm join-item"
+                              onClick={handleStartOpenAIBrowserLogin}
+                              disabled={busyAction !== ""}
+                            >
+                              {busyAction === "openai-browser-start" && (
+                                <span className="loading loading-spinner loading-xs" />
+                              )}
+                              啟動 Browser Login
+                            </button>
+                            <button
+                              className="btn btn-ghost btn-sm join-item"
+                              onClick={handleCancelOpenAIBrowserLogin}
+                              disabled={!openAIBrowserJob || busyAction !== ""}
+                            >
+                              {busyAction === "openai-browser-cancel" && (
+                                <span className="loading loading-spinner loading-xs" />
+                              )}
+                              取消
+                            </button>
+                          </div>
                         </div>
                       </div>
 
