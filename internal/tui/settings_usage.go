@@ -6,24 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/doeshing/nekoclaw/internal/core"
+	"github.com/doeshing/nekoclaw/internal/usage"
 )
-
-// modelPricing holds per-model token pricing in USD per 1M tokens.
-// Rates are based on OpenClaw's pricing table for Gemini models.
-type modelPricing struct {
-	InputPerMillion  float64
-	OutputPerMillion float64
-}
-
-// pricingTable maps model ID prefixes to their pricing.
-// Free-tier Gemini CLI models show $0; AI Studio models use published rates.
-var pricingTable = map[string]modelPricing{
-	"gemini-2.5-pro":       {InputPerMillion: 1.25, OutputPerMillion: 10.00},
-	"gemini-2.5-flash":     {InputPerMillion: 0.15, OutputPerMillion: 0.60},
-	"gemini-3-pro-preview": {InputPerMillion: 1.25, OutputPerMillion: 10.00},
-	"gemini-3-flash":       {InputPerMillion: 0.15, OutputPerMillion: 0.60},
-	"gemini-2.0-flash":     {InputPerMillion: 0.10, OutputPerMillion: 0.40},
-}
 
 // UsageSection displays cumulative token usage and estimated cost.
 type UsageSection struct {
@@ -107,7 +91,7 @@ func (us *UsageSection) View(width, height int) string {
 	lines = append(lines, "")
 
 	// Model pricing info
-	pricing, found := lookupPricing(us.modelID)
+	pricing, found := usage.LookupPricing(us.modelID)
 	if found {
 		lines = append(lines, theme.SectionStyle.Render("Current Model Rates"))
 		lines = append(lines, "")
@@ -147,32 +131,8 @@ func (us *UsageSection) View(width, height int) string {
 
 // calculateCost computes estimated cost for a single API call.
 // Formula: (input × inputRate / 1M) + (output × outputRate / 1M)
-func calculateCost(usage core.UsageInfo, model string) float64 {
-	pricing, found := lookupPricing(model)
-	if !found {
-		return 0
-	}
-	inputCost := float64(usage.InputTokens) * pricing.InputPerMillion / 1_000_000
-	outputCost := float64(usage.OutputTokens) * pricing.OutputPerMillion / 1_000_000
-	return inputCost + outputCost
-}
-
-// lookupPricing finds pricing by exact match or prefix match.
-func lookupPricing(model string) (modelPricing, bool) {
-	model = strings.TrimSpace(model)
-	if model == "" || strings.EqualFold(model, "default") {
-		return modelPricing{}, false
-	}
-	if p, ok := pricingTable[model]; ok {
-		return p, true
-	}
-	// Try prefix match (e.g. "gemini-2.5-pro-latest" matches "gemini-2.5-pro")
-	for prefix, p := range pricingTable {
-		if strings.HasPrefix(model, prefix) {
-			return p, true
-		}
-	}
-	return modelPricing{}, false
+func calculateCost(info core.UsageInfo, model string) float64 {
+	return usage.CalculateCost(info.InputTokens, info.OutputTokens, model)
 }
 
 func formatTokenCount(n int) string {

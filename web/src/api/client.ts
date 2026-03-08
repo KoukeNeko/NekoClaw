@@ -44,6 +44,7 @@ import type {
   MCPConfigsResponse,
   SaveMCPConfigRequest,
   PersonaInfo,
+  UsageSummary,
   MemorySearchRequest,
   MemorySearchResponse,
   DiscordConfig,
@@ -205,6 +206,10 @@ export async function getTranscript(
 }
 
 // ---------------------------------------------------------------------------
+export function getUsageSummary(): Promise<UsageSummary> {
+  return get("/v1/usage/summary");
+}
+
 // Auth — Gemini
 // ---------------------------------------------------------------------------
 

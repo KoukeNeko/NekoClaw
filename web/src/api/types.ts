@@ -148,6 +148,75 @@ export interface SessionMetadata {
 // ---------------------------------------------------------------------------
 // Auth — Gemini
 // ---------------------------------------------------------------------------
+// Usage summary
+// ---------------------------------------------------------------------------
+
+export interface UsageSummaryTotals {
+  session_count: number;
+  message_count: number;
+  request_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  compaction_count: number;
+}
+
+export interface UsageSummaryTrendPoint {
+  date: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  request_count: number;
+}
+
+export interface UsageSummaryProvider {
+  provider: string;
+  request_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  session_count: number;
+}
+
+export interface UsageSummaryModel {
+  model: string;
+  request_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  session_count: number;
+}
+
+export interface UsageSummarySession {
+  session_id: string;
+  title?: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+  request_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  compaction_count: number;
+  top_provider?: string;
+  top_model?: string;
+}
+
+export interface UsageSummary {
+  generated_at: string;
+  totals: UsageSummaryTotals;
+  trend: UsageSummaryTrendPoint[];
+  providers: UsageSummaryProvider[];
+  models: UsageSummaryModel[];
+  sessions: UsageSummarySession[];
+}
+
+// ---------------------------------------------------------------------------
 
 export interface GeminiAuthStartRequest {
   profile_id?: string;

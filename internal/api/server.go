@@ -88,6 +88,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/sessions/rename", s.handleSessionRename)
 	mux.HandleFunc("/v1/sessions/transcript", s.handleSessionTranscript)
 	mux.HandleFunc("/v1/memory/search", s.handleMemorySearch)
+	mux.HandleFunc("/v1/usage/summary", s.handleUsageSummary)
 	mux.HandleFunc("/v1/mcp/servers", s.handleMCPServers)
 	mux.HandleFunc("/v1/mcp/tools", s.handleMCPTools)
 	mux.HandleFunc("/v1/mcp/builtin", s.handleMCPBuiltin)

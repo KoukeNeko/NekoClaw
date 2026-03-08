@@ -9,6 +9,7 @@ import { ToolsPanel } from "./ToolsPanel";
 import { MemoryPanel } from "./MemoryPanel";
 import { MCPPanel } from "./MCPPanel";
 
+import { UsagePanel } from "./UsagePanel";
 /**
  * Settings page — daisyUI tabs (official radio + tab-content pattern).
  * Tabs structure matches https://daisyui.com/components/tab/ exactly.
@@ -46,6 +47,8 @@ function renderPanel(route: Route) {
       return <MCPPanel />;
     case "settings/discord":
       return <DiscordPanel />;
+    case "settings/usage":
+      return <UsagePanel />;
     case "settings/telegram":
       return <TelegramPanel />;
     case "settings/tools":
@@ -69,7 +72,10 @@ export function SettingsPage() {
     route === "settings/discord" ||
     route === "settings/telegram" ||
     route === "settings/tools"
-      ? "max-w-6xl"
+    route === "settings/usage" ||
+      ? route === "settings/usage"
+        ? "max-w-7xl"
+        : "max-w-6xl"
       : "max-w-2xl";
 
   return (
