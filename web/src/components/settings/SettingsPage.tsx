@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import { useAppStore, type Route } from "@/store/appStore";
 import { PersonaPanel } from "./PersonaPanel";
 import { ProviderPanel } from "./ProviderPanel";
+import { TelegramPanel } from "./TelegramPanel";
 
 /**
  * Settings page — daisyUI tabs (official radio + tab-content pattern).
@@ -33,6 +34,8 @@ function renderPanel(route: Route) {
       return <ProviderPanel />;
     case "settings/persona":
       return <PersonaPanel />;
+    case "settings/telegram":
+      return <TelegramPanel />;
     default: {
       const label = TABS.find((t) => t.route === route)?.label ?? "";
       return <PlaceholderPanel name={label} />;
@@ -44,7 +47,9 @@ export function SettingsPage() {
   const route = useAppStore((s) => s.route);
   const setRoute = useAppStore((s) => s.setRoute);
   const panelWidth =
-    route === "settings/persona" || route === "settings/provider"
+    route === "settings/persona" ||
+    route === "settings/provider" ||
+    route === "settings/telegram"
       ? "max-w-6xl"
       : "max-w-2xl";
 
