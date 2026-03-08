@@ -244,7 +244,7 @@ export function MemoryPanel() {
       <div className="card border border-base-300 bg-base-200 shadow-sm">
         <div className="card-body gap-4">
           <div className="join w-full">
-            <label className="input input-bordered join-item flex w-full items-center gap-2">
+            <label className="input input-bordered join-item flex w-full items-center gap-2 focus-within:outline-none">
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 viewBox="0 0 24 24"
