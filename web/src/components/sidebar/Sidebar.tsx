@@ -1,16 +1,24 @@
 import { useAppStore } from "@/store/appStore";
 import { SessionList } from "./SessionList";
 import { InspectorPanel } from "./InspectorPanel";
+import { ThemeDropdown } from "./ThemeDropdown";
 
 /**
  * Sidebar — daisyUI menu with is-drawer-close/is-drawer-open collapsible pattern.
  * Collapsed: icon-only (w-14) with tooltips.
  * Expanded: full sidebar with text labels, session list, inspector.
  */
+/** Close sidebar only on mobile where it overlays content */
+const MOBILE_BREAKPOINT = 1024;
+function closeSidebarOnMobile() {
+  if (window.innerWidth < MOBILE_BREAKPOINT) {
+    useAppStore.getState().setSidebarOpen(false);
+  }
+}
+
 export function Sidebar() {
   const route = useAppStore((s) => s.route);
   const setRoute = useAppStore((s) => s.setRoute);
-  const setSidebarOpen = useAppStore((s) => s.setSidebarOpen);
 
   function handleNewChat() {
     const now = new Date();
@@ -20,12 +28,12 @@ export function Sidebar() {
     useAppStore.getState().clearMessages();
     useAppStore.getState().resetUsage();
     setRoute("chat");
-    setSidebarOpen(false);
+    closeSidebarOnMobile();
   }
 
   function handleNavSettings() {
     setRoute("settings/provider");
-    setSidebarOpen(false);
+    closeSidebarOnMobile();
   }
 
   return (
@@ -36,7 +44,7 @@ export function Sidebar() {
           className="btn btn-ghost btn-sm w-full is-drawer-close:btn-square is-drawer-open:justify-start gap-2"
           onClick={() => {
             setRoute("chat");
-            setSidebarOpen(false);
+            closeSidebarOnMobile();
           }}
         >
           <span className="text-lg shrink-0">🐾</span>
@@ -118,6 +126,11 @@ export function Sidebar() {
             </button>
           </li>
         </ul>
+
+        {/* Theme switcher */}
+        <div className="px-1 mb-2">
+          <ThemeDropdown />
+        </div>
 
         {/* Keyboard shortcuts — hidden when collapsed */}
         <div className="px-3 pb-2 flex flex-wrap gap-1 text-[10px] text-base-content/30 is-drawer-close:hidden">

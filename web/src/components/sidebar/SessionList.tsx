@@ -40,7 +40,10 @@ export function SessionList() {
     setSessionID(id);
     resetUsage();
     setRoute("chat");
-    setSidebarOpen(false);
+    // Only close sidebar on mobile where it overlays content
+    if (window.innerWidth < 1024) {
+      setSidebarOpen(false);
+    }
 
     // Load transcript
     try {
