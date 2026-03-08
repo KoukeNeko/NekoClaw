@@ -2,6 +2,7 @@ import { useEffect, useCallback } from "react";
 import { useAppStore } from "@/store/appStore";
 import { listSessions, getTranscript } from "@/api/client";
 import { formatRelativeTime } from "@/utils/format";
+import { calculateCost } from "@/utils/pricing";
 import type { TranscriptEntry } from "@/api/types";
 import type { ChatMessage } from "@/store/appStore";
 
@@ -45,11 +46,12 @@ export function SessionList() {
       setSidebarOpen(false);
     }
 
-    // Load transcript
+    // Load transcript and compute session usage totals
     try {
       const entries = await getTranscript(id);
       const msgs = transcriptToMessages(entries);
       setMessages(msgs);
+      recomputeUsageFromTranscript(entries);
     } catch {
       setMessages([]);
     }
@@ -102,4 +104,19 @@ function transcriptToMessages(entries: TranscriptEntry[]): ChatMessage[] {
     usage: entry.usage,
     toolEvents: entry.tool_events,
   }));
+}
+
+/** Aggregate per-message usage from transcript and update the store totals. */
+function recomputeUsageFromTranscript(entries: TranscriptEntry[]) {
+  const { addUsage } = useAppStore.getState();
+  for (const entry of entries) {
+    if (entry.role === "assistant" && entry.usage) {
+      const cost = calculateCost(
+        entry.usage.input_tokens,
+        entry.usage.output_tokens,
+        entry.model ?? "",
+      );
+      addUsage(entry.usage, cost);
+    }
+  }
 }
