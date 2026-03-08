@@ -104,7 +104,7 @@ export function MessageBubble({ message }: Props) {
               .filter(Boolean) as string[];
 
             if (executedTools.length === 0) return null;
-
+            // Group consecutive identical tool calls (e.g. web_search (×5))
             const groupedTools: { name: string; count: number }[] = [];
             for (const name of executedTools) {
               const last = groupedTools[groupedTools.length - 1];
