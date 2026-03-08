@@ -7,8 +7,13 @@ Go-based agent runtime with:
 - Discord bot (emoji reactions, per-channel sessions, slash commands, image support)
 - Telegram bot (per-chat sessions, slash commands, image support)
 - Pluggable LLM provider architecture with automatic failover
-- Account pool cooldown/failover scheduler
-- Context compression (LLM compaction, sliding window)
+- Account pool with health-based selection, cooldown escalation, and exponential backoff retry
+- Per-model context window mapping (Gemini / Claude / GPT / O-series)
+- Context compression (CJK-aware token estimation, LLM compaction, sliding window)
+- Tool output head+tail truncation (preserves beginning and end of long outputs)
+- Persistent channel-session bindings (survive bot restarts)
+- Session lifecycle management (idle auto-expiry, retention cleanup, size rotation)
+- Streaming response support across all frontends (TUI, Discord, Telegram)
 - Persona system with template rendering and few-shot anchors
 - Memory system (long-term notes, daily logs, FTS5 search index)
 - MCP (Model Context Protocol) tool integration
@@ -224,6 +229,8 @@ TUI settings also support:
 - Placeholder message shows real-time MCP tool status; deleted on completion and replaced with a fresh reply
 - Per-channel sequential message queue
 - Each channel has its own independent session
+- Channel-session bindings persist to `~/.nekoclaw/state/discord-bindings.json` (survive restarts)
+- Idle sessions auto-rotate after 24 hours via background housekeeping
 - Typing indicator every 8 seconds
 - Image attachments are downloaded and sent as multimodal input
 - Usage stats footer: elapsed time, token counts, throughput, provider/model
@@ -254,6 +261,8 @@ Set via environment variable or TUI Settings > Telegram:
 - Placeholder message shows real-time MCP tool status; deleted on completion and replaced with a fresh reply
 - Per-chat sequential message queue
 - Each chat has its own independent session
+- Chat-session bindings persist to `~/.nekoclaw/state/telegram-bindings.json` (survive restarts)
+- Idle sessions auto-rotate after 24 hours via background housekeeping
 - Typing indicator every 4 seconds
 - Photo and image document attachments are downloaded and sent as multimodal input
 - Usage stats footer: elapsed time, token counts, throughput, provider/model
@@ -311,6 +320,27 @@ Override path: `--memory-dir` flag or `NEKOCLAW_MEMORY_DIR` env.
 
 - `GET/PUT /v1/discord/config`
 - `GET/PUT /v1/telegram/config`
+
+## Context Window & Compression
+
+NekoClaw uses a multi-layer strategy to keep conversations within model limits:
+
+1. **Per-model context windows** — Each model (e.g. `gemini-2.5-pro` = 1M, `claude-sonnet-4` = 200K) has its own context window size via longest-prefix lookup, falling back to provider defaults
+2. **CJK-aware token estimation** — Chinese/Japanese/Korean characters are weighted at ~1.5 tokens each instead of the naive 4-chars-per-token heuristic
+3. **Sliding window compression** — When context approaches the limit, oldest messages are trimmed while preserving the system prompt
+4. **LLM compaction** — Older messages are summarized by the LLM into a compact digest (skipped when fewer than 3 entries would be dropped)
+5. **Post-injection guard** — After system prompt (persona + memory) is prepended, a final trim ensures total tokens stay within budget
+6. **Tool output head+tail truncation** — Long tool results keep the first 40% and last 40% with a truncation marker, preserving both context and final output
+
+## Account Management
+
+The account pool supports:
+
+- **Health-based selection** — Accounts are sorted by success rate (cumulative `SuccessCount / Total`), then error count, then type preference (OAuth > token > API key), then round-robin
+- **Exponential backoff retry** — Rate-limited requests retry up to 3 times with `base * 2^retry` delay (500ms jitter), using a 5s default base when the server omits `Retry-After`
+- **Cooldown escalation** — Billing/auth failures trigger escalating disable periods; rate limits use server-provided hints capped at 2 minutes
+- **Circuit breaker** — 3+ consecutive model capacity failures trigger a 5-minute global cooldown across all accounts
+- **Fallback chain** — When primary provider is exhausted, automatically tries configured fallback providers
 
 ## Architecture Notes
 
