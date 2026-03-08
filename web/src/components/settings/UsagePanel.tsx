@@ -43,13 +43,13 @@ interface ShareDatum {
 }
 
 const SHARE_COLORS = [
-  "#54D1DB",
-  "#F4A261",
-  "#E76F51",
-  "#7FB069",
-  "#B8C0FF",
-  "#7C90DB",
-  "#C9ADA7",
+  "var(--color-info)",
+  "var(--color-warning)",
+  "var(--color-success)",
+  "var(--color-secondary)",
+  "var(--color-accent)",
+  "var(--color-error)",
+  "var(--color-primary)",
 ];
 
 function statusClass(tone: StatusTone): string {
@@ -280,14 +280,31 @@ function TrendChart({ points }: { points: UsageSummaryTrendPoint[] }) {
     0,
   );
   const recentTokens = points.reduce((sum, point) => sum + point.total_tokens, 0);
+  const axisLabel = (date: string) => date.slice(5).replace("-", "/");
+  const inputColor = "var(--color-info)";
+  const outputColor = "var(--color-warning)";
+  const statItems = [
+    {
+      label: "Recent Requests",
+      value: `${formatTokens(recentRequests)} 筆`,
+    },
+    {
+      label: "Recent Tokens",
+      value: formatTokens(recentTokens),
+    },
+    {
+      label: "Peak Day",
+      value: formatTokens(maxTotal),
+    },
+  ];
 
   return (
-    <div className="card border border-base-300 bg-base-100 shadow-sm">
-      <div className="card-body gap-4">
+    <div className="card h-full border border-base-300 bg-base-100 shadow-sm">
+      <div className="card-body flex h-full flex-col gap-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
+          <div className="space-y-2">
             <h3 className="card-title text-lg">14 天 Token 趨勢</h3>
-            <p className="text-sm text-base-content/60">
+            <p className="max-w-2xl text-sm leading-relaxed text-base-content/60">
               顯示最近兩週 assistant request 的 input/output 堆疊分布。
             </p>
           </div>
@@ -297,16 +314,20 @@ function TrendChart({ points }: { points: UsageSummaryTrendPoint[] }) {
           </div>
         </div>
 
-        <div className="grid gap-3 text-xs text-base-content/65 md:grid-cols-3">
-          <div className="rounded-box border border-base-300 bg-base-200/60 px-3 py-2">
-            最近 14 天請求 {formatTokens(recentRequests)} 筆
-          </div>
-          <div className="rounded-box border border-base-300 bg-base-200/60 px-3 py-2">
-            最近 14 天 tokens {formatTokens(recentTokens)}
-          </div>
-          <div className="rounded-box border border-base-300 bg-base-200/60 px-3 py-2">
-            峰值單日 {formatTokens(maxTotal)}
-          </div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          {statItems.map((item) => (
+            <div
+              key={item.label}
+              className="rounded-box flex min-h-[8.5rem] flex-col justify-between border border-base-300 bg-base-200/60 px-4 py-4"
+            >
+              <div className="text-[11px] font-medium uppercase tracking-[0.24em] text-base-content/45">
+                {item.label}
+              </div>
+              <div className="text-xl font-semibold tracking-tight text-base-content/88 tabular-nums">
+                {item.value}
+              </div>
+            </div>
+          ))}
         </div>
 
         {maxTotal === 0 ? (
@@ -314,48 +335,60 @@ function TrendChart({ points }: { points: UsageSummaryTrendPoint[] }) {
             <span>最近 14 天沒有 assistant usage 資料。</span>
           </div>
         ) : (
-          <div className="rounded-box border border-base-300 bg-base-200/50 p-4">
-            <div className="grid h-64 grid-cols-[repeat(14,minmax(0,1fr))] items-end gap-2">
-              {points.map((point, index) => {
-                const inputHeight = (point.input_tokens / maxTotal) * 100;
-                const outputHeight = (point.output_tokens / maxTotal) * 100;
-                const showLabel =
-                  index === 0 || index === points.length - 1 || index % 3 === 0;
-                return (
-                  <div
-                    key={point.date}
-                    className="flex h-full flex-col items-center justify-end gap-2"
-                  >
+          <div className="rounded-box flex min-h-[24rem] flex-1 flex-col border border-base-300 bg-base-200/50 p-5">
+            <div className="flex h-full flex-col gap-4">
+              <div className="grid min-h-[18rem] flex-1 grid-cols-[repeat(14,minmax(0,1fr))] items-end gap-3">
+                {points.map((point) => {
+                  const inputHeight = (point.input_tokens / maxTotal) * 100;
+                  const outputHeight = (point.output_tokens / maxTotal) * 100;
+                  return (
                     <div
-                      className="w-full rounded-t-[0.9rem] rounded-b-[1.1rem] bg-base-300/35 p-1"
-                      title={`${point.date} · ${formatTokens(point.total_tokens)} tok · ${point.request_count} req`}
+                      key={point.date}
+                      className="flex h-full items-end"
                     >
-                      <div className="flex h-44 flex-col justify-end overflow-hidden rounded-[0.85rem] bg-base-300/20">
-                        <div
-                          style={{
-                            height: `${Math.max(outputHeight, point.output_tokens > 0 ? 6 : 0)}%`,
-                            backgroundColor: "#F4A261",
-                          }}
-                        />
-                        <div
-                          style={{
-                            height: `${Math.max(inputHeight, point.input_tokens > 0 ? 6 : 0)}%`,
-                            backgroundColor: "#54D1DB",
-                          }}
-                        />
+                      <div
+                        className="flex h-full w-full items-end rounded-[1.15rem] bg-base-300/28 p-1.5"
+                        title={`${point.date} · ${formatTokens(point.total_tokens)} tok · ${point.request_count} req`}
+                      >
+                        <div className="flex h-full w-full flex-col justify-end overflow-hidden rounded-[0.9rem] bg-base-300/18">
+                          <div
+                            style={{
+                              height: `${Math.max(outputHeight, point.output_tokens > 0 ? 6 : 0)}%`,
+                              backgroundColor: outputColor,
+                            }}
+                          />
+                          <div
+                            style={{
+                              height: `${Math.max(inputHeight, point.input_tokens > 0 ? 6 : 0)}%`,
+                              backgroundColor: inputColor,
+                            }}
+                          />
+                        </div>
                       </div>
                     </div>
-                    <div className="text-center">
-                      <div className="text-[10px] font-medium text-base-content/80">
-                        {showLabel ? point.date.slice(5) : "·"}
-                      </div>
-                      <div className="text-[10px] text-base-content/45">
-                        {point.request_count}
-                      </div>
+                  );
+                })}
+              </div>
+
+              <div className="grid grid-cols-[repeat(14,minmax(0,1fr))] gap-2">
+                {points.map((point, index) => {
+                  const showLabel =
+                    index === 0 ||
+                    index === points.length - 1 ||
+                    (index % 3 === 0 && index < points.length - 2);
+                  return (
+                    <div key={point.date} className="text-center text-[10px]">
+                      {showLabel ? (
+                        <span className="inline-block whitespace-nowrap font-medium text-base-content/72">
+                          {axisLabel(point.date)}
+                        </span>
+                      ) : (
+                        <span className="inline-block text-base-content/28">·</span>
+                      )}
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
           </div>
         )}
@@ -374,15 +407,21 @@ function ShareChart({
   items: ShareDatum[];
 }) {
   const totalTokens = items.reduce((sum, item) => sum + item.total_tokens, 0);
+  const totalCost = items.reduce(
+    (sum, item) => sum + item.estimated_cost_usd,
+    0,
+  );
   const circumference = 2 * Math.PI * 42;
   let offset = 0;
 
   return (
-    <div className="card border border-base-300 bg-base-100 shadow-sm">
-      <div className="card-body gap-4">
-        <div>
+    <div className="card h-full border border-base-300 bg-base-100 shadow-sm">
+      <div className="card-body h-full gap-5">
+        <div className="min-h-[6.5rem] space-y-2">
           <h3 className="card-title text-lg">{title}</h3>
-          <p className="text-sm text-base-content/60">{description}</p>
+          <p className="text-sm leading-relaxed text-base-content/60">
+            {description}
+          </p>
         </div>
 
         {totalTokens === 0 ? (
@@ -390,91 +429,133 @@ function ShareChart({
             <span>目前沒有可繪製的 token 占比資料。</span>
           </div>
         ) : (
-          <div className="grid gap-4 md:grid-cols-[140px_minmax(0,1fr)] md:items-center">
-            <div className="mx-auto flex h-36 w-36 items-center justify-center">
-              <svg viewBox="0 0 120 120" className="h-full w-full">
-                <circle
-                  cx="60"
-                  cy="60"
-                  r="42"
-                  fill="none"
-                  stroke="rgba(148, 163, 184, 0.25)"
-                  strokeWidth="14"
-                />
-                {items.map((item) => {
-                  const ratio = item.total_tokens / totalTokens;
-                  const dash = circumference * ratio;
-                  const segment = (
-                    <circle
-                      key={item.label}
-                      cx="60"
-                      cy="60"
-                      r="42"
-                      fill="none"
-                      stroke={item.color}
-                      strokeWidth="14"
-                      strokeDasharray={`${dash} ${circumference - dash}`}
-                      strokeDashoffset={-offset}
-                      transform="rotate(-90 60 60)"
-                    />
-                  );
-                  offset += dash;
-                  return segment;
-                })}
-                <text
-                  x="60"
-                  y="56"
-                  textAnchor="middle"
-                  className="fill-current text-[8px] font-semibold uppercase tracking-[0.28em]"
-                >
-                  Share
-                </text>
-                <text
-                  x="60"
-                  y="70"
-                  textAnchor="middle"
-                  className="fill-current text-[12px] font-semibold"
-                >
-                  {formatTokens(totalTokens)}
-                </text>
-              </svg>
+          <div className="flex h-full flex-col gap-5">
+            <div className="flex flex-col items-center gap-4 pt-1 text-center">
+              <div className="flex h-44 w-44 items-center justify-center">
+                <svg viewBox="0 0 120 120" className="h-full w-full">
+                  <circle
+                    cx="60"
+                    cy="60"
+                    r="42"
+                    fill="none"
+                    stroke="var(--color-base-300)"
+                    strokeOpacity="0.35"
+                    strokeWidth="14"
+                  />
+                  {items.map((item) => {
+                    const ratio = item.total_tokens / totalTokens;
+                    const dash = circumference * ratio;
+                    const segment = (
+                      <circle
+                        key={item.label}
+                        cx="60"
+                        cy="60"
+                        r="42"
+                        fill="none"
+                        stroke={item.color}
+                        strokeWidth="14"
+                        strokeDasharray={`${dash} ${circumference - dash}`}
+                        strokeDashoffset={-offset}
+                        transform="rotate(-90 60 60)"
+                      />
+                    );
+                    offset += dash;
+                    return segment;
+                  })}
+                  <text
+                    x="60"
+                    y="56"
+                    textAnchor="middle"
+                    className="fill-current text-[8px] font-semibold uppercase tracking-[0.28em]"
+                  >
+                    Share
+                  </text>
+                  <text
+                    x="60"
+                    y="70"
+                    textAnchor="middle"
+                    className="fill-current text-[12px] font-semibold"
+                  >
+                    {formatTokens(totalTokens)}
+                  </text>
+                </svg>
+              </div>
+
+              <div className="rounded-box border border-base-300 bg-base-200/60 px-3 py-2 text-center text-xs text-base-content/60">
+                Top share {items[0] ? `${((items[0].total_tokens / totalTokens) * 100).toFixed(1)}%` : "0%"}
+              </div>
+
+              <div className="grid w-full max-w-md grid-cols-2 gap-4 border-t border-base-300/70 pt-4">
+                <div className="flex flex-col items-center text-center">
+                  <div className="whitespace-nowrap text-[10px] font-medium uppercase tracking-[0.22em] text-base-content/42">
+                    Total Tokens
+                  </div>
+                  <div className="mt-2 text-2xl font-semibold tabular-nums">
+                    {formatTokens(totalTokens)}
+                  </div>
+                  <div className="text-xs text-base-content/60">
+                    {items.length} segments
+                  </div>
+                </div>
+                <div className="flex flex-col items-center text-center">
+                  <div className="whitespace-nowrap text-[10px] font-medium uppercase tracking-[0.22em] text-base-content/42">
+                    Total Cost
+                  </div>
+                  <div className="mt-2 text-2xl font-semibold tabular-nums">
+                    {formatCost(totalCost)}
+                  </div>
+                  <div className="max-w-[12rem] text-xs leading-snug text-base-content/60">
+                    Unknown models remain $0
+                  </div>
+                </div>
+              </div>
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-3">
               {items.map((item) => {
-                const percent = totalTokens === 0 ? 0 : (item.total_tokens / totalTokens) * 100;
+                const percent =
+                  totalTokens === 0 ? 0 : (item.total_tokens / totalTokens) * 100;
                 return (
                   <div
                     key={item.label}
-                    className="rounded-box border border-base-300 bg-base-200/55 px-3 py-2"
+                    className="rounded-box border border-base-300 bg-base-200/55 px-4 py-3"
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <span
                             className="inline-block size-2.5 rounded-full"
                             style={{ backgroundColor: item.color }}
                           />
-                          <span className="truncate font-medium">{item.label}</span>
-                        </div>
-                        <div className="mt-1 text-xs text-base-content/60">
-                          {item.request_count} req
+                          <span
+                            className="truncate font-medium"
+                            title={item.label}
+                          >
+                            {item.label}
+                          </span>
                         </div>
                       </div>
-                      <div className="text-right text-xs">
+                      <div className="shrink-0 text-right">
                         <div className="font-semibold text-base-content/85">
                           {percent.toFixed(1)}%
                         </div>
-                        <div className="text-base-content/60">
-                          {formatTokens(item.total_tokens)} tok
-                        </div>
                       </div>
                     </div>
-                    <div className="mt-2 flex items-center justify-between text-[11px] text-base-content/55">
+
+                    <div className="mt-3 h-2 rounded-full bg-base-300/30">
+                      <div
+                        className="h-full rounded-full"
+                        style={{
+                          width: `${Math.max(percent, item.total_tokens > 0 ? 6 : 0)}%`,
+                          backgroundColor: item.color,
+                        }}
+                      />
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-base-content/60">
+                      <span>{formatTokens(item.total_tokens)} tok</span>
+                      <span>{item.request_count} req</span>
                       <span>{formatCost(item.estimated_cost_usd)}</span>
-                      <span>
-                        {formatTokens(item.total_tokens)} / {formatTokens(totalTokens)}
-                      </span>
                     </div>
                   </div>
                 );
@@ -761,11 +842,11 @@ export function UsagePanel() {
         contextPercent={contextPercent}
       />
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.7fr)_minmax(320px,0.7fr)]">
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.82fr)_minmax(360px,0.82fr)]">
         <TrendChart points={summary.trend} />
         <ShareChart
           title="Provider 占比"
-          description="依總 token 量排列，超過 5 個 provider 會合併成 other。"
+          description="依總 token 排列，超過 5 個 provider 併入 other。"
           items={providerShare}
         />
         <ShareChart
