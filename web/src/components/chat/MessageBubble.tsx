@@ -68,29 +68,51 @@ export function MessageBubble({ message }: Props) {
 
       {/* Metadata footer for assistant messages */}
       {message.role === "assistant" && message.usage && (
-        <div className="chat-footer text-xs text-base-content/40 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
-          {message.elapsed != null && (
-            <span>{formatDuration(message.elapsed)}</span>
-          )}
-          <span>
-            ↑{formatTokens(message.usage.input_tokens)} ↓
-            {formatTokens(message.usage.output_tokens)}
-          </span>
-          {message.provider && message.model && (
+        <div className="chat-footer text-xs text-base-content/40 mt-1 space-y-0.5">
+          <div className="flex flex-wrap items-center gap-x-1">
+            {message.elapsed != null && (
+              <>
+                <span>⏱ {formatDuration(message.elapsed)}</span>
+                <span className="opacity-40">·</span>
+              </>
+            )}
             <span>
-              {message.provider}/{message.model}
+              ↑{formatTokens(message.usage.input_tokens)} ↓
+              {formatTokens(message.usage.output_tokens)}
+              {message.usage.total_tokens > 0 && (
+                <> ({formatTokens(message.usage.total_tokens)})</>
+              )}
             </span>
-          )}
-          {message.toolEvents && message.toolEvents.length > 0 && (
-            <span>
-              🔧{" "}
-              {message.toolEvents
-                .filter((e) => e.phase === "executed")
-                .map((e) => e.tool_name)
-                .filter(Boolean)
-                .join(", ")}
-            </span>
-          )}
+            {message.elapsed != null && message.elapsed > 0 && (
+              <>
+                <span className="opacity-40">·</span>
+                <span>
+                  {Math.round(message.usage.output_tokens / (message.elapsed / 1000))} tok/s
+                </span>
+              </>
+            )}
+            {message.provider && message.model && (
+              <>
+                <span className="opacity-40">·</span>
+                <span>{message.provider}/{message.model}</span>
+              </>
+            )}
+          </div>
+          {message.toolEvents && message.toolEvents.length > 0 && (() => {
+            const executedTools = message.toolEvents
+              .filter((e) => e.phase === "executed")
+              .map((e) => e.tool_name)
+              .filter(Boolean);
+            if (executedTools.length === 0) return null;
+            return (
+              <div>
+                <div>🔧 使用的工具：</div>
+                {executedTools.map((name, i) => (
+                  <div key={i}>{i + 1}. {name}</div>
+                ))}
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>

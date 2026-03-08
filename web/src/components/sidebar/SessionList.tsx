@@ -69,15 +69,14 @@ export function SessionList() {
         {sessions.map((s) => (
           <li key={s.session_id}>
             <button
-              className={`flex justify-between items-center w-full min-w-0 ${
-                s.session_id === sessionID ? "active" : ""
-              }`}
+              className={`grid grid-cols-[1fr_auto] gap-2 items-center w-full text-left ${s.session_id === sessionID ? "active" : ""
+                }`}
               onClick={() => handleSelect(s.session_id)}
             >
-              <span className="truncate flex-1 text-left min-w-0">
+              <span className="truncate min-w-0">
                 {s.title || s.session_id}
               </span>
-              <span className="text-xs text-base-content/40 shrink-0 ml-2">
+              <span className="text-xs text-base-content/40 whitespace-nowrap">
                 {formatRelativeTime(s.updated_at)}
               </span>
             </button>

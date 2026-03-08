@@ -90,7 +90,7 @@ export function SettingsPage() {
               checked={route === tab.route}
               onChange={() => setRoute(tab.route)}
             />
-            <div className="tab-content border-base-300 bg-base-100 p-6">
+            <div className="tab-content border-l-0 border-r-0 border-base-300 rounded-none bg-base-100 p-6">
               <div className="max-w-2xl mx-auto">
                 {route === tab.route && renderPanel(tab.route)}
               </div>
