@@ -19,7 +19,6 @@ const TABS: TabDef[] = [
   { route: "settings/provider", label: "Provider" },
   { route: "settings/persona", label: "Persona" },
   { route: "settings/auth", label: "認證" },
-  { route: "settings/sessions", label: "對話" },
   { route: "settings/memory", label: "記憶" },
   { route: "settings/usage", label: "用量" },
   { route: "settings/mcp", label: "MCP" },

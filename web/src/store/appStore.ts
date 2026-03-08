@@ -32,7 +32,6 @@ export type Route =
   | "settings/provider"
   | "settings/persona"
   | "settings/auth"
-  | "settings/sessions"
   | "settings/memory"
   | "settings/usage"
   | "settings/mcp"
