@@ -994,11 +994,13 @@ func (b *Bot) startToolStatusPolling(chatID int64, placeholderMsgID int, placeho
 // ---------------------------------------------------------------------------
 
 func (b *Bot) editMessage(chatID int64, messageID int, text string) {
+	formatted := RenderMarkdownV2(text)
 	// Telegram edit limit is the same as send limit.
-	if len(text) > telegramMessageLimit {
-		text = text[:telegramMessageLimit]
+	if len(formatted) > telegramMessageLimit {
+		formatted = formatted[:telegramMessageLimit]
 	}
-	edit := tgbotapi.NewEditMessageText(chatID, messageID, text)
+	edit := tgbotapi.NewEditMessageText(chatID, messageID, formatted)
+	edit.ParseMode = tgbotapi.ModeMarkdownV2
 	if _, err := b.api.Send(edit); err != nil {
 		logTelegram.Errorf("edit error: chat=%d message=%d error=%v", chatID, messageID, err)
 	}
@@ -1007,7 +1009,9 @@ func (b *Bot) editMessage(chatID int64, messageID int, text string) {
 func (b *Bot) sendReply(chatID int64, replyToID int, content string) {
 	chunks := splitMessage(content, telegramMessageLimit)
 	for i, chunk := range chunks {
-		msg := tgbotapi.NewMessage(chatID, chunk)
+		formatted := RenderMarkdownV2(chunk)
+		msg := tgbotapi.NewMessage(chatID, formatted)
+		msg.ParseMode = tgbotapi.ModeMarkdownV2
 		if i == 0 {
 			msg.ReplyToMessageID = replyToID
 		}
