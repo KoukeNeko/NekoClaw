@@ -265,7 +265,7 @@ export function PersonaPanel() {
       <div className="card border border-base-300 bg-base-200 shadow-sm">
         <div className="card-body gap-4">
           <div className="join w-full">
-            <label className="input input-bordered join-item flex w-full items-center gap-2">
+            <label className="input input-bordered join-item flex w-full items-center gap-2 focus-within:outline-none focus-within:ring-0 focus-within:shadow-none">
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 viewBox="0 0 24 24"
@@ -279,7 +279,7 @@ export function PersonaPanel() {
               </svg>
               <input
                 type="text"
-                className="grow"
+                className="grow outline-none focus:outline-none focus:ring-0 focus-visible:outline-none"
                 placeholder="搜尋 persona 名稱、資料夾、ID 或描述"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
