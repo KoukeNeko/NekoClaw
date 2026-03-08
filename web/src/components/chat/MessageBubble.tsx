@@ -30,10 +30,10 @@ export function MessageBubble({ message }: Props) {
     <div className={`chat ${isUser ? "chat-end" : "chat-start"}`}>
       <div
         className={`chat-bubble max-w-full ${isUser
-            ? "chat-bubble-primary"
-            : isError
-              ? "chat-bubble-error"
-              : ""
+          ? "chat-bubble-primary"
+          : isError
+            ? "chat-bubble-error"
+            : ""
           }`}
       >
         {/* Image attachments */}
@@ -101,13 +101,27 @@ export function MessageBubble({ message }: Props) {
             const executedTools = message.toolEvents
               .filter((e) => e.phase === "executed")
               .map((e) => e.tool_name)
-              .filter(Boolean);
+              .filter(Boolean) as string[];
+
             if (executedTools.length === 0) return null;
+
+            const groupedTools: { name: string; count: number }[] = [];
+            for (const name of executedTools) {
+              const last = groupedTools[groupedTools.length - 1];
+              if (last && last.name === name) {
+                last.count++;
+              } else {
+                groupedTools.push({ name, count: 1 });
+              }
+            }
+
             return (
               <div>
                 <div>🔧 使用的工具：</div>
-                {executedTools.map((name, i) => (
-                  <div key={i}>{i + 1}. {name}</div>
+                {groupedTools.map((tool, i) => (
+                  <div key={i}>
+                    {i + 1}. {tool.name}{tool.count > 1 ? ` (×${tool.count})` : ""}
+                  </div>
                 ))}
               </div>
             );
