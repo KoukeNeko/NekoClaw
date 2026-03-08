@@ -91,15 +91,14 @@ export function Sidebar() {
           <InspectorPanel />
         </div>
 
-        <div className="divider my-0 mx-3 is-drawer-close:hidden" />
+        <div className="divider my-0 mx-4 is-drawer-close:hidden" />
 
         {/* Settings — daisyUI menu with collapsible tooltip */}
-        <ul className="menu w-full p-1">
+        <ul className="menu w-full px-2 py-0">
           <li>
             <button
-              className={`is-drawer-close:tooltip is-drawer-close:tooltip-right ${
-                route.startsWith("settings") ? "active" : ""
-              }`}
+              className={`py-2.5 is-drawer-close:tooltip is-drawer-close:tooltip-right ${route.startsWith("settings") ? "active" : ""
+                }`}
               data-tip="設定"
               onClick={handleNavSettings}
             >
@@ -128,19 +127,19 @@ export function Sidebar() {
         </ul>
 
         {/* Theme switcher */}
-        <div className="px-1 mb-2">
+        <div className="px-2 mb-2 w-full">
           <ThemeDropdown />
         </div>
 
         {/* Keyboard shortcuts — hidden when collapsed */}
-        <div className="px-3 pb-2 flex flex-wrap gap-1 text-[10px] text-base-content/30 is-drawer-close:hidden">
+        <div className="px-4 pb-2 flex flex-wrap gap-1 text-[10px] text-base-content/30 is-drawer-close:hidden">
           <span>
-            <kbd className="kbd kbd-xs">Ctrl</kbd>+
-            <kbd className="kbd kbd-xs">N</kbd> 新對話
+            <kbd className="kbd kbd-xs mb-1">Ctrl</kbd>+
+            <kbd className="kbd kbd-xs mb-1">N</kbd> 新對話
           </span>
           <span>
-            <kbd className="kbd kbd-xs">Ctrl</kbd>+
-            <kbd className="kbd kbd-xs">B</kbd> 側欄
+            <kbd className="kbd kbd-xs mb-1">Ctrl</kbd>+
+            <kbd className="kbd kbd-xs mb-1">B</kbd> 側欄
           </span>
           <span>
             <kbd className="kbd kbd-xs">Esc</kbd> 設定
