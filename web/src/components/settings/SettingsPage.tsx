@@ -49,7 +49,7 @@ export function SettingsPage() {
       : "max-w-2xl";
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full min-h-0 flex-col">
       {/* Header */}
       <header className="navbar bg-base-200/50 backdrop-blur-sm border-b border-base-300 min-h-12 px-3">
         <div className="flex-none">
@@ -86,7 +86,7 @@ export function SettingsPage() {
       </header>
 
       {/* daisyUI tabs — official pattern */}
-      <div className="tabs tabs-border flex-1">
+      <div className="tabs tabs-border flex-1 min-h-0 overflow-hidden">
         {TABS.map((tab) => (
           <Fragment key={tab.route}>
             <input
@@ -97,8 +97,8 @@ export function SettingsPage() {
               checked={route === tab.route}
               onChange={() => setRoute(tab.route)}
             />
-            <div className="tab-content border-l-0 border-r-0 border-base-300 rounded-none bg-base-100 p-6">
-              <div className={`mx-auto w-full ${panelWidth}`}>
+            <div className="tab-content min-h-0 overflow-y-auto border-l-0 border-r-0 border-base-300 rounded-none bg-base-100 p-6 [scrollbar-width:thin]">
+              <div className={`mx-auto w-full pb-6 ${panelWidth}`}>
                 {route === tab.route && renderPanel(tab.route)}
               </div>
             </div>
