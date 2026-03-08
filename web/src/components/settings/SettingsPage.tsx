@@ -4,6 +4,7 @@ import { PersonaPanel } from "./PersonaPanel";
 import { ProviderPanel } from "./ProviderPanel";
 import { DiscordPanel } from "./DiscordPanel";
 import { TelegramPanel } from "./TelegramPanel";
+import { MemoryPanel } from "./MemoryPanel";
 
 /**
  * Settings page — daisyUI tabs (official radio + tab-content pattern).
@@ -34,6 +35,8 @@ function renderPanel(route: Route) {
       return <ProviderPanel />;
     case "settings/persona":
       return <PersonaPanel />;
+    case "settings/memory":
+      return <MemoryPanel />;
     case "settings/discord":
       return <DiscordPanel />;
     case "settings/telegram":
@@ -50,6 +53,7 @@ export function SettingsPage() {
   const setRoute = useAppStore((s) => s.setRoute);
   const panelWidth =
     route === "settings/persona" ||
+    route === "settings/memory" ||
     route === "settings/provider" ||
     route === "settings/discord" ||
     route === "settings/telegram"

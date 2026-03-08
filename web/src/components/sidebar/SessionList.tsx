@@ -1,10 +1,8 @@
 import { useEffect, useCallback } from "react";
 import { useAppStore } from "@/store/appStore";
-import { listSessions, getTranscript } from "@/api/client";
+import { listSessions } from "@/api/client";
 import { formatRelativeTime } from "@/utils/format";
-import { calculateCost } from "@/utils/pricing";
-import type { TranscriptEntry } from "@/api/types";
-import type { ChatMessage } from "@/store/appStore";
+import { openSessionConversation } from "@/utils/sessionNavigation";
 
 /**
  * Scrollable session list showing all persisted sessions.
@@ -14,11 +12,6 @@ export function SessionList() {
   const sessions = useAppStore((s) => s.sessions);
   const setSessions = useAppStore((s) => s.setSessions);
   const sessionID = useAppStore((s) => s.sessionID);
-  const setSessionID = useAppStore((s) => s.setSessionID);
-  const setMessages = useAppStore((s) => s.setMessages);
-  const setRoute = useAppStore((s) => s.setRoute);
-  const setSidebarOpen = useAppStore((s) => s.setSidebarOpen);
-  const resetUsage = useAppStore((s) => s.resetUsage);
 
   const loadSessions = useCallback(async () => {
     try {
@@ -38,22 +31,10 @@ export function SessionList() {
 
   async function handleSelect(id: string) {
     if (id === sessionID) return;
-    setSessionID(id);
-    resetUsage();
-    setRoute("chat");
-    // Only close sidebar on mobile where it overlays content
-    if (window.innerWidth < 1024) {
-      setSidebarOpen(false);
-    }
-
-    // Load transcript and compute session usage totals
     try {
-      const entries = await getTranscript(id);
-      const msgs = transcriptToMessages(entries);
-      setMessages(msgs);
-      recomputeUsageFromTranscript(entries);
+      await openSessionConversation(id);
     } catch {
-      setMessages([]);
+      // Keep the current conversation intact when the transcript fails to load.
     }
   }
 
@@ -87,37 +68,4 @@ export function SessionList() {
       </ul>
     </div>
   );
-}
-
-/** Convert API transcript entries to ChatMessages for display.
- *  The API already filters to user/assistant roles only.
- *  Assistant messages include per-message metadata (provider, model, usage, tools). */
-function transcriptToMessages(entries: TranscriptEntry[]): ChatMessage[] {
-  return entries.map((entry, i) => ({
-    id: `tx-${i + 1}`,
-    role: entry.role as ChatMessage["role"],
-    content: entry.content ?? "",
-    createdAt: entry.created_at,
-    // Per-message metadata from transcript (assistant only)
-    provider: entry.provider,
-    model: entry.model,
-    usage: entry.usage,
-    toolEvents: entry.tool_events,
-    elapsed: entry.elapsed_ms,
-  }));
-}
-
-/** Aggregate per-message usage from transcript and update the store totals. */
-function recomputeUsageFromTranscript(entries: TranscriptEntry[]) {
-  const { addUsage } = useAppStore.getState();
-  for (const entry of entries) {
-    if (entry.role === "assistant" && entry.usage) {
-      const cost = calculateCost(
-        entry.usage.input_tokens,
-        entry.usage.output_tokens,
-        entry.model ?? "",
-      );
-      addUsage(entry.usage, cost);
-    }
-  }
 }

@@ -497,9 +497,16 @@ export interface MemorySearchRequest {
 }
 
 export interface MemorySearchResult {
+  session_id: string;
+  entry_id: string;
+  path?: string;
+  start_line?: number;
+  end_line?: number;
   content: string;
+  role: string;
   score: number;
   source: string;
+  timestamp: string;
 }
 
 export interface MemorySearchResponse {
