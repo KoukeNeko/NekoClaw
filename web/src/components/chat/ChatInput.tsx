@@ -96,7 +96,7 @@ export function ChatInput({ onSend, onCancel, isStreaming }: Props) {
 
   return (
     <div className="border-t border-base-300 bg-base-100 p-3">
-      <div className="max-w-3xl mx-auto">
+      <div>
         {/* Image preview strip */}
         {images.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2">

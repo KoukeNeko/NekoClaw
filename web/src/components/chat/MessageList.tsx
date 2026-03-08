@@ -43,7 +43,7 @@ export function MessageList() {
       ref={containerRef}
       className="h-full overflow-y-auto [scrollbar-width:thin] px-2 sm:px-4 py-4"
     >
-      <div className="max-w-3xl mx-auto space-y-4">
+      <div className="space-y-4">
         {messages.map((msg) =>
           msg.role === "thinking" ? (
             <ThinkingIndicator key={msg.id} />
