@@ -36,7 +36,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           aria-label="close sidebar"
           className="drawer-overlay"
         />
-        <div className="flex h-full flex-col bg-base-200 is-drawer-close:w-14 is-drawer-open:w-64 transition-[width] duration-200">
+        <div className="flex h-full flex-col bg-base-200 is-drawer-close:w-14 is-drawer-open:w-64 transition-[width] duration-200 overflow-hidden">
           <Sidebar />
         </div>
       </div>

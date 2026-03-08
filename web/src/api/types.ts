@@ -536,19 +536,13 @@ export interface ToolsConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Session transcript (message entries)
+// Session transcript — matches Go TranscriptMessage struct
+// (API already filters to user/assistant only, strips image base64)
 // ---------------------------------------------------------------------------
 
 export interface TranscriptEntry {
-  type: string;
-  id: string;
-  parentId?: string;
-  timestamp: string;
-  role?: MessageRole;
-  content?: string;
-  images?: ImageData[];
-  tool_name?: string;
-  tool_call_id?: string;
-  summary?: string;
-  dropped_count?: number;
+  role: MessageRole;
+  content: string;
+  image_names?: string[];
+  created_at: string;
 }

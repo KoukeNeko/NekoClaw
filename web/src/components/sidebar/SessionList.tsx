@@ -88,21 +88,13 @@ export function SessionList() {
   );
 }
 
-/** Convert JSONL transcript entries to ChatMessages for display */
+/** Convert API transcript entries to ChatMessages for display.
+ *  The API already filters to user/assistant roles only. */
 function transcriptToMessages(entries: TranscriptEntry[]): ChatMessage[] {
-  const msgs: ChatMessage[] = [];
-  let counter = 0;
-  for (const entry of entries) {
-    if (entry.type !== "message") continue;
-    if (!entry.role || entry.role === "system" || entry.role === "tool")
-      continue;
-    msgs.push({
-      id: entry.id || `tx-${++counter}`,
-      role: entry.role as ChatMessage["role"],
-      content: entry.content ?? "",
-      images: entry.images,
-      createdAt: entry.timestamp,
-    });
-  }
-  return msgs;
+  return entries.map((entry, i) => ({
+    id: `tx-${i + 1}`,
+    role: entry.role as ChatMessage["role"],
+    content: entry.content ?? "",
+    createdAt: entry.created_at,
+  }));
 }
