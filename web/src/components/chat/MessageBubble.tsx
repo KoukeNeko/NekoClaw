@@ -29,13 +29,12 @@ export function MessageBubble({ message }: Props) {
   return (
     <div className={`chat ${isUser ? "chat-end" : "chat-start"}`}>
       <div
-        className={`chat-bubble max-w-full ${
-          isUser
+        className={`chat-bubble max-w-full ${isUser
             ? "chat-bubble-primary"
             : isError
               ? "chat-bubble-error"
               : ""
-        }`}
+          }`}
       >
         {/* Image attachments */}
         {message.images && message.images.length > 0 && (
@@ -68,7 +67,7 @@ export function MessageBubble({ message }: Props) {
 
       {/* Metadata footer for assistant messages */}
       {message.role === "assistant" && message.usage && (
-        <div className="chat-footer text-xs text-base-content/40 mt-1 space-y-0.5">
+        <div className="chat-footer text-xs text-base-content/40 mt-1 space-y-0.5 flex-col">
           <div className="flex flex-wrap items-center gap-x-1">
             {message.elapsed != null && (
               <>
