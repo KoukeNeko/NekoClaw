@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -38,6 +39,7 @@ type Manager struct {
 	configDir    string
 	connections  map[string]*Connection
 	builtinState map[string]bool
+	customFiles  map[string]ServerConfig
 	mu           sync.RWMutex
 }
 
@@ -47,6 +49,7 @@ func NewManager(configDir string) *Manager {
 		configDir:    configDir,
 		connections:  make(map[string]*Connection),
 		builtinState: make(map[string]bool),
+		customFiles:  make(map[string]ServerConfig),
 	}
 }
 
@@ -63,47 +66,12 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.builtinState = state
 	m.mu.Unlock()
 
-	// Build combined config list: enabled builtins + user configs.
-	var allConfigs []ServerConfig
 	for _, def := range BuiltinDefs() {
 		if isBuiltinEnabled(state, def.Name) {
-			allConfigs = append(allConfigs, def.Config)
+			m.connectServer(ctx, def.Config)
 		}
 	}
-
-	userConfigs, errs := LoadConfigs(m.configDir)
-	for _, err := range errs {
-		logMCP.Errorf("config error: %v", err)
-	}
-	allConfigs = append(allConfigs, userConfigs...)
-
-	if len(allConfigs) == 0 {
-		return nil
-	}
-
-	// Detect duplicate server names.
-	seen := map[string]bool{}
-	for _, cfg := range allConfigs {
-		name := strings.TrimSpace(cfg.Name)
-		if seen[name] {
-			logMCP.Warnf("duplicate name: %s", name)
-			continue
-		}
-		seen[name] = true
-
-		conn := NewConnection(cfg)
-		m.mu.Lock()
-		m.connections[name] = conn
-		m.mu.Unlock()
-
-		if err := conn.Connect(ctx); err != nil {
-			logMCP.Errorf("connect error: server=%s error=%v", name, err)
-		} else {
-			logMCP.Logf("connected: server=%s transport=%s trust=%s tools=%d",
-				name, cfg.Transport, cfg.Trust, len(conn.Tools()))
-		}
-	}
-	return nil
+	return m.ApplyCustomConfigs(ctx)
 }
 
 // Stop disconnects all servers gracefully.
@@ -121,6 +89,26 @@ func (m *Manager) Stop() error {
 		}
 	}
 	return firstErr
+}
+
+// ConfigDir returns the MCP config directory path.
+func (m *Manager) ConfigDir() string {
+	return m.configDir
+}
+
+// ConfigDocuments returns all custom MCP config files, including invalid ones.
+func (m *Manager) ConfigDocuments() ([]ConfigDocument, error) {
+	return LoadConfigDocuments(m.configDir)
+}
+
+// SaveConfig writes a custom MCP config file.
+func (m *Manager) SaveConfig(fileName string, cfg *ServerConfig, rawJSON string) (string, error) {
+	return SaveConfigDocument(m.configDir, fileName, cfg, rawJSON)
+}
+
+// DeleteConfig removes a custom MCP config file.
+func (m *Manager) DeleteConfig(fileName string) error {
+	return DeleteConfigDocument(m.configDir, fileName)
 }
 
 // Servers returns status info for all configured servers.
@@ -143,6 +131,9 @@ func (m *Manager) Servers() []ServerInfo {
 		}
 		infos = append(infos, info)
 	}
+	slices.SortFunc(infos, func(left, right ServerInfo) int {
+		return strings.Compare(left.Name, right.Name)
+	})
 	return infos
 }
 
@@ -189,6 +180,12 @@ func (m *Manager) ToolInfos() []ToolInfo {
 			})
 		}
 	}
+	slices.SortFunc(infos, func(left, right ToolInfo) int {
+		if byServer := strings.Compare(left.Server, right.Server); byServer != 0 {
+			return byServer
+		}
+		return strings.Compare(left.Name, right.Name)
+	})
 	return infos
 }
 
@@ -340,6 +337,59 @@ func (m *Manager) SetBuiltinEnabled(ctx context.Context, name string, enabled bo
 	return nil
 }
 
+// ApplyCustomConfigs reconciles runtime custom MCP connections with the custom
+// config files currently present on disk. Builtin connections are left intact.
+func (m *Manager) ApplyCustomConfigs(ctx context.Context) error {
+	docs, err := LoadConfigDocuments(m.configDir)
+	if err != nil {
+		return err
+	}
+	for _, doc := range docs {
+		switch {
+		case doc.ParseError != "":
+			logMCP.Errorf("config error: %s: %s", doc.FileName, doc.ParseError)
+		case doc.ValidationError != "":
+			logMCP.Errorf("config error: %s: %s", doc.FileName, doc.ValidationError)
+		}
+	}
+
+	desired := make(map[string]ServerConfig)
+	for _, doc := range docs {
+		if doc.Config == nil || doc.ParseError != "" || doc.ValidationError != "" {
+			continue
+		}
+		desired[doc.FileName] = *doc.Config
+	}
+
+	m.mu.RLock()
+	current := make(map[string]ServerConfig, len(m.customFiles))
+	for fileName, cfg := range m.customFiles {
+		current[fileName] = cfg
+	}
+	m.mu.RUnlock()
+
+	for fileName, cfg := range current {
+		nextCfg, ok := desired[fileName]
+		if ok && serverConfigEqual(cfg, nextCfg) {
+			continue
+		}
+		m.disconnectCustomConfig(fileName, cfg)
+	}
+
+	for fileName, cfg := range desired {
+		currentCfg, ok := current[fileName]
+		if ok && serverConfigEqual(currentCfg, cfg) {
+			continue
+		}
+		m.connectCustomConfig(ctx, fileName, cfg)
+	}
+
+	m.mu.Lock()
+	m.customFiles = desired
+	m.mu.Unlock()
+	return nil
+}
+
 // marshalInputSchema converts a Tool's InputSchema to json.RawMessage.
 func marshalInputSchema(tool mcptypes.Tool) json.RawMessage {
 	// Prefer RawInputSchema if available (arbitrary JSON).
@@ -351,4 +401,71 @@ func marshalInputSchema(tool mcptypes.Tool) json.RawMessage {
 		return json.RawMessage(`{"type":"object","properties":{}}`)
 	}
 	return data
+}
+
+func (m *Manager) connectCustomConfig(ctx context.Context, fileName string, cfg ServerConfig) {
+	m.connectServer(ctx, cfg)
+	m.mu.Lock()
+	m.customFiles[fileName] = cfg
+	m.mu.Unlock()
+}
+
+func (m *Manager) disconnectCustomConfig(fileName string, cfg ServerConfig) {
+	m.mu.Lock()
+	conn, ok := m.connections[cfg.Name]
+	if ok {
+		delete(m.connections, cfg.Name)
+	}
+	delete(m.customFiles, fileName)
+	m.mu.Unlock()
+	if ok {
+		_ = conn.Disconnect()
+	}
+}
+
+func (m *Manager) connectServer(ctx context.Context, cfg ServerConfig) {
+	name := strings.TrimSpace(cfg.Name)
+	conn := NewConnection(cfg)
+	m.mu.Lock()
+	m.connections[name] = conn
+	m.mu.Unlock()
+
+	if err := conn.Connect(ctx); err != nil {
+		logMCP.Errorf("connect error: server=%s error=%v", name, err)
+		return
+	}
+	logMCP.Logf("connected: server=%s transport=%s trust=%s tools=%d",
+		name, cfg.Transport, cfg.Trust, len(conn.Tools()))
+}
+
+func serverConfigEqual(left, right ServerConfig) bool {
+	if left.Name != right.Name ||
+		left.Transport != right.Transport ||
+		left.Command != right.Command ||
+		left.URL != right.URL ||
+		left.Trust != right.Trust ||
+		left.Builtin != right.Builtin {
+		return false
+	}
+	if len(left.Args) != len(right.Args) {
+		return false
+	}
+	for i := range left.Args {
+		if left.Args[i] != right.Args[i] {
+			return false
+		}
+	}
+	return stringMapEqual(left.Env, right.Env) && stringMapEqual(left.Headers, right.Headers)
+}
+
+func stringMapEqual(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
 }

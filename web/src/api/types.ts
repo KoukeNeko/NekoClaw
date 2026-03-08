@@ -457,11 +457,12 @@ export interface SetFallbacksRequest {
 
 export interface MCPServer {
   name: string;
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-  enabled: boolean;
-  tools?: MCPTool[];
+  transport: "stdio" | "sse" | "streamable-http";
+  trust: "trusted" | "untrusted";
+  status: "disconnected" | "connecting" | "ready" | "error";
+  error?: string;
+  tool_count: number;
+  builtin: boolean;
 }
 
 export interface MCPTool {
@@ -472,8 +473,41 @@ export interface MCPTool {
 
 export interface MCPBuiltinServer {
   name: string;
+  description: string;
   enabled: boolean;
+  status: "disconnected" | "connecting" | "ready" | "error";
+  error?: string;
   tool_count: number;
+}
+
+export interface MCPServerConfig {
+  name: string;
+  transport: "stdio" | "sse" | "streamable-http";
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  trust: "trusted" | "untrusted";
+}
+
+export interface MCPConfigDocument {
+  file_name: string;
+  raw_json: string;
+  config?: MCPServerConfig;
+  parse_error?: string;
+  validation_error?: string;
+}
+
+export interface MCPConfigsResponse {
+  config_dir: string;
+  documents: MCPConfigDocument[];
+}
+
+export interface SaveMCPConfigRequest {
+  file_name?: string;
+  config?: MCPServerConfig;
+  raw_json?: string;
 }
 
 // ---------------------------------------------------------------------------

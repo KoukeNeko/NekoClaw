@@ -214,6 +214,46 @@ func (s *Service) MCPBuiltinServers() []mcp.BuiltinServerInfo {
 	return s.mcpManager.BuiltinServers()
 }
 
+// MCPConfigDir returns the configured custom MCP config directory.
+func (s *Service) MCPConfigDir() string {
+	if s.mcpManager == nil {
+		return ""
+	}
+	return s.mcpManager.ConfigDir()
+}
+
+// MCPConfigDocuments returns all custom MCP config files, including invalid ones.
+func (s *Service) MCPConfigDocuments() ([]mcp.ConfigDocument, error) {
+	if s.mcpManager == nil {
+		return nil, fmt.Errorf("mcp not configured")
+	}
+	return s.mcpManager.ConfigDocuments()
+}
+
+// SaveMCPConfig writes a custom MCP config document.
+func (s *Service) SaveMCPConfig(fileName string, cfg *mcp.ServerConfig, rawJSON string) (string, error) {
+	if s.mcpManager == nil {
+		return "", fmt.Errorf("mcp not configured")
+	}
+	return s.mcpManager.SaveConfig(fileName, cfg, rawJSON)
+}
+
+// DeleteMCPConfig removes a custom MCP config document.
+func (s *Service) DeleteMCPConfig(fileName string) error {
+	if s.mcpManager == nil {
+		return fmt.Errorf("mcp not configured")
+	}
+	return s.mcpManager.DeleteConfig(fileName)
+}
+
+// ApplyMCPConfigs reconciles runtime custom MCP servers with config files.
+func (s *Service) ApplyMCPConfigs(ctx context.Context) error {
+	if s.mcpManager == nil {
+		return fmt.Errorf("mcp not configured")
+	}
+	return s.mcpManager.ApplyCustomConfigs(ctx)
+}
+
 // ToggleMCPBuiltin enables or disables a builtin MCP server.
 func (s *Service) ToggleMCPBuiltin(ctx context.Context, name string, enabled bool) error {
 	if s.mcpManager == nil {

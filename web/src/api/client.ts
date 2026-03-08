@@ -41,6 +41,8 @@ import type {
   MCPServer,
   MCPTool,
   MCPBuiltinServer,
+  MCPConfigsResponse,
+  SaveMCPConfigRequest,
   PersonaInfo,
   MemorySearchRequest,
   MemorySearchResponse,
@@ -405,11 +407,29 @@ export async function listMCPBuiltin(): Promise<MCPBuiltinServer[]> {
   return resp.servers ?? [];
 }
 
+export function getMCPConfigs(): Promise<MCPConfigsResponse> {
+  return get("/v1/mcp/configs");
+}
+
 export function toggleMCPBuiltin(
   name: string,
   enabled: boolean,
 ): Promise<void> {
   return post("/v1/mcp/builtin/toggle", { name, enabled });
+}
+
+export async function saveMCPConfig(
+  req: SaveMCPConfigRequest,
+): Promise<{ file_name: string }> {
+  return post("/v1/mcp/configs/save", req);
+}
+
+export function deleteMCPConfig(fileName: string): Promise<void> {
+  return post("/v1/mcp/configs/delete", { file_name: fileName });
+}
+
+export function applyMCPConfigs(): Promise<void> {
+  return post("/v1/mcp/configs/apply", {});
 }
 
 // ---------------------------------------------------------------------------

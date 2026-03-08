@@ -6,6 +6,7 @@ import { DiscordPanel } from "./DiscordPanel";
 import { TelegramPanel } from "./TelegramPanel";
 import { AuthPanel } from "./AuthPanel";
 import { MemoryPanel } from "./MemoryPanel";
+import { MCPPanel } from "./MCPPanel";
 
 /**
  * Settings page — daisyUI tabs (official radio + tab-content pattern).
@@ -40,6 +41,8 @@ function renderPanel(route: Route) {
       return <AuthPanel />;
     case "settings/memory":
       return <MemoryPanel />;
+    case "settings/mcp":
+      return <MCPPanel />;
     case "settings/discord":
       return <DiscordPanel />;
     case "settings/telegram":
@@ -58,6 +61,7 @@ export function SettingsPage() {
     route === "settings/auth" ||
     route === "settings/persona" ||
     route === "settings/memory" ||
+    route === "settings/mcp" ||
     route === "settings/provider" ||
     route === "settings/discord" ||
     route === "settings/telegram"

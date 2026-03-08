@@ -91,6 +91,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/mcp/tools", s.handleMCPTools)
 	mux.HandleFunc("/v1/mcp/builtin", s.handleMCPBuiltin)
 	mux.HandleFunc("/v1/mcp/builtin/toggle", s.handleMCPBuiltinToggle)
+	mux.HandleFunc("/v1/mcp/configs", s.handleMCPConfigs)
+	mux.HandleFunc("/v1/mcp/configs/save", s.handleMCPConfigSave)
+	mux.HandleFunc("/v1/mcp/configs/delete", s.handleMCPConfigDelete)
+	mux.HandleFunc("/v1/mcp/configs/apply", s.handleMCPConfigsApply)
 	mux.HandleFunc("/v1/personas", s.handlePersonas)
 	mux.HandleFunc("/v1/personas/active", s.handlePersonaActive)
 	mux.HandleFunc("/v1/personas/use", s.handlePersonaUse)
@@ -1523,6 +1527,92 @@ func (s *Server) handleMCPBuiltinToggle(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := s.svc.ToggleMCPBuiltin(r.Context(), strings.TrimSpace(req.Name), req.Enabled); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleMCPConfigs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	docs, err := s.svc.MCPConfigDocuments()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if docs == nil {
+		docs = []mcp.ConfigDocument{}
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"config_dir": s.svc.MCPConfigDir(),
+		"documents":  docs,
+	})
+}
+
+func (s *Server) handleMCPConfigSave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		FileName string            `json:"file_name"`
+		Config   *mcp.ServerConfig `json:"config"`
+		RawJSON  string            `json:"raw_json"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	fileName, err := s.svc.SaveMCPConfig(req.FileName, req.Config, req.RawJSON)
+	if err != nil {
+		switch {
+		case errors.Is(err, mcp.ErrInvalidConfigDocument):
+			respondError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, mcp.ErrConfigNotFound):
+			respondError(w, http.StatusNotFound, err.Error())
+		default:
+			respondError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"ok": true, "file_name": fileName})
+}
+
+func (s *Server) handleMCPConfigDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		FileName string `json:"file_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if err := s.svc.DeleteMCPConfig(req.FileName); err != nil {
+		switch {
+		case errors.Is(err, mcp.ErrInvalidConfigDocument):
+			respondError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, mcp.ErrConfigNotFound):
+			respondError(w, http.StatusNotFound, err.Error())
+		default:
+			respondError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleMCPConfigsApply(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := s.svc.ApplyMCPConfigs(r.Context()); err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
