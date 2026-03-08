@@ -521,7 +521,7 @@ export interface ToolStatusResult {
 
 export interface DiscordConfig {
   bot_token: string;
-  reply_mode: boolean;
+  reply_to_original?: boolean;
   console_channel: string;
 }
 

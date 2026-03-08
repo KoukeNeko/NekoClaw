@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import { useAppStore, type Route } from "@/store/appStore";
 import { PersonaPanel } from "./PersonaPanel";
 import { ProviderPanel } from "./ProviderPanel";
+import { DiscordPanel } from "./DiscordPanel";
 import { TelegramPanel } from "./TelegramPanel";
 
 /**
@@ -34,6 +35,8 @@ function renderPanel(route: Route) {
       return <ProviderPanel />;
     case "settings/persona":
       return <PersonaPanel />;
+    case "settings/discord":
+      return <DiscordPanel />;
     case "settings/telegram":
       return <TelegramPanel />;
     default: {
@@ -49,6 +52,7 @@ export function SettingsPage() {
   const panelWidth =
     route === "settings/persona" ||
     route === "settings/provider" ||
+    route === "settings/discord" ||
     route === "settings/telegram"
       ? "max-w-6xl"
       : "max-w-2xl";
