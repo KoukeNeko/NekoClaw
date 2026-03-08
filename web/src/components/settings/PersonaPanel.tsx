@@ -214,7 +214,7 @@ export function PersonaPanel() {
 
             <div className="join">
               <button
-                className="btn btn-outline btn-sm join-item"
+                className="btn  btn-sm join-item"
                 onClick={handleReload}
                 disabled={busyAction !== ""}
               >
@@ -286,7 +286,7 @@ export function PersonaPanel() {
               />
             </label>
             <button
-              className="btn btn-outline join-item"
+              className="btn  join-item"
               onClick={() => setQuery("")}
               disabled={!query}
             >
@@ -347,7 +347,7 @@ export function PersonaPanel() {
                       </button>
                     ) : (
                       <button
-                        className="btn btn-outline btn-sm"
+                        className="btn  btn-sm"
                         onClick={() => setQuery("")}
                       >
                         清除搜尋
@@ -479,7 +479,7 @@ export function PersonaPanel() {
 
                 <div className="card-actions justify-end">
                   <button
-                    className="btn btn-outline"
+                    className="btn "
                     onClick={handleClear}
                     disabled={!active || busyAction !== ""}
                   >

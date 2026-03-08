@@ -44,7 +44,9 @@ export function SettingsPage() {
   const route = useAppStore((s) => s.route);
   const setRoute = useAppStore((s) => s.setRoute);
   const panelWidth =
-    route === "settings/persona" ? "max-w-6xl" : "max-w-2xl";
+    route === "settings/persona" || route === "settings/provider"
+      ? "max-w-6xl"
+      : "max-w-2xl";
 
   return (
     <div className="flex flex-col h-full">
