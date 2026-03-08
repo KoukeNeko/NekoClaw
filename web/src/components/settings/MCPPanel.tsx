@@ -732,7 +732,7 @@ export function MCPPanel() {
       <div className="card border border-base-300 bg-base-200 shadow-sm">
         <div className="card-body gap-4">
           <div className="join w-full">
-            <label className="input input-bordered join-item flex w-full items-center gap-2">
+            <label className="input input-bordered join-item flex w-full items-center gap-2 focus-within:outline-none focus-within:ring-0 focus-within:shadow-none">
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 viewBox="0 0 24 24"
@@ -746,7 +746,7 @@ export function MCPPanel() {
               </svg>
               <input
                 type="text"
-                className="grow"
+                className="grow outline-none focus:outline-none focus:ring-0 focus-visible:outline-none"
                 placeholder="搜尋 builtin、custom file、server name 或錯誤訊息"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
@@ -805,14 +805,18 @@ export function MCPPanel() {
                     <span>沒有符合搜尋條件的 builtin server。</span>
                   </div>
                 ) : (
-                  <ul className="menu rounded-box border border-base-300 bg-base-100 p-2">
+                  <ul className="space-y-2 rounded-box border border-base-300 bg-base-100 p-2">
                     {filteredBuiltins.map((item) => {
                       const isSelected =
                         selected?.kind === "builtin" && selected.name === item.name;
                       return (
-                        <li key={item.name}>
+                        <li key={item.name} className="w-full">
                           <button
-                            className={isSelected ? "active" : ""}
+                            className={`flex w-full rounded-box border border-base-300 px-4 py-3 text-left transition-colors ${
+                              isSelected
+                                ? "border-primary/60 bg-base-300"
+                                : "bg-base-100 hover:bg-base-200"
+                            }`}
                             onClick={() => setSelected({ kind: "builtin", name: item.name })}
                           >
                             <div className="min-w-0 flex-1 text-left">
@@ -856,7 +860,7 @@ export function MCPPanel() {
                     </span>
                   </div>
                 ) : (
-                  <ul className="menu rounded-box border border-base-300 bg-base-100 p-2">
+                  <ul className="space-y-2 rounded-box border border-base-300 bg-base-100 p-2">
                     {filteredDocuments.map((doc) => {
                       const runtime = doc.config?.name
                         ? customRuntimeServers.find((server) => server.name === doc.config?.name)
@@ -865,9 +869,13 @@ export function MCPPanel() {
                       const isSelected =
                         selected?.kind === "custom" && selected.fileName === doc.file_name;
                       return (
-                        <li key={doc.file_name}>
+                        <li key={doc.file_name} className="w-full">
                           <button
-                            className={isSelected ? "active" : ""}
+                            className={`flex w-full rounded-box border border-base-300 px-4 py-3 text-left transition-colors ${
+                              isSelected
+                                ? "border-primary/60 bg-base-300"
+                                : "bg-base-100 hover:bg-base-200"
+                            }`}
                             onClick={() =>
                               setSelected({ kind: "custom", fileName: doc.file_name })
                             }
