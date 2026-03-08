@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/doeshing/nekoclaw/internal/app"
+	"github.com/doeshing/nekoclaw/internal/binding"
 	"github.com/doeshing/nekoclaw/internal/core"
 	"github.com/doeshing/nekoclaw/internal/logger"
 	"github.com/doeshing/nekoclaw/internal/mcp"
@@ -62,11 +65,15 @@ type Bot struct {
 	// Per-chat recent message buffer for group context injection.
 	groupHistory   map[int64][]groupMessage
 	groupHistoryMu sync.RWMutex
+
+	// Persistent chat → session binding store (survives restarts).
+	bindingStore *binding.Store
 }
 
 // Config holds the configuration needed to create a Telegram bot.
 type Config struct {
-	Token string // Telegram bot token (required)
+	Token    string // Telegram bot token (required)
+	StateDir string // Directory for persistent state (bindings, etc.)
 }
 
 // New creates a new Telegram bot. Call Start() to connect.
@@ -81,13 +88,38 @@ func New(svc *app.Service, cfg Config) (*Bot, error) {
 		return nil, fmt.Errorf("create telegram bot api: %w", err)
 	}
 
-	return &Bot{
+	bot := &Bot{
 		api:            api,
 		svc:            svc,
 		queues:         make(map[int64]chan messageJob),
 		activeSessions: make(map[int64]string),
 		groupHistory:   make(map[int64][]groupMessage),
-	}, nil
+	}
+
+	// Load persistent bindings from disk (if StateDir is configured).
+	if dir := strings.TrimSpace(cfg.StateDir); dir != "" {
+		storePath := filepath.Join(dir, "telegram-bindings.json")
+		bs, loadErr := binding.Load(storePath)
+		if loadErr != nil {
+			logTelegram.Errorf("load bindings: %v", loadErr)
+		} else {
+			bot.bindingStore = bs
+			// Hydrate in-memory map from persisted bindings.
+			for key, entry := range bs.All() {
+				chatID, parseErr := parseChatID(key)
+				if parseErr != nil {
+					logTelegram.Warnf("skip invalid binding key %q: %v", key, parseErr)
+					continue
+				}
+				bot.activeSessions[chatID] = entry.SessionID
+			}
+			if n := len(bot.activeSessions); n > 0 {
+				logTelegram.Logf("restored %d chat bindings from disk", n)
+			}
+		}
+	}
+
+	return bot, nil
 }
 
 // Start connects via long polling and begins handling messages.
@@ -181,13 +213,32 @@ func (b *Bot) getSessionID(chatID int64) string {
 	return fmt.Sprintf("telegram:%d", chatID)
 }
 
-// resetSession creates a new session for the chat and returns its ID.
+// resetSession creates a new session for the chat, persists the binding,
+// and returns the new session ID.
 func (b *Bot) resetSession(chatID int64) string {
 	newID := fmt.Sprintf("telegram:%d-%s", chatID, time.Now().Format("0102-150405"))
 	b.activeSessionsMu.Lock()
 	b.activeSessions[chatID] = newID
 	b.activeSessionsMu.Unlock()
+
+	// Persist binding so the session survives bot restarts.
+	if b.bindingStore != nil {
+		b.bindingStore.Set(formatChatKey(chatID), binding.Entry{
+			SessionID: newID,
+		})
+	}
+
 	return newID
+}
+
+// formatChatKey converts a chatID to the string key used in the binding store.
+func formatChatKey(chatID int64) string {
+	return fmt.Sprintf("%d", chatID)
+}
+
+// parseChatID converts a binding store key back to a chatID.
+func parseChatID(key string) (int64, error) {
+	return strconv.ParseInt(key, 10, 64)
 }
 
 // ---------------------------------------------------------------------------

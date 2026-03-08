@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -2695,7 +2696,7 @@ func (s *Service) attemptSingleProvider(
 	}
 
 	preferredProfile := s.preferredProfile(providerID)
-	inlineRetried := map[string]bool{} // tracks accounts already inline-retried (max once per account)
+	inlineRetried := map[string]int{} // tracks per-account inline retry count for exponential backoff
 	var lastErr error
 	for attempt := 0; attempt < attemptLimit; attempt++ {
 		account, ok := pool.Acquire(preferredProfile)
@@ -2854,19 +2855,27 @@ func (s *Service) attemptSingleProvider(
 			reason := deriveFailureReason(runErr)
 			retryHint := extractRetryHint(runErr)
 
-			// Inline retry: if the server suggests a short wait (≤30s),
-			// sleep and retry the same account instead of rotating.
-			// Avoids unnecessary cooldown escalation for transient rate limits.
-			if reason == core.FailureRateLimit && retryHint > 0 && retryHint <= inlineRetryThreshold && !inlineRetried[account.ID] {
-				inlineRetried[account.ID] = true
-				logService.Logf("inline retry: provider=%s account=%s delay=%s",
-					providerID, account.ID, retryHint.Round(time.Second))
-				inlineStatus := fmt.Sprintf("⏳ %s/%s 短暫限流，%s 後重試...", providerID, attemptModelID, retryHint.Round(time.Second))
+			// Inline retry with exponential backoff: sleep and retry the same
+			// account up to maxInlineRetries times before rotating. Uses the
+			// server-provided hint as base delay, or defaultInlineRetryBase
+			// when the server omits Retry-After.
+			retries := inlineRetried[account.ID]
+			if reason == core.FailureRateLimit && (retryHint <= inlineRetryThreshold) && retries < maxInlineRetries {
+				inlineRetried[account.ID] = retries + 1
+				base := retryHint
+				if base <= 0 {
+					base = defaultInlineRetryBase
+				}
+				wait := exponentialBackoff(base, retries)
+				logService.Logf("inline retry %d/%d: provider=%s account=%s delay=%s",
+					retries+1, maxInlineRetries, providerID, account.ID, wait.Round(time.Millisecond))
+				inlineStatus := fmt.Sprintf("⏳ %s/%s 短暫限流，%s 後重試（%d/%d）...",
+					providerID, attemptModelID, wait.Round(time.Second), retries+1, maxInlineRetries)
 				s.activeRetryStatus.Store(sessionID, inlineStatus)
 				if params.onStreamRetry != nil {
 					params.onStreamRetry(inlineStatus)
 				}
-				if sleepErr := sleepWithContext(ctx, retryHint); sleepErr != nil {
+				if sleepErr := sleepWithContext(ctx, wait); sleepErr != nil {
 					return core.ChatResponse{}, sleepErr
 				}
 				attempt-- // counteract loop increment to retry same account
@@ -3074,17 +3083,24 @@ func (s *Service) attemptSingleProvider(
 		reason := deriveFailureReason(err)
 		retryHint := extractRetryHint(err)
 
-		// Inline retry for short rate limits (same logic as tool path above).
-		if reason == core.FailureRateLimit && retryHint > 0 && retryHint <= inlineRetryThreshold && !inlineRetried[account.ID] {
-			inlineRetried[account.ID] = true
-			logService.Logf("inline retry: provider=%s account=%s delay=%s",
-				providerID, account.ID, retryHint.Round(time.Second))
-			genRetryStatus := fmt.Sprintf("⏳ %s/%s 短暫限流，%s 後重試...", providerID, attemptModelID, retryHint.Round(time.Second))
+		// Inline retry with exponential backoff (same logic as tool path above).
+		genRetries := inlineRetried[account.ID]
+		if reason == core.FailureRateLimit && (retryHint <= inlineRetryThreshold) && genRetries < maxInlineRetries {
+			inlineRetried[account.ID] = genRetries + 1
+			genBase := retryHint
+			if genBase <= 0 {
+				genBase = defaultInlineRetryBase
+			}
+			wait := exponentialBackoff(genBase, genRetries)
+			logService.Logf("inline retry %d/%d: provider=%s account=%s delay=%s",
+				genRetries+1, maxInlineRetries, providerID, account.ID, wait.Round(time.Millisecond))
+			genRetryStatus := fmt.Sprintf("⏳ %s/%s 短暫限流，%s 後重試（%d/%d）...",
+				providerID, attemptModelID, wait.Round(time.Second), genRetries+1, maxInlineRetries)
 			s.activeRetryStatus.Store(sessionID, genRetryStatus)
 			if params.onStreamRetry != nil {
 				params.onStreamRetry(genRetryStatus)
 			}
-			if sleepErr := sleepWithContext(ctx, retryHint); sleepErr != nil {
+			if sleepErr := sleepWithContext(ctx, wait); sleepErr != nil {
 				return core.ChatResponse{}, sleepErr
 			}
 			attempt--
@@ -3519,6 +3535,33 @@ const transientWaitThreshold = 60 * time.Second
 // (e.g. 5-15s) are better handled inline rather than triggering cooldown
 // escalation and account rotation. Mirrors KoukeBOT's inline retry logic.
 const inlineRetryThreshold = 30 * time.Second
+
+// maxInlineRetries is the maximum number of exponential-backoff retries
+// for the same account before rotating to the next one. Matches KoukeBOT's
+// autoRetryCount default of 3.
+const maxInlineRetries = 3
+
+// defaultInlineRetryBase is the base delay used for inline retry when
+// the server does not provide a Retry-After header (retryHint == 0).
+// Many providers (e.g. Gemini) return 429 without a standard header.
+const defaultInlineRetryBase = 5 * time.Second
+
+// exponentialBackoff computes a retry delay using base * 2^retry, capped
+// at 30 seconds, plus 0–500 ms of random jitter to decorrelate retries.
+func exponentialBackoff(base time.Duration, retry int) time.Duration {
+	if base <= 0 {
+		base = time.Second
+	}
+	if retry < 0 {
+		retry = 0
+	}
+	delay := base * time.Duration(1<<retry)
+	if delay > 30*time.Second {
+		delay = 30 * time.Second
+	}
+	jitter := time.Duration(rand.Int63n(int64(500 * time.Millisecond)))
+	return delay + jitter
+}
 
 // sleepWithContext pauses for d, returning early if ctx is cancelled.
 func sleepWithContext(ctx context.Context, d time.Duration) error {

@@ -7,12 +7,14 @@ import (
 	"io"
 	"net/http"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/doeshing/nekoclaw/internal/app"
+	"github.com/doeshing/nekoclaw/internal/binding"
 	"github.com/doeshing/nekoclaw/internal/core"
 	"github.com/doeshing/nekoclaw/internal/logger"
 	"github.com/doeshing/nekoclaw/internal/mcp"
@@ -86,11 +88,15 @@ type Bot struct {
 	// Messages at or before this timestamp are excluded from ephemeral context.
 	historyCutoffs   map[string]time.Time
 	historyCutoffsMu sync.RWMutex
+
+	// Persistent channel → session binding store (survives restarts).
+	bindingStore *binding.Store
 }
 
 // Config holds the configuration needed to create a Discord bot.
 type Config struct {
-	Token string // Discord bot token (required)
+	Token    string // Discord bot token (required)
+	StateDir string // Directory for persistent state (bindings, etc.)
 }
 
 // New creates a new Discord bot. Call Start() to connect.
@@ -110,13 +116,36 @@ func New(svc *app.Service, cfg Config) (*Bot, error) {
 	}
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsMessageContent
 
-	return &Bot{
+	bot := &Bot{
 		session:        dg,
 		svc:            svc,
 		queues:         make(map[string]chan messageJob),
 		activeSessions: make(map[string]string),
 		historyCutoffs: make(map[string]time.Time),
-	}, nil
+	}
+
+	// Load persistent bindings from disk (if StateDir is configured).
+	if dir := strings.TrimSpace(cfg.StateDir); dir != "" {
+		storePath := filepath.Join(dir, "discord-bindings.json")
+		bs, loadErr := binding.Load(storePath)
+		if loadErr != nil {
+			logDiscord.Errorf("load bindings: %v", loadErr)
+		} else {
+			bot.bindingStore = bs
+			// Hydrate in-memory maps from persisted bindings.
+			for channelID, entry := range bs.All() {
+				bot.activeSessions[channelID] = entry.SessionID
+				if entry.HistoryCutoff != nil {
+					bot.historyCutoffs[channelID] = *entry.HistoryCutoff
+				}
+			}
+			if n := len(bot.activeSessions); n > 0 {
+				logDiscord.Logf("restored %d channel bindings from disk", n)
+			}
+		}
+	}
+
+	return bot, nil
 }
 
 // Start connects to Discord Gateway and begins handling messages.
@@ -176,7 +205,8 @@ func (b *Bot) getSessionID(channelID string) string {
 	return fmt.Sprintf("discord:%s", channelID)
 }
 
-// resetSession creates a new active session ID and cutoff for the channel.
+// resetSession creates a new active session ID and cutoff for the channel,
+// and persists the binding to disk so it survives restarts.
 func (b *Bot) resetSession(channelID string) string {
 	newID := fmt.Sprintf("discord:%s-%s", channelID, time.Now().Format("0102-150405"))
 	cutoff := time.Now().UTC()
@@ -188,6 +218,14 @@ func (b *Bot) resetSession(channelID string) string {
 	b.historyCutoffsMu.Lock()
 	b.historyCutoffs[channelID] = cutoff
 	b.historyCutoffsMu.Unlock()
+
+	// Persist binding so the session survives bot restarts.
+	if b.bindingStore != nil {
+		b.bindingStore.Set(channelID, binding.Entry{
+			SessionID:     newID,
+			HistoryCutoff: &cutoff,
+		})
+	}
 
 	return newID
 }

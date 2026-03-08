@@ -226,7 +226,8 @@ func startDiscordBot(svc *app.Service) (*discord.Bot, error) {
 	}
 
 	bot, err := discord.New(svc, discord.Config{
-		Token: token,
+		Token:    token,
+		StateDir: resolveStateDir(),
 	})
 	if err != nil {
 		return nil, err
@@ -252,7 +253,8 @@ func startTelegramBot(svc *app.Service) (*telegram.Bot, error) {
 	}
 
 	bot, err := telegram.New(svc, telegram.Config{
-		Token: token,
+		Token:    token,
+		StateDir: resolveStateDir(),
 	})
 	if err != nil {
 		return nil, err
@@ -1323,6 +1325,16 @@ func resolveOAuthCallbackPort(explicit int, apiAddr string) int {
 		}
 	}
 	return 8085
+}
+
+// resolveStateDir returns the persistent state directory (~/.nekoclaw/state).
+// Returns empty string if the home directory cannot be determined.
+func resolveStateDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return ""
+	}
+	return filepath.Join(home, ".nekoclaw", "state")
 }
 
 func defaultGeminiEndpoints() string {
