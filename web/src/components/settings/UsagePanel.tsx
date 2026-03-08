@@ -43,13 +43,13 @@ interface ShareDatum {
 }
 
 const SHARE_COLORS = [
-  "var(--color-info)",
-  "var(--color-warning)",
-  "var(--color-success)",
+  "var(--color-primary)",
   "var(--color-secondary)",
   "var(--color-accent)",
+  "var(--color-info)",
+  "var(--color-success)",
+  "var(--color-warning)",
   "var(--color-error)",
-  "var(--color-primary)",
 ];
 
 function statusClass(tone: StatusTone): string {
@@ -149,11 +149,11 @@ function toRequestDetails(entries: TranscriptEntry[]): RequestDetail[] {
 function buildProviderShareData(providers: UsageSummaryProvider[]): ShareDatum[] {
   const topProviders = providers.slice(0, 5).map((provider, index) => ({
     label: provider.provider,
-      total_tokens: provider.total_tokens,
-      request_count: provider.request_count,
-      estimated_cost_usd: provider.estimated_cost_usd,
-      color: SHARE_COLORS[index % SHARE_COLORS.length],
-    }));
+    total_tokens: provider.total_tokens,
+    request_count: provider.request_count,
+    estimated_cost_usd: provider.estimated_cost_usd,
+    color: SHARE_COLORS[index % SHARE_COLORS.length],
+  }));
 
   if (providers.length <= 5) {
     return topProviders;
@@ -258,9 +258,8 @@ function UsageStatsGrid({
             </div>
             <div className={item.compact ? "min-h-[3.25rem]" : ""}>
               <div
-                className={`font-semibold tracking-tight ${
-                  item.compact ? "line-clamp-2 text-lg" : "text-2xl"
-                }`}
+                className={`font-semibold tracking-tight ${item.compact ? "line-clamp-2 text-lg" : "text-2xl"
+                  }`}
               >
                 {item.value}
               </div>
@@ -281,8 +280,8 @@ function TrendChart({ points }: { points: UsageSummaryTrendPoint[] }) {
   );
   const recentTokens = points.reduce((sum, point) => sum + point.total_tokens, 0);
   const axisLabel = (date: string) => date.slice(5).replace("-", "/");
-  const inputColor = "var(--color-info)";
-  const outputColor = "var(--color-warning)";
+  const inputColor = "var(--color-primary)";
+  const outputColor = "var(--color-accent)";
   const statItems = [
     {
       label: "Recent Requests",
@@ -309,8 +308,8 @@ function TrendChart({ points }: { points: UsageSummaryTrendPoint[] }) {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <div className="badge badge-info badge-outline">Input</div>
-            <div className="badge badge-warning badge-outline">Output</div>
+            <div className="badge badge-primary badge-outline">Input</div>
+            <div className="badge badge-accent badge-outline">Output</div>
           </div>
         </div>
 
@@ -810,7 +809,7 @@ export function UsagePanel() {
               <div>
                 <h2 className="card-title text-2xl">用量總覽</h2>
                 <p className="text-sm text-base-content/60">
-                  延續 Persona 設定頁的 card + master/detail 風格，集中查看歷史 session token、成本與最近請求明細。
+                  集中查看歷史 session token、成本與最近請求明細。
                 </p>
               </div>
             </div>
@@ -908,11 +907,10 @@ export function UsagePanel() {
                     return (
                       <button
                         key={session.session_id}
-                        className={`w-full rounded-box border px-4 py-4 text-left transition-colors ${
-                          isActive
+                        className={`w-full rounded-box border px-4 py-4 text-left transition-colors ${isActive
                             ? "border-base-300 bg-base-300/40"
                             : "border-transparent bg-transparent hover:border-base-300 hover:bg-base-200/50"
-                        }`}
+                          }`}
                         onClick={() => setSelectedSessionID(session.session_id)}
                       >
                         <div className="space-y-3">
