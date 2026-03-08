@@ -67,21 +67,7 @@ function renderPanel(route: Route) {
 export function SettingsPage() {
   const route = useAppStore((s) => s.route);
   const setRoute = useAppStore((s) => s.setRoute);
-  const panelWidth =
-    route === "settings/general" ||
-    route === "settings/persona" ||
-    route === "settings/auth" ||
-    route === "settings/memory" ||
-    route === "settings/usage" ||
-    route === "settings/mcp" ||
-    route === "settings/provider" ||
-    route === "settings/discord" ||
-    route === "settings/telegram" ||
-    route === "settings/tools"
-      ? route === "settings/usage"
-        ? "max-w-7xl"
-        : "max-w-6xl"
-      : "max-w-2xl";
+  const panelWidth = "max-w-[1600px]";
 
   return (
     <div className="flex h-full min-h-0 flex-col">
