@@ -68,7 +68,7 @@ func RenderMarkdownV2(input string) string {
 			// Telegram doesn't support headings in MarkdownV2 except by making them bold and adding newlines.
 			buf.WriteString("*")
 		case ast.KindBlockquote:
-			buf.WriteString("\\> ")
+			buf.WriteString("> ")
 		case ast.KindList:
 			// List
 		case ast.KindListItem: // list item
