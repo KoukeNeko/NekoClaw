@@ -5,6 +5,7 @@ import { ProviderPanel } from "./ProviderPanel";
 import { DiscordPanel } from "./DiscordPanel";
 import { TelegramPanel } from "./TelegramPanel";
 import { AuthPanel } from "./AuthPanel";
+import { ToolsPanel } from "./ToolsPanel";
 import { MemoryPanel } from "./MemoryPanel";
 import { MCPPanel } from "./MCPPanel";
 
@@ -47,6 +48,8 @@ function renderPanel(route: Route) {
       return <DiscordPanel />;
     case "settings/telegram":
       return <TelegramPanel />;
+    case "settings/tools":
+      return <ToolsPanel />;
     default: {
       const label = TABS.find((t) => t.route === route)?.label ?? "";
       return <PlaceholderPanel name={label} />;
@@ -58,13 +61,14 @@ export function SettingsPage() {
   const route = useAppStore((s) => s.route);
   const setRoute = useAppStore((s) => s.setRoute);
   const panelWidth =
-    route === "settings/auth" ||
     route === "settings/persona" ||
+    route === "settings/auth" ||
     route === "settings/memory" ||
     route === "settings/mcp" ||
     route === "settings/provider" ||
     route === "settings/discord" ||
-    route === "settings/telegram"
+    route === "settings/telegram" ||
+    route === "settings/tools"
       ? "max-w-6xl"
       : "max-w-2xl";
 

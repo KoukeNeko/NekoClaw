@@ -21,8 +21,8 @@ import (
 )
 
 type Server struct {
-	svc    *app.Service
-	webFS  fs.FS // embedded frontend assets (nil = no SPA serving)
+	svc   *app.Service
+	webFS fs.FS // embedded frontend assets (nil = no SPA serving)
 }
 
 func NewServer(svc *app.Service) *Server {
@@ -58,6 +58,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/fallbacks", s.handleFallbacks)
 	mux.HandleFunc("/v1/discord/config", s.handleDiscordConfig)
 	mux.HandleFunc("/v1/telegram/config", s.handleTelegramConfig)
+	mux.HandleFunc("/v1/tools/catalog", s.handleToolsCatalog)
 	mux.HandleFunc("/v1/tools/config", s.handleToolsConfig)
 	mux.HandleFunc("/v1/default-provider", s.handleDefaultProvider)
 	mux.HandleFunc("/v1/ai-studio/models", s.handleAIStudioModels)
@@ -1421,6 +1422,16 @@ func (s *Server) handleToolsConfig(w http.ResponseWriter, r *http.Request) {
 	default:
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+func (s *Server) handleToolsCatalog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"tools": s.svc.BuiltinToolCatalog(),
+	})
 }
 
 func respondJSON(w http.ResponseWriter, status int, payload any) {

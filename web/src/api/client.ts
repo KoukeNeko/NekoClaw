@@ -48,6 +48,7 @@ import type {
   MemorySearchResponse,
   DiscordConfig,
   TelegramConfig,
+  ToolCatalogEntry,
   ToolsConfig,
   ToolStatusResult,
   TranscriptEntry,
@@ -488,6 +489,11 @@ export function getTelegramConfig(): Promise<TelegramConfig> {
 
 export function setTelegramConfig(config: TelegramConfig): Promise<void> {
   return put("/v1/telegram/config", config);
+}
+
+export async function getToolsCatalog(): Promise<ToolCatalogEntry[]> {
+  const resp = await get<{ tools: ToolCatalogEntry[] }>("/v1/tools/catalog");
+  return resp.tools ?? [];
 }
 
 export function getToolsConfig(): Promise<ToolsConfig> {

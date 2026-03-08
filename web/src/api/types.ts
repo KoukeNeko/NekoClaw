@@ -571,11 +571,32 @@ export interface TelegramConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Tools catalog
+// ---------------------------------------------------------------------------
+
+export interface ToolConfigField {
+  key: string;
+  label: string;
+  placeholder?: string;
+  secret?: boolean;
+}
+
+export interface ToolCatalogEntry {
+  name: string;
+  description: string;
+  input_schema: unknown;
+  mutating: boolean;
+  configurable: boolean;
+  configured: boolean;
+  config_fields?: ToolConfigField[];
+}
+
+// ---------------------------------------------------------------------------
 // Tools config
 // ---------------------------------------------------------------------------
 
 export interface ToolsConfig {
-  brave_api_key: string;
+  brave_search_api_key: string;
 }
 
 // ---------------------------------------------------------------------------

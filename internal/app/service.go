@@ -528,6 +528,17 @@ func (s *Service) GetToolsConfig() core.ToolsConfig {
 	return s.toolsConfig
 }
 
+// BuiltinToolCatalog returns metadata for all built-in tools.
+func (s *Service) BuiltinToolCatalog() []tooling.ToolCatalogEntry {
+	s.mu.RLock()
+	cfg := s.toolsConfig
+	s.mu.RUnlock()
+
+	return tooling.BuiltinToolCatalog(tooling.ExecutorConfig{
+		BraveSearchAPIKey: cfg.BraveSearchAPIKey,
+	})
+}
+
 // SaveToolsConfig persists tool settings to config.json and updates in-memory state.
 func (s *Service) SaveToolsConfig(cfg core.ToolsConfig) error {
 	s.mu.Lock()
