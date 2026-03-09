@@ -505,7 +505,7 @@ export function DiscordPanel() {
                   <div>
                     <div className="font-medium">觸發條件</div>
                     <div className="text-sm text-base-content/65">
-                      支援 `@mention`、回覆 bot 訊息，以及 DM。
+                      支援原生 slash commands，以及 `@mention`、回覆 bot 訊息與 DM 對話。
                     </div>
                   </div>
                 </li>
@@ -513,7 +513,7 @@ export function DiscordPanel() {
                   <div>
                     <div className="font-medium">內建指令</div>
                     <div className="text-sm text-base-content/65">
-                      `/reset`、`/persona`、`/persona off` 與 `/persona &lt;name&gt;`。
+                      原生 `/reset` 與 `/persona` slash command；`/persona` 不帶參數會顯示角色下拉選單，`name` 參數可直接切換或填入 `off` 停用。
                     </div>
                   </div>
                 </li>

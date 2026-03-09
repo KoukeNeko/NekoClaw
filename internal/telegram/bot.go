@@ -14,9 +14,11 @@ import (
 
 	"github.com/doeshing/nekoclaw/internal/app"
 	"github.com/doeshing/nekoclaw/internal/binding"
+	"github.com/doeshing/nekoclaw/internal/botcmd"
 	"github.com/doeshing/nekoclaw/internal/core"
 	"github.com/doeshing/nekoclaw/internal/logger"
 	"github.com/doeshing/nekoclaw/internal/mcp"
+	"github.com/doeshing/nekoclaw/internal/persona"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
@@ -24,6 +26,8 @@ var logTelegram = logger.New("telegram", logger.Blue)
 
 // telegramMessageLimit is the maximum length of a single Telegram message.
 const telegramMessageLimit = 4096
+
+const telegramCallbackPrefix = "cmd:"
 
 // Group context buffer settings.
 const (
@@ -128,10 +132,7 @@ func (b *Bot) Start(ctx context.Context) error {
 	b.ctx, b.cancel = context.WithCancel(ctx)
 
 	// Register slash commands so Telegram shows the command menu.
-	commands := tgbotapi.NewSetMyCommands(
-		tgbotapi.BotCommand{Command: "reset", Description: "重置對話，開始新的對話"},
-		tgbotapi.BotCommand{Command: "persona", Description: "查看或切換角色（用法：/persona [名稱]）"},
-	)
+	commands := tgbotapi.NewSetMyCommands(telegramBotCommands()...)
 	if _, err := b.api.Request(commands); err != nil {
 		logTelegram.Warnf("set commands failed: %v", err)
 	}
@@ -699,165 +700,178 @@ func formatSenderTag(user *tgbotapi.User) string {
 // Command handling
 // ---------------------------------------------------------------------------
 
-// handleCommand processes bot commands (/reset, /persona, etc.).
-func (b *Bot) handleCommand(msg *tgbotapi.Message) {
-	chatID := msg.Chat.ID
+type telegramCommandRuntime struct {
+	bot    *Bot
+	chatID int64
+}
 
-	switch msg.Command() {
-	case "reset":
-		newID := b.resetSession(chatID)
-		logTelegram.Logf("session reset: chat=%d new_session=%s", chatID, newID)
-		b.sendReply(chatID, msg.MessageID, "✅ 對話已重置，開始新的對話。")
+func (r *telegramCommandRuntime) ResetSession() string {
+	return r.bot.resetSession(r.chatID)
+}
 
-	case "persona":
-		arg := strings.TrimSpace(msg.CommandArguments())
-		if arg == "" {
-			b.handlePersonaList(chatID, msg.MessageID)
-		} else {
-			b.handlePersonaSwitch(chatID, msg.MessageID, arg)
+func (r *telegramCommandRuntime) ListPersonas() []persona.PersonaInfo {
+	return r.bot.svc.ListPersonas()
+}
+
+func (r *telegramCommandRuntime) ActivePersona() *persona.PersonaInfo {
+	return r.bot.svc.ActivePersona()
+}
+
+func (r *telegramCommandRuntime) FindPersonaByName(name string) (string, bool) {
+	return r.bot.svc.FindPersonaByName(name)
+}
+
+func (r *telegramCommandRuntime) SetActivePersona(dirName string) error {
+	return r.bot.svc.SetActivePersona(dirName)
+}
+
+func (r *telegramCommandRuntime) ClearActivePersona() error {
+	return r.bot.svc.ClearActivePersona()
+}
+
+func telegramBotCommands() []tgbotapi.BotCommand {
+	specs := botcmd.Specs()
+	commands := make([]tgbotapi.BotCommand, 0, len(specs))
+	for _, spec := range specs {
+		commands = append(commands, tgbotapi.BotCommand{
+			Command:     spec.Name,
+			Description: spec.Description,
+		})
+	}
+	return commands
+}
+
+func buildTelegramPersonaKeyboard(selector *botcmd.PersonaSelector) [][]tgbotapi.InlineKeyboardButton {
+	if selector == nil {
+		return nil
+	}
+
+	rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(selector.Options)+1)
+	for _, option := range selector.Options {
+		label := option.Name
+		if option.Active {
+			label = "▶ " + label
 		}
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(label, encodeTelegramCallbackData(botcmd.ActionPersonaSelect, option.DirName)),
+		))
+	}
+	if selector.OffLabel != "" {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(selector.OffLabel, encodeTelegramCallbackData(botcmd.ActionPersonaSelect, botcmd.PersonaOffValue)),
+		))
+	}
+	return rows
+}
 
+func encodeTelegramCallbackData(action, value string) string {
+	return telegramCallbackPrefix + action + ":" + value
+}
+
+func parseTelegramCallbackInvocation(data string) (botcmd.Invocation, bool) {
+	if !strings.HasPrefix(data, telegramCallbackPrefix) {
+		return botcmd.Invocation{}, false
+	}
+
+	payload := strings.TrimPrefix(data, telegramCallbackPrefix)
+	parts := strings.SplitN(payload, ":", 2)
+	if len(parts) != 2 {
+		return botcmd.Invocation{}, false
+	}
+
+	switch parts[0] {
+	case botcmd.ActionPersonaSelect:
+		return botcmd.Invocation{
+			Name:            botcmd.CommandPersona,
+			ComponentAction: botcmd.ActionPersonaSelect,
+			ComponentValue:  parts[1],
+		}, true
 	default:
-		// Unknown command — ignore silently.
+		return botcmd.Invocation{}, false
 	}
 }
 
-// handlePersonaList sends an inline keyboard with available personas.
-func (b *Bot) handlePersonaList(chatID int64, replyToID int) {
-	personas := b.svc.ListPersonas()
-	if len(personas) == 0 {
-		b.sendReply(chatID, replyToID, "📋 目前沒有可用的角色。")
+// handleCommand processes bot commands (/reset, /persona, etc.).
+func (b *Bot) handleCommand(msg *tgbotapi.Message) {
+	inv := botcmd.Invocation{
+		Name: msg.Command(),
+	}
+	if arg := strings.TrimSpace(msg.CommandArguments()); arg != "" {
+		inv.StringOptions = map[string]string{
+			botcmd.OptionPersonaName: arg,
+		}
+	}
+	result, event, handled := b.dispatchCommand(msg.Chat.ID, inv)
+	if !handled {
 		return
 	}
-
-	active := b.svc.ActivePersona()
-
-	// Build description text with persona details.
-	var sb strings.Builder
-	sb.WriteString("📋 可用角色：\n")
-	for _, p := range personas {
-		marker := "　"
-		if active != nil && active.DirName == p.DirName {
-			marker = "▶ "
-		}
-		sb.WriteString(fmt.Sprintf("%s%s", marker, p.Name))
-		if p.Description != "" {
-			sb.WriteString(fmt.Sprintf(" — %s", p.Description))
-		}
-		sb.WriteString("\n")
+	if event != nil && event.Type == botcmd.EventReset {
+		logTelegram.Logf("session reset: chat=%d new_session=%s", msg.Chat.ID, event.SessionID)
 	}
-
-	// Build inline keyboard buttons for selection.
-	var rows [][]tgbotapi.InlineKeyboardButton
-	for _, p := range personas {
-		label := p.Name
-		if active != nil && active.DirName == p.DirName {
-			label = "▶ " + label
-		}
-		callbackData := "persona:" + p.DirName
-		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData(label, callbackData),
-		))
+	if result.Selector != nil {
+		b.sendTelegramSelector(msg.Chat.ID, msg.MessageID, result)
+		return
 	}
-	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-		tgbotapi.NewInlineKeyboardButtonData("❌ 停用角色", "persona:off"),
-	))
-
-	msg := tgbotapi.NewMessage(chatID, sb.String())
-	msg.ReplyToMessageID = replyToID
-	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
-	if _, err := b.api.Send(msg); err != nil {
-		logTelegram.Errorf("send persona list: chat=%d error=%v", chatID, err)
-	}
+	b.sendReply(msg.Chat.ID, msg.MessageID, result.Message)
 }
 
 // handleCallbackQuery processes inline keyboard button presses.
 func (b *Bot) handleCallbackQuery(cq *tgbotapi.CallbackQuery) {
-	data := cq.Data
-
-	// Acknowledge the callback to dismiss the loading spinner.
 	callback := tgbotapi.NewCallback(cq.ID, "")
-
-	if !strings.HasPrefix(data, "persona:") {
+	inv, ok := parseTelegramCallbackInvocation(cq.Data)
+	if !ok {
 		callback.Text = "⚠️ 未知操作"
-		b.api.Request(callback)
+		_, _ = b.api.Request(callback)
 		return
 	}
 
-	arg := strings.TrimPrefix(data, "persona:")
-
-	if arg == "off" {
-		if err := b.svc.ClearActivePersona(); err != nil {
-			callback.Text = "⚠️ " + err.Error()
-			b.api.Request(callback)
-			return
-		}
-		callback.Text = "✅ 已停用角色"
-		b.api.Request(callback)
-		b.editPersonaListMessage(cq)
+	chatID := int64(0)
+	if cq.Message != nil {
+		chatID = cq.Message.Chat.ID
+	}
+	result, _, handled := b.dispatchCommand(chatID, inv)
+	if !handled {
+		callback.Text = "⚠️ 未知操作"
+		_, _ = b.api.Request(callback)
 		return
 	}
 
-	if err := b.svc.SetActivePersona(arg); err != nil {
-		callback.Text = "⚠️ " + err.Error()
-		b.api.Request(callback)
-		return
-	}
+	callback.Text = result.Message
+	_, _ = b.api.Request(callback)
 
-	active := b.svc.ActivePersona()
-	name := arg
-	if active != nil {
-		name = active.Name
+	if result.UpdateExisting && result.Selector != nil {
+		b.editTelegramSelector(cq, result)
 	}
-	callback.Text = "✅ 已切換為「" + name + "」"
-	b.api.Request(callback)
-
-	// Update the inline keyboard to reflect the new selection.
-	b.editPersonaListMessage(cq)
 }
 
-// editPersonaListMessage updates both the description text and keyboard buttons.
-func (b *Bot) editPersonaListMessage(cq *tgbotapi.CallbackQuery) {
-	if cq.Message == nil {
+func (b *Bot) dispatchCommand(chatID int64, inv botcmd.Invocation) (botcmd.Result, *botcmd.Event, bool) {
+	runtime := &telegramCommandRuntime{
+		bot:    b,
+		chatID: chatID,
+	}
+	result, handled := botcmd.Dispatch(runtime, inv)
+	if !handled {
+		return botcmd.Result{}, nil, false
+	}
+	return result, result.Event, true
+}
+
+func (b *Bot) sendTelegramSelector(chatID int64, replyToID int, result botcmd.Result) {
+	msg := tgbotapi.NewMessage(chatID, botcmd.RenderPersonaSelectorText(result.Selector, result.SelectorNotice))
+	msg.ReplyToMessageID = replyToID
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(buildTelegramPersonaKeyboard(result.Selector)...)
+	if _, err := b.api.Send(msg); err != nil {
+		logTelegram.Errorf("send persona selector: chat=%d error=%v", chatID, err)
+	}
+}
+
+func (b *Bot) editTelegramSelector(cq *tgbotapi.CallbackQuery, result botcmd.Result) {
+	if cq.Message == nil || result.Selector == nil {
 		return
 	}
 
-	personas := b.svc.ListPersonas()
-	active := b.svc.ActivePersona()
-
-	// Rebuild description text.
-	var sb strings.Builder
-	sb.WriteString("📋 可用角色：\n")
-	for _, p := range personas {
-		marker := "　"
-		if active != nil && active.DirName == p.DirName {
-			marker = "▶ "
-		}
-		sb.WriteString(fmt.Sprintf("%s%s", marker, p.Name))
-		if p.Description != "" {
-			sb.WriteString(fmt.Sprintf(" — %s", p.Description))
-		}
-		sb.WriteString("\n")
-	}
-
-	// Rebuild buttons.
-	var rows [][]tgbotapi.InlineKeyboardButton
-	for _, p := range personas {
-		label := p.Name
-		if active != nil && active.DirName == p.DirName {
-			label = "▶ " + label
-		}
-		callbackData := "persona:" + p.DirName
-		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData(label, callbackData),
-		))
-	}
-	rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-		tgbotapi.NewInlineKeyboardButtonData("❌ 停用角色", "persona:off"),
-	))
-
-	text := sb.String()
-	markup := tgbotapi.NewInlineKeyboardMarkup(rows...)
+	text := botcmd.RenderPersonaSelectorText(result.Selector, result.SelectorNotice)
+	markup := tgbotapi.NewInlineKeyboardMarkup(buildTelegramPersonaKeyboard(result.Selector)...)
 	edit := tgbotapi.NewEditMessageTextAndMarkup(
 		cq.Message.Chat.ID,
 		cq.Message.MessageID,
@@ -865,43 +879,8 @@ func (b *Bot) editPersonaListMessage(cq *tgbotapi.CallbackQuery) {
 		markup,
 	)
 	if _, err := b.api.Request(edit); err != nil {
-		logTelegram.Warnf("edit persona list: %v", err)
+		logTelegram.Warnf("edit persona selector: %v", err)
 	}
-}
-
-// handlePersonaSwitch switches or clears the active persona.
-func (b *Bot) handlePersonaSwitch(chatID int64, replyToID int, arg string) {
-	lower := strings.ToLower(arg)
-
-	// Clear persona.
-	if lower == "off" || lower == "clear" || lower == "none" {
-		if err := b.svc.ClearActivePersona(); err != nil {
-			b.sendReply(chatID, replyToID, "⚠️ "+err.Error())
-			return
-		}
-		b.sendReply(chatID, replyToID, "✅ 已停用角色。")
-		return
-	}
-
-	// Find persona by name.
-	dirName, found := b.svc.FindPersonaByName(arg)
-	if !found {
-		b.sendReply(chatID, replyToID, fmt.Sprintf("⚠️ 找不到名為「%s」的角色。使用 /persona 查看可用清單。", arg))
-		return
-	}
-
-	if err := b.svc.SetActivePersona(dirName); err != nil {
-		b.sendReply(chatID, replyToID, "⚠️ "+err.Error())
-		return
-	}
-
-	// Get the display name for confirmation.
-	active := b.svc.ActivePersona()
-	name := dirName
-	if active != nil {
-		name = active.Name
-	}
-	b.sendReply(chatID, replyToID, fmt.Sprintf("✅ 已切換為角色「%s」。", name))
 }
 
 // ---------------------------------------------------------------------------

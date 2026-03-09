@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/doeshing/nekoclaw/internal/botcmd"
 	"github.com/doeshing/nekoclaw/internal/core"
 )
 
@@ -190,5 +191,87 @@ func TestResponseElapsedFallsBackWhenMissing(t *testing.T) {
 	got := responseElapsed(core.ChatResponse{}, fallback)
 	if got != fallback {
 		t.Fatalf("responseElapsed = %s, want %s", got, fallback)
+	}
+}
+
+func TestBuildDiscordApplicationCommands(t *testing.T) {
+	commands := buildDiscordApplicationCommands()
+	if len(commands) != 2 {
+		t.Fatalf("expected 2 commands, got %d", len(commands))
+	}
+
+	var persona *discordgo.ApplicationCommand
+	for _, command := range commands {
+		if command.Name == botcmd.CommandPersona {
+			persona = command
+			break
+		}
+	}
+	if persona == nil {
+		t.Fatal("expected persona slash command to be present")
+	}
+	if len(persona.Options) != 1 {
+		t.Fatalf("expected persona command to have 1 option, got %d", len(persona.Options))
+	}
+	if persona.Options[0].Name != botcmd.OptionPersonaName {
+		t.Fatalf("unexpected persona option name: %q", persona.Options[0].Name)
+	}
+	if persona.Options[0].Type != discordgo.ApplicationCommandOptionString {
+		t.Fatalf("expected persona option type string, got %v", persona.Options[0].Type)
+	}
+}
+
+func TestBuildDiscordPersonaComponentsSplitsLargeSelectors(t *testing.T) {
+	selector := &botcmd.PersonaSelector{
+		Title:    "📋 可用角色：",
+		OffLabel: "❌ 停用角色",
+	}
+	for i := 0; i < 26; i++ {
+		selector.Options = append(selector.Options, botcmd.PersonaOption{
+			DirName: fmt.Sprintf("p-%02d", i),
+			Name:    fmt.Sprintf("Persona %02d", i),
+			Active:  i == 0,
+		})
+	}
+
+	components := buildDiscordPersonaComponents(selector)
+	if len(components) != 2 {
+		t.Fatalf("expected 2 select menus, got %d", len(components))
+	}
+
+	firstRow, ok := components[0].(discordgo.ActionsRow)
+	if !ok {
+		t.Fatalf("expected first component to be an action row, got %T", components[0])
+	}
+	menu, ok := firstRow.Components[0].(discordgo.SelectMenu)
+	if !ok {
+		t.Fatalf("expected first row component to be a select menu, got %T", firstRow.Components[0])
+	}
+	if menu.MenuType != discordgo.StringSelectMenu {
+		t.Fatalf("expected string select menu, got %v", menu.MenuType)
+	}
+	if len(menu.Options) != botcmd.MaxPersonaSelectOptions {
+		t.Fatalf("expected first menu to have %d options, got %d", botcmd.MaxPersonaSelectOptions, len(menu.Options))
+	}
+}
+
+func TestBuildDiscordCommandResponseFallsBackWhenSelectorTooLarge(t *testing.T) {
+	selector := &botcmd.PersonaSelector{
+		Title:    "📋 可用角色：",
+		OffLabel: "❌ 停用角色",
+	}
+	for i := 0; i < botcmd.MaxPersonaSelectValues+1; i++ {
+		selector.Options = append(selector.Options, botcmd.PersonaOption{
+			DirName: fmt.Sprintf("p-%03d", i),
+			Name:    fmt.Sprintf("Persona %03d", i),
+		})
+	}
+
+	content, components := buildDiscordCommandResponse(botcmd.Result{Selector: selector})
+	if len(components) != 0 {
+		t.Fatalf("expected no components for oversized selector, got %d", len(components))
+	}
+	if !strings.Contains(content, "角色數量超過 Discord 選單上限") {
+		t.Fatalf("expected oversized selector fallback in content, got %q", content)
 	}
 }

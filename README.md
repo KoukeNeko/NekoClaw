@@ -300,14 +300,15 @@ Web UI settings also support:
 | Command | Description |
 |---------|-------------|
 | `/reset` | Start a new conversation (old session preserved, accessible from Web UI Sessions) |
-| `/persona` | List available personas |
-| `/persona <name>` | Switch to a persona (case-insensitive, supports substring match) |
-| `/persona off` | Deactivate current persona |
+| `/persona` | Open the channel-visible persona selector dropdown |
+| `/persona name:<name>` | Switch to a persona (case-insensitive, supports substring match) |
+| `/persona name:off` | Deactivate current persona |
 
 ### Behavior
 
-- Responds to: `@mention`, reply to bot, or DM
+- Responds to: native slash commands, `@mention`, reply to bot, or DM
 - Emoji lifecycle: 👀 (received) → 🔄 (processing) → ✅ (done)
+- `/persona` renders a Discord select menu and updates the same message when the selection changes
 - Placeholder message shows real-time MCP tool status; deleted on completion and replaced with a fresh reply
 - Per-channel sequential message queue
 - Each channel has its own independent session

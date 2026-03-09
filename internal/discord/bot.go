@@ -15,9 +15,11 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/doeshing/nekoclaw/internal/app"
 	"github.com/doeshing/nekoclaw/internal/binding"
+	"github.com/doeshing/nekoclaw/internal/botcmd"
 	"github.com/doeshing/nekoclaw/internal/core"
 	"github.com/doeshing/nekoclaw/internal/logger"
 	"github.com/doeshing/nekoclaw/internal/mcp"
+	"github.com/doeshing/nekoclaw/internal/persona"
 )
 
 var logDiscord = logger.New("discord", logger.Magenta)
@@ -153,9 +155,14 @@ func New(svc *app.Service, cfg Config) (*Bot, error) {
 func (b *Bot) Start(ctx context.Context) error {
 	b.ctx, b.cancel = context.WithCancel(ctx)
 	b.session.AddHandler(b.onMessageCreate)
+	b.session.AddHandler(b.onInteractionCreate)
 
 	if err := b.session.Open(); err != nil {
 		return fmt.Errorf("open discord gateway: %w", err)
+	}
+	if err := b.registerSlashCommands(); err != nil {
+		_ = b.session.Close()
+		return err
 	}
 	logDiscord.Logf("bot started: user=%s", b.session.State.User.Username)
 
@@ -328,11 +335,6 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	// Skip if no text and no images.
 	if text == "" && len(images) == 0 {
-		return
-	}
-
-	// Handle slash commands before sending to AI.
-	if text != "" && b.handleCommand(s, m, text) {
 		return
 	}
 
@@ -517,103 +519,304 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 // Command handling
 // ---------------------------------------------------------------------------
 
-// handleCommand checks if the message is a bot command and processes it.
-// Returns true if the message was handled as a command.
-func (b *Bot) handleCommand(s *discordgo.Session, m *discordgo.MessageCreate, text string) bool {
-	// Remove the 👀 reaction for commands (no AI processing needed).
-	removeReceived := func() {
-		_ = s.MessageReactionRemove(m.ChannelID, m.ID, emojiReceived, s.State.User.ID)
-	}
-
-	lower := strings.ToLower(text)
-
-	switch {
-	case lower == "/reset":
-		removeReceived()
-		newID := b.resetSession(m.ChannelID)
-		logDiscord.Logf("session reset: channel=%s new_session=%s", m.ChannelID, newID)
-		b.sendReply(s, m, "✅ 對話已重置，開始新的對話。")
-		b.logToConsole(s, fmt.Sprintf("[重置] <#%s> 對話已重置 → %s (by %s)", m.ChannelID, newID, m.Author.Username))
-		return true
-
-	case lower == "/persona":
-		removeReceived()
-		b.handlePersonaList(s, m)
-		return true
-
-	case strings.HasPrefix(lower, "/persona "):
-		removeReceived()
-		arg := strings.TrimSpace(text[len("/persona "):])
-		b.handlePersonaSwitch(s, m, arg)
-		return true
-	}
-
-	return false
+type discordCommandRuntime struct {
+	bot       *Bot
+	channelID string
 }
 
-// handlePersonaList sends a list of available personas.
-func (b *Bot) handlePersonaList(s *discordgo.Session, m *discordgo.MessageCreate) {
-	personas := b.svc.ListPersonas()
-	if len(personas) == 0 {
-		b.sendReply(s, m, "📋 目前沒有可用的角色。")
-		return
-	}
-
-	active := b.svc.ActivePersona()
-
-	var sb strings.Builder
-	sb.WriteString("📋 **可用角色：**\n")
-	for _, p := range personas {
-		marker := "　"
-		if active != nil && active.DirName == p.DirName {
-			marker = "▶ "
-		}
-		sb.WriteString(fmt.Sprintf("%s**%s**", marker, p.Name))
-		if p.Description != "" {
-			sb.WriteString(fmt.Sprintf(" — %s", p.Description))
-		}
-		sb.WriteString("\n")
-	}
-	sb.WriteString("\n使用 `/persona <名稱>` 切換，`/persona off` 停用。")
-
-	b.sendReply(s, m, sb.String())
+func (r *discordCommandRuntime) ResetSession() string {
+	return r.bot.resetSession(r.channelID)
 }
 
-// handlePersonaSwitch switches or clears the active persona.
-func (b *Bot) handlePersonaSwitch(s *discordgo.Session, m *discordgo.MessageCreate, arg string) {
-	lower := strings.ToLower(arg)
+func (r *discordCommandRuntime) ListPersonas() []persona.PersonaInfo {
+	return r.bot.svc.ListPersonas()
+}
 
-	// Clear persona.
-	if lower == "off" || lower == "clear" || lower == "none" {
-		if err := b.svc.ClearActivePersona(); err != nil {
-			b.sendReply(s, m, "⚠️ "+err.Error())
-			return
+func (r *discordCommandRuntime) ActivePersona() *persona.PersonaInfo {
+	return r.bot.svc.ActivePersona()
+}
+
+func (r *discordCommandRuntime) FindPersonaByName(name string) (string, bool) {
+	return r.bot.svc.FindPersonaByName(name)
+}
+
+func (r *discordCommandRuntime) SetActivePersona(dirName string) error {
+	return r.bot.svc.SetActivePersona(dirName)
+}
+
+func (r *discordCommandRuntime) ClearActivePersona() error {
+	return r.bot.svc.ClearActivePersona()
+}
+
+func (b *Bot) registerSlashCommands() error {
+	appID := strings.TrimSpace(discordApplicationID(b.session))
+	if appID == "" {
+		return fmt.Errorf("register discord slash commands: missing application id")
+	}
+	if _, err := b.session.ApplicationCommandBulkOverwrite(appID, "", buildDiscordApplicationCommands()); err != nil {
+		return fmt.Errorf("register discord slash commands: %w", err)
+	}
+	return nil
+}
+
+func buildDiscordApplicationCommands() []*discordgo.ApplicationCommand {
+	specs := botcmd.Specs()
+	commands := make([]*discordgo.ApplicationCommand, 0, len(specs))
+	for _, spec := range specs {
+		command := &discordgo.ApplicationCommand{
+			Name:        spec.Name,
+			Description: spec.Description,
 		}
-		b.sendReply(s, m, "✅ 已停用角色。")
-		b.logToConsole(s, fmt.Sprintf("[角色] 已停用角色 (by %s)", m.Author.Username))
+		if len(spec.Options) > 0 {
+			command.Options = make([]*discordgo.ApplicationCommandOption, 0, len(spec.Options))
+			for _, option := range spec.Options {
+				command.Options = append(command.Options, &discordgo.ApplicationCommandOption{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        option.Name,
+					Description: option.Description,
+					Required:    option.Required,
+				})
+			}
+		}
+		commands = append(commands, command)
+	}
+	return commands
+}
+
+func discordApplicationID(session *discordgo.Session) string {
+	if session == nil || session.State == nil {
+		return ""
+	}
+	if session.State.Application != nil && strings.TrimSpace(session.State.Application.ID) != "" {
+		return session.State.Application.ID
+	}
+	if session.State.User != nil {
+		return strings.TrimSpace(session.State.User.ID)
+	}
+	return ""
+}
+
+func (b *Bot) onInteractionCreate(s *discordgo.Session, ic *discordgo.InteractionCreate) {
+	switch ic.Type {
+	case discordgo.InteractionApplicationCommand:
+		b.handleApplicationCommandInteraction(s, ic)
+	case discordgo.InteractionMessageComponent:
+		b.handleMessageComponentInteraction(s, ic)
+	}
+}
+
+func (b *Bot) handleApplicationCommandInteraction(s *discordgo.Session, ic *discordgo.InteractionCreate) {
+	inv, ok := parseDiscordApplicationCommandInvocation(ic)
+	if !ok {
 		return
 	}
 
-	// Find persona by name.
-	dirName, found := b.svc.FindPersonaByName(arg)
-	if !found {
-		b.sendReply(s, m, fmt.Sprintf("⚠️ 找不到名為「%s」的角色。使用 `/persona` 查看可用清單。", arg))
+	result, event, handled := b.dispatchCommand(ic.ChannelID, inv)
+	if !handled {
 		return
 	}
 
-	if err := b.svc.SetActivePersona(dirName); err != nil {
-		b.sendReply(s, m, "⚠️ "+err.Error())
+	content, components := buildDiscordCommandResponse(result)
+	if err := s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content:    content,
+			Components: components,
+		},
+	}); err != nil {
+		logDiscord.Errorf("interaction respond error: type=command name=%s error=%v", inv.Name, err)
 		return
 	}
 
-	// Get the display name for confirmation.
-	active := b.svc.ActivePersona()
-	name := dirName
-	if active != nil {
-		name = active.Name
+	b.logDiscordCommandEvent(s, ic, event)
+}
+
+func (b *Bot) handleMessageComponentInteraction(s *discordgo.Session, ic *discordgo.InteractionCreate) {
+	inv, ok := parseDiscordComponentInvocation(ic)
+	if !ok {
+		return
 	}
-	b.sendReply(s, m, fmt.Sprintf("✅ 已切換為角色「%s」。", name))
-	b.logToConsole(s, fmt.Sprintf("[角色] 切換至「%s」(by %s)", name, m.Author.Username))
+
+	result, event, handled := b.dispatchCommand(ic.ChannelID, inv)
+	if !handled {
+		return
+	}
+
+	content, components := buildDiscordCommandResponse(result)
+	if err := s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Content:    content,
+			Components: components,
+		},
+	}); err != nil {
+		logDiscord.Errorf("interaction respond error: type=component action=%s error=%v", inv.ComponentAction, err)
+		return
+	}
+
+	b.logDiscordCommandEvent(s, ic, event)
+}
+
+func parseDiscordApplicationCommandInvocation(ic *discordgo.InteractionCreate) (botcmd.Invocation, bool) {
+	if ic == nil {
+		return botcmd.Invocation{}, false
+	}
+	data := ic.ApplicationCommandData()
+	if strings.TrimSpace(data.Name) == "" {
+		return botcmd.Invocation{}, false
+	}
+
+	inv := botcmd.Invocation{Name: data.Name}
+	if option := data.GetOption(botcmd.OptionPersonaName); option != nil {
+		inv.StringOptions = map[string]string{
+			botcmd.OptionPersonaName: option.StringValue(),
+		}
+	}
+	return inv, true
+}
+
+func parseDiscordComponentInvocation(ic *discordgo.InteractionCreate) (botcmd.Invocation, bool) {
+	if ic == nil {
+		return botcmd.Invocation{}, false
+	}
+	data := ic.MessageComponentData()
+	if data.CustomID != botcmd.ActionPersonaSelect || len(data.Values) == 0 {
+		return botcmd.Invocation{}, false
+	}
+	return botcmd.Invocation{
+		Name:            botcmd.CommandPersona,
+		ComponentAction: botcmd.ActionPersonaSelect,
+		ComponentValue:  data.Values[0],
+	}, true
+}
+
+func (b *Bot) dispatchCommand(channelID string, inv botcmd.Invocation) (botcmd.Result, *botcmd.Event, bool) {
+	runtime := &discordCommandRuntime{
+		bot:       b,
+		channelID: channelID,
+	}
+	result, handled := botcmd.Dispatch(runtime, inv)
+	if !handled {
+		return botcmd.Result{}, nil, false
+	}
+	return result, result.Event, true
+}
+
+func buildDiscordCommandResponse(result botcmd.Result) (string, []discordgo.MessageComponent) {
+	if result.Selector == nil {
+		return limitDiscordContent(result.Message), nil
+	}
+
+	content := botcmd.RenderPersonaSelectorText(result.Selector, result.SelectorNotice)
+	if len(result.Selector.Options) > botcmd.MaxPersonaSelectValues {
+		content += "\n\n⚠️ 角色數量超過 Discord 選單上限，請改用 `/persona name:<名稱>`。"
+		return limitDiscordContent(content), nil
+	}
+	return limitDiscordContent(content), buildDiscordPersonaComponents(result.Selector)
+}
+
+func buildDiscordPersonaComponents(selector *botcmd.PersonaSelector) []discordgo.MessageComponent {
+	if selector == nil || len(selector.Options) == 0 {
+		return nil
+	}
+
+	hasActive := false
+	options := make([]discordgo.SelectMenuOption, 0, len(selector.Options)+1)
+	for _, option := range selector.Options {
+		hasActive = hasActive || option.Active
+		selectOption := discordgo.SelectMenuOption{
+			Label:       truncateRunesWithEllipsis(option.Name, 100),
+			Value:       option.DirName,
+			Description: truncateRunesWithEllipsis(option.Description, 100),
+			Default:     option.Active,
+		}
+		options = append(options, selectOption)
+	}
+	if selector.OffLabel != "" && len(selector.Options) < botcmd.MaxPersonaSelectValues {
+		options = append(options, discordgo.SelectMenuOption{
+			Label:   truncateRunesWithEllipsis(selector.OffLabel, 100),
+			Value:   botcmd.PersonaOffValue,
+			Default: !hasActive,
+		})
+	}
+
+	totalMenus := (len(options) + botcmd.MaxPersonaSelectOptions - 1) / botcmd.MaxPersonaSelectOptions
+	rows := make([]discordgo.MessageComponent, 0, totalMenus)
+	for i := 0; i < len(options); i += botcmd.MaxPersonaSelectOptions {
+		end := i + botcmd.MaxPersonaSelectOptions
+		if end > len(options) {
+			end = len(options)
+		}
+		chunk := options[i:end]
+		menuIndex := (i / botcmd.MaxPersonaSelectOptions) + 1
+		placeholder := "選擇角色"
+		if totalMenus > 1 {
+			placeholder = fmt.Sprintf("選擇角色 (%d/%d)", menuIndex, totalMenus)
+		}
+		rows = append(rows, discordgo.ActionsRow{
+			Components: []discordgo.MessageComponent{
+				discordgo.SelectMenu{
+					MenuType:    discordgo.StringSelectMenu,
+					CustomID:    botcmd.ActionPersonaSelect,
+					Placeholder: placeholder,
+					MaxValues:   1,
+					Options:     chunk,
+				},
+			},
+		})
+	}
+	return rows
+}
+
+func limitDiscordContent(content string) string {
+	if runeLen(content) <= discordMessageLimit {
+		return content
+	}
+	return truncateRunesWithEllipsis(content, discordMessageLimit)
+}
+
+func (b *Bot) logDiscordCommandEvent(s *discordgo.Session, ic *discordgo.InteractionCreate, event *botcmd.Event) {
+	if event == nil {
+		return
+	}
+	actor := discordInteractionActorName(ic)
+	switch event.Type {
+	case botcmd.EventReset:
+		logDiscord.Logf("session reset: channel=%s new_session=%s", ic.ChannelID, event.SessionID)
+		b.logToConsole(s, fmt.Sprintf("[重置] <#%s> 對話已重置 → %s (by %s)", ic.ChannelID, event.SessionID, actor))
+	case botcmd.EventPersonaSet:
+		b.logToConsole(s, fmt.Sprintf("[角色] 切換至「%s」(by %s)", event.PersonaName, actor))
+	case botcmd.EventPersonaCleared:
+		b.logToConsole(s, fmt.Sprintf("[角色] 已停用角色 (by %s)", actor))
+	}
+}
+
+func discordInteractionActorName(ic *discordgo.InteractionCreate) string {
+	if ic == nil {
+		return "unknown"
+	}
+	if ic.Member != nil {
+		if strings.TrimSpace(ic.Member.Nick) != "" {
+			return ic.Member.Nick
+		}
+		if ic.Member.User != nil {
+			if strings.TrimSpace(ic.Member.User.GlobalName) != "" {
+				return ic.Member.User.GlobalName
+			}
+			if strings.TrimSpace(ic.Member.User.Username) != "" {
+				return ic.Member.User.Username
+			}
+		}
+	}
+	if ic.User != nil {
+		if strings.TrimSpace(ic.User.GlobalName) != "" {
+			return ic.User.GlobalName
+		}
+		if strings.TrimSpace(ic.User.Username) != "" {
+			return ic.User.Username
+		}
+	}
+	return "unknown"
 }
 
 // ---------------------------------------------------------------------------

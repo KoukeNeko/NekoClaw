@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doeshing/nekoclaw/internal/botcmd"
 	"github.com/doeshing/nekoclaw/internal/core"
+	"github.com/doeshing/nekoclaw/internal/persona"
 )
 
 func TestResponseElapsedPrefersServerValue(t *testing.T) {
@@ -66,5 +68,62 @@ func TestFormatReplyWithFooterUsesQuotedBlock(t *testing.T) {
 
 	if got != want {
 		t.Fatalf("formatReplyWithFooter() = %q, want %q", got, want)
+	}
+}
+
+func TestTelegramBotCommandsComeFromSharedSpecs(t *testing.T) {
+	commands := telegramBotCommands()
+	if len(commands) != 2 {
+		t.Fatalf("expected 2 telegram commands, got %d", len(commands))
+	}
+	if commands[0].Command != botcmd.CommandReset || commands[1].Command != botcmd.CommandPersona {
+		t.Fatalf("unexpected command list: %#v", commands)
+	}
+}
+
+func TestParseTelegramCallbackInvocation(t *testing.T) {
+	inv, ok := parseTelegramCallbackInvocation(encodeTelegramCallbackData(botcmd.ActionPersonaSelect, "hero"))
+	if !ok {
+		t.Fatal("expected callback data to parse")
+	}
+	if inv.Name != botcmd.CommandPersona || inv.ComponentAction != botcmd.ActionPersonaSelect || inv.ComponentValue != "hero" {
+		t.Fatalf("unexpected invocation: %#v", inv)
+	}
+}
+
+func TestBuildTelegramPersonaKeyboardUsesSharedSelector(t *testing.T) {
+	selector := &botcmd.PersonaSelector{
+		Title:    "📋 可用角色：",
+		OffLabel: "❌ 停用角色",
+		Options: []botcmd.PersonaOption{
+			{DirName: "hero", Name: "Hero", Active: true},
+			{DirName: "mage", Name: "Mage"},
+		},
+	}
+
+	rows := buildTelegramPersonaKeyboard(selector)
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 keyboard rows, got %d", len(rows))
+	}
+	if rows[0][0].Text != "▶ Hero" {
+		t.Fatalf("unexpected active persona label: %q", rows[0][0].Text)
+	}
+	if rows[2][0].Text != "❌ 停用角色" {
+		t.Fatalf("unexpected off label: %q", rows[2][0].Text)
+	}
+}
+
+func TestRenderPersonaSelectorTextMarksActivePersona(t *testing.T) {
+	selector := botcmd.BuildPersonaSelector([]persona.PersonaInfo{
+		{DirName: "hero", Name: "Hero", Description: "Brave cat"},
+		{DirName: "mage", Name: "Mage"},
+	}, &persona.PersonaInfo{DirName: "hero"})
+
+	got := botcmd.RenderPersonaSelectorText(selector, "✅ 已切換為角色「Hero」。")
+	if !strings.Contains(got, "✅ 已切換為角色「Hero」。") {
+		t.Fatalf("expected notice in selector text, got %q", got)
+	}
+	if !strings.Contains(got, "▶ Hero") {
+		t.Fatalf("expected active persona marker, got %q", got)
 	}
 }
