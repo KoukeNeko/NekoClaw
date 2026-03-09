@@ -12,9 +12,18 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      "/v1": "http://127.0.0.1:8085",
-      "/healthz": "http://127.0.0.1:8085",
-      "/oauth2callback": "http://127.0.0.1:8085",
+      "/v1": {
+        target: "http://127.0.0.1:8085",
+        xfwd: true,
+      },
+      "/healthz": {
+        target: "http://127.0.0.1:8085",
+        xfwd: true,
+      },
+      "/oauth2callback": {
+        target: "http://127.0.0.1:8085",
+        xfwd: true,
+      },
     },
   },
   build: {

@@ -4,6 +4,7 @@ import type {
   UsageInfo,
   ToolEvent,
   PendingToolApproval,
+  SecurityStatus,
 } from "@/api/types";
 import {
   detectBrowserTimeZone,
@@ -33,8 +34,11 @@ export interface ChatMessage {
 // ---------------------------------------------------------------------------
 
 export type Route =
+  | "login"
+  | "setup"
   | "chat"
   | "settings/general"
+  | "settings/security"
   | "settings/provider"
   | "settings/persona"
   | "settings/auth"
@@ -53,6 +57,11 @@ interface AppState {
   // Routing
   route: Route;
   setRoute: (r: Route) => void;
+
+  // Browser auth
+  securityStatus: SecurityStatus | null;
+  setSecurityStatus: (status: SecurityStatus | null) => void;
+  resetForAuthBoundary: () => void;
 
   // Sidebar
   sidebarOpen: boolean;
@@ -127,6 +136,23 @@ export const useAppStore = create<AppState>((set) => ({
   // Routing
   route: "chat",
   setRoute: (r) => set({ route: r }),
+  securityStatus: null,
+  setSecurityStatus: (status) => set({ securityStatus: status }),
+  resetForAuthBoundary: () =>
+    set({
+      sessionID: "main",
+      sessions: [],
+      messages: [],
+      isStreaming: false,
+      activeToolName: "",
+      retryStatus: "",
+      pendingApprovals: [],
+      currentRunID: "",
+      activePersona: "",
+      totalUsage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      totalCost: 0,
+      contextPercent: 0,
+    }),
 
   // Sidebar — expanded by default on desktop, hidden on mobile
   sidebarOpen: typeof window !== "undefined" && window.innerWidth >= 1024,

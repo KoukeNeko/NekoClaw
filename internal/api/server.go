@@ -17,12 +17,14 @@ import (
 	"github.com/doeshing/nekoclaw/internal/mcp"
 	"github.com/doeshing/nekoclaw/internal/persona"
 	"github.com/doeshing/nekoclaw/internal/provider"
+	"github.com/doeshing/nekoclaw/internal/security"
 	"github.com/doeshing/nekoclaw/internal/tooling"
 )
 
 type Server struct {
-	svc   *app.Service
-	webFS fs.FS // embedded frontend assets (nil = no SPA serving)
+	svc      *app.Service
+	webFS    fs.FS // embedded frontend assets (nil = no SPA serving)
+	security *security.Runtime
 }
 
 func NewServer(svc *app.Service) *Server {
@@ -35,10 +37,21 @@ func (s *Server) SetWebFS(webFS fs.FS) {
 	s.webFS = webFS
 }
 
+func (s *Server) SetSecurityRuntime(runtime *security.Runtime) {
+	s.security = runtime
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/oauth2callback", s.handleOAuthCallback)
+	mux.HandleFunc("/v1/security/status", s.handleSecurityStatus)
+	mux.HandleFunc("/v1/security/setup", s.handleSecuritySetup)
+	mux.HandleFunc("/v1/security/login", s.handleSecurityLogin)
+	mux.HandleFunc("/v1/security/logout", s.handleSecurityLogout)
+	mux.HandleFunc("/v1/security/logout-all", s.handleSecurityLogoutAll)
+	mux.HandleFunc("/v1/security/config", s.handleSecurityConfig)
+	mux.HandleFunc("/v1/security/password", s.handleSecurityPassword)
 	mux.HandleFunc("/v1/providers", s.handleProviders)
 	mux.HandleFunc("/v1/accounts", s.handleAccounts)
 	mux.HandleFunc("/v1/chat", s.handleChat)
@@ -113,7 +126,11 @@ func (s *Server) Handler() http.Handler {
 		mux.Handle("/", spaHandler(s.webFS))
 	}
 
-	return mux
+	var handler http.Handler = mux
+	if s.security != nil {
+		handler = s.wrapSecurity(handler)
+	}
+	return handler
 }
 
 // spaHandler serves static files from the embedded FS. If the requested

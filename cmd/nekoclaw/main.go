@@ -26,6 +26,7 @@ import (
 	"github.com/doeshing/nekoclaw/internal/logger"
 	"github.com/doeshing/nekoclaw/internal/memory"
 	"github.com/doeshing/nekoclaw/internal/provider"
+	"github.com/doeshing/nekoclaw/internal/security"
 	"github.com/doeshing/nekoclaw/internal/telegram"
 	"github.com/doeshing/nekoclaw/web"
 )
@@ -162,11 +163,28 @@ func main() {
 		}
 
 		server := api.NewServer(service)
+		securityRuntime, err := security.NewRuntime(security.RuntimeOptions{
+			BaseDir: *authDir,
+			Config:  service.GetSecurityConfig(),
+		})
+		if err != nil {
+			fatal(fmt.Errorf("init browser security: %w", err))
+		}
+		server.SetSecurityRuntime(securityRuntime)
 		webFS, fsErr := fs.Sub(web.DistFS, "dist")
 		if fsErr != nil {
 			fatal(fmt.Errorf("embed web dist: %w", fsErr))
 		}
 		server.SetWebFS(webFS)
+		if status := securityRuntime.Status("", "boot"); !status.Initialized {
+			token, tokenErr := securityRuntime.EnsureSetupToken()
+			if tokenErr != nil && !errors.Is(tokenErr, security.ErrAlreadyInitialized) {
+				fatal(fmt.Errorf("issue setup token: %w", tokenErr))
+			}
+			if strings.TrimSpace(token) != "" {
+				fmt.Printf("NekoClaw admin setup URL: %s\n", buildSecuritySetupURL(*addr, token))
+			}
+		}
 
 		fmt.Printf("NekoClaw Web UI listening on http://%s\n", *addr)
 		apiErr := server.Run(ctx, *addr)
@@ -455,6 +473,7 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	// Apply remaining config (fallbacks, general settings, Discord, Telegram) from the earlier load.
 	svc.SetConfigDir(configDir)
 	svc.SetGeneralConfig(appConfig.General)
+	svc.SetSecurityConfig(appConfig.Security)
 	svc.SetDiscordConfig(appConfig.Discord)
 	svc.SetTelegramConfig(appConfig.Telegram)
 	svc.SetToolsConfig(appConfig.Tools)
@@ -502,6 +521,22 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	}
 
 	return svc, nil
+}
+
+func buildSecuritySetupURL(addr string, token string) string {
+	return fmt.Sprintf("http://%s/#/setup?token=%s", normalizeBrowserAddr(addr), token)
+}
+
+func normalizeBrowserAddr(addr string) string {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil {
+		return strings.TrimSpace(addr)
+	}
+	switch host {
+	case "", "0.0.0.0", "::":
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func hydrateGeminiProfiles(svc *app.Service, store *auth.Store) error {

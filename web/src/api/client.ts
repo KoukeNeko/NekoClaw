@@ -50,11 +50,17 @@ import type {
   GeneralConfig,
   DiscordConfig,
   TelegramConfig,
+  SecurityConfig,
+  SecurityLoginRequest,
+  SecurityPasswordRequest,
+  SecuritySetupRequest,
+  SecurityStatus,
   ToolCatalogEntry,
   ToolsConfig,
   ToolStatusResult,
   TranscriptEntry,
 } from "./types";
+import { dispatchBrowserAuthEvent } from "./authEvents";
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -100,12 +106,24 @@ async function fetchJSON<T>(
 ): Promise<T> {
   const resp = await fetch(`${BASE}${path}`, {
     ...init,
+    credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
       ...init?.headers,
     },
   });
-  if (!resp.ok) throw await parseErrorBody(resp);
+  if (!resp.ok) {
+    const error = await parseErrorBody(resp);
+    if (
+      error.statusCode === 401 &&
+      (error.code === "setup_required" ||
+        error.code === "auth_required" ||
+        error.code === "session_expired")
+    ) {
+      dispatchBrowserAuthEvent(error.code);
+    }
+    throw error;
+  }
   // Some endpoints return 204 No Content
   if (resp.status === 204) return undefined as unknown as T;
   return resp.json();
@@ -475,6 +493,48 @@ export function getToolStatus(
   return get(
     `/v1/tool-status?session_id=${encodeURIComponent(sessionID)}`,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Browser security
+// ---------------------------------------------------------------------------
+
+export function getSecurityStatus(): Promise<SecurityStatus> {
+  return get("/v1/security/status");
+}
+
+export function setupSecurity(
+  req: SecuritySetupRequest,
+): Promise<SecurityStatus> {
+  return post("/v1/security/setup", req);
+}
+
+export function loginSecurity(
+  req: SecurityLoginRequest,
+): Promise<SecurityStatus> {
+  return post("/v1/security/login", req);
+}
+
+export function logoutSecurity(): Promise<SecurityStatus> {
+  return post("/v1/security/logout", {});
+}
+
+export function logoutAllSecurity(): Promise<SecurityStatus> {
+  return post("/v1/security/logout-all", {});
+}
+
+export function getSecurityConfig(): Promise<SecurityConfig> {
+  return get("/v1/security/config");
+}
+
+export function setSecurityConfig(config: SecurityConfig): Promise<SecurityConfig> {
+  return put("/v1/security/config", config);
+}
+
+export function changeSecurityPassword(
+  req: SecurityPasswordRequest,
+): Promise<SecurityStatus> {
+  return post("/v1/security/password", req);
 }
 
 // ---------------------------------------------------------------------------

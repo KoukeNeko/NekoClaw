@@ -5,6 +5,7 @@
  * to manually parse the SSE "data: {...}\n\n" protocol.
  */
 import type { ChatRequest, StreamChunk } from "./types";
+import { dispatchBrowserAuthEvent } from "./authEvents";
 
 export type StreamCallback = (chunk: StreamChunk) => void;
 
@@ -22,6 +23,7 @@ export function chatStream(
     try {
       const resp = await fetch("/v1/chat/stream", {
         method: "POST",
+        credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
           Accept: "text/event-stream",
@@ -33,8 +35,23 @@ export function chatStream(
       if (!resp.ok) {
         let errorMsg = `HTTP ${resp.status}`;
         try {
-          const body = await resp.text();
-          if (body) errorMsg = body;
+          const body = await resp.json();
+          const detail =
+            typeof body.error === "string"
+              ? { message: body.error, code: "" }
+              : {
+                message: body.error?.message ?? `HTTP ${resp.status}`,
+                code: body.error?.code ?? "",
+              };
+          errorMsg = detail.message;
+          if (
+            resp.status === 401 &&
+            (detail.code === "setup_required" ||
+              detail.code === "auth_required" ||
+              detail.code === "session_expired")
+          ) {
+            dispatchBrowserAuthEvent(detail.code);
+          }
         } catch {
           /* ignore */
         }

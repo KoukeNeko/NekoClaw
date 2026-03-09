@@ -55,6 +55,7 @@ type Service struct {
 	preferredProfiles map[string]string
 	fallbacks         []core.FallbackEntry // ordered fallback provider+model pairs
 	generalConfig     core.GeneralConfig   // persisted general settings
+	securityConfig    core.SecurityConfig  // persisted browser admin auth settings
 	discordConfig     core.DiscordConfig   // persisted Discord bot settings
 	telegramConfig    core.TelegramConfig  // persisted Telegram bot settings
 	toolsConfig       core.ToolsConfig     // persisted tool settings (web_search API key, etc.)

@@ -39,6 +39,15 @@ type GeneralConfig struct {
 	Timezone string `json:"timezone,omitempty"`
 }
 
+// SecurityConfig holds browser admin auth settings.
+type SecurityConfig struct {
+	AuthEnabled          bool `json:"auth_enabled"`
+	SessionIdleMinutes   int  `json:"session_idle_minutes"`
+	SessionAbsoluteHours int  `json:"session_absolute_hours"`
+	LoginMaxAttempts     int  `json:"login_max_attempts"`
+	LoginBlockMinutes    int  `json:"login_block_minutes"`
+}
+
 // ToolsConfig holds settings for built-in AI assistant tools.
 type ToolsConfig struct {
 	BraveSearchAPIKey string `json:"brave_search_api_key,omitempty"`
@@ -48,6 +57,7 @@ type ToolsConfig struct {
 type AppConfig struct {
 	Fallbacks []FallbackEntry `json:"fallbacks,omitempty"`
 	General   GeneralConfig   `json:"general,omitempty"`
+	Security  SecurityConfig  `json:"security,omitempty"`
 	Discord   DiscordConfig   `json:"discord,omitempty"`
 	Telegram  TelegramConfig  `json:"telegram,omitempty"`
 	Tools     ToolsConfig     `json:"tools,omitempty"`
@@ -61,7 +71,9 @@ func LoadConfig(configDir string) (AppConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return AppConfig{}, nil
+			return AppConfig{
+				Security: DefaultSecurityConfig(),
+			}, nil
 		}
 		return AppConfig{}, err
 	}
@@ -71,6 +83,7 @@ func LoadConfig(configDir string) (AppConfig, error) {
 	}
 	cfg.Fallbacks = sanitizeFallbacks(cfg.Fallbacks)
 	cfg.General = sanitizeGeneralConfig(cfg.General)
+	cfg.Security = sanitizeSecurityConfig(cfg.Security)
 	return cfg, nil
 }
 
@@ -82,6 +95,7 @@ func SaveConfig(configDir string, cfg AppConfig) error {
 	}
 	cfg.Fallbacks = sanitizeFallbacks(cfg.Fallbacks)
 	cfg.General = sanitizeGeneralConfig(cfg.General)
+	cfg.Security = sanitizeSecurityConfig(cfg.Security)
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -125,5 +139,35 @@ func sanitizeFallbacks(entries []FallbackEntry) []FallbackEntry {
 
 func sanitizeGeneralConfig(cfg GeneralConfig) GeneralConfig {
 	cfg.Timezone = strings.TrimSpace(cfg.Timezone)
+	return cfg
+}
+
+func DefaultSecurityConfig() SecurityConfig {
+	return SecurityConfig{
+		AuthEnabled:          true,
+		SessionIdleMinutes:   8 * 60,
+		SessionAbsoluteHours: 7 * 24,
+		LoginMaxAttempts:     5,
+		LoginBlockMinutes:    15,
+	}
+}
+
+func sanitizeSecurityConfig(cfg SecurityConfig) SecurityConfig {
+	defaults := DefaultSecurityConfig()
+	if cfg == (SecurityConfig{}) {
+		return defaults
+	}
+	if cfg.SessionIdleMinutes <= 0 {
+		cfg.SessionIdleMinutes = defaults.SessionIdleMinutes
+	}
+	if cfg.SessionAbsoluteHours <= 0 {
+		cfg.SessionAbsoluteHours = defaults.SessionAbsoluteHours
+	}
+	if cfg.LoginMaxAttempts <= 0 {
+		cfg.LoginMaxAttempts = defaults.LoginMaxAttempts
+	}
+	if cfg.LoginBlockMinutes <= 0 {
+		cfg.LoginBlockMinutes = defaults.LoginBlockMinutes
+	}
 	return cfg
 }

@@ -628,6 +628,57 @@ export interface ToolStatusResult {
 }
 
 // ---------------------------------------------------------------------------
+// Browser security
+// ---------------------------------------------------------------------------
+
+export interface SecuritySession {
+  id: string;
+  created_at: string;
+  last_seen_at: string;
+  idle_expires_at: string;
+  absolute_expires_at: string;
+}
+
+export interface SecurityLoginStatus {
+  failed_attempts: number;
+  remaining_attempts: number;
+  blocked_until?: string;
+}
+
+export interface SecurityStatus {
+  auth_enabled: boolean;
+  initialized: boolean;
+  setup_required: boolean;
+  authenticated: boolean;
+  password_updated_at?: string;
+  session_count: number;
+  current_session?: SecuritySession;
+  login_status: SecurityLoginStatus;
+}
+
+export interface SecurityConfig {
+  auth_enabled: boolean;
+  session_idle_minutes: number;
+  session_absolute_hours: number;
+  login_max_attempts: number;
+  login_block_minutes: number;
+}
+
+export interface SecuritySetupRequest {
+  token: string;
+  password: string;
+}
+
+export interface SecurityLoginRequest {
+  password: string;
+}
+
+export interface SecurityPasswordRequest {
+  current_password: string;
+  new_password: string;
+}
+
+// ---------------------------------------------------------------------------
 // General / Discord / Telegram config
 // ---------------------------------------------------------------------------
 
