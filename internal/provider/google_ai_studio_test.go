@@ -32,7 +32,13 @@ func TestGoogleAIStudioGenerateParsesText(t *testing.T) {
 			return newHTTPResponse(http.StatusOK, `{
 				"candidates": [{
 					"content": {"parts":[{"text":"hello"},{"text":"world"}]}
-				}]
+				}],
+				"usageMetadata": {
+					"promptTokenCount": 90,
+					"candidatesTokenCount": 18,
+					"totalTokenCount": 108,
+					"cachedContentTokenCount": 30
+				}
 			}`), nil
 		}),
 	}
@@ -68,6 +74,15 @@ func TestGoogleAIStudioGenerateParsesText(t *testing.T) {
 	}
 	if resp.Text != "hello\nworld" {
 		t.Fatalf("unexpected response text: %q", resp.Text)
+	}
+	if resp.Usage.CachedTokens == nil || *resp.Usage.CachedTokens != 30 {
+		t.Fatalf("unexpected cached tokens: %+v", resp.Usage)
+	}
+	if resp.Usage.PromptTokensTotal == nil || *resp.Usage.PromptTokensTotal != 90 {
+		t.Fatalf("unexpected prompt total: %+v", resp.Usage)
+	}
+	if resp.Usage.PromptTokensUncached == nil || *resp.Usage.PromptTokensUncached != 60 {
+		t.Fatalf("unexpected prompt uncached: %+v", resp.Usage)
 	}
 }
 

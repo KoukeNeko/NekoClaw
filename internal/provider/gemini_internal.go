@@ -1214,11 +1214,12 @@ func parseUsageMetadata(root map[string]any) core.UsageInfo {
 	if !ok {
 		return core.UsageInfo{}
 	}
-	return core.UsageInfo{
-		InputTokens:  jsonInt(meta, "promptTokenCount"),
-		OutputTokens: jsonInt(meta, "candidatesTokenCount"),
-		TotalTokens:  jsonInt(meta, "totalTokenCount"),
-	}
+	return buildGeminiUsage(
+		jsonInt(meta, "promptTokenCount"),
+		jsonInt(meta, "candidatesTokenCount"),
+		jsonInt(meta, "totalTokenCount"),
+		jsonIntPtr(meta, "cachedContentTokenCount"),
+	)
 }
 
 func jsonInt(m map[string]any, key string) int {
@@ -1229,6 +1230,20 @@ func jsonInt(m map[string]any, key string) int {
 		return v
 	}
 	return 0
+}
+
+func jsonIntPtr(m map[string]any, key string) *int {
+	value, ok := m[key]
+	if !ok {
+		return nil
+	}
+	switch v := value.(type) {
+	case float64:
+		return intPtr(int(v))
+	case int:
+		return intPtr(v)
+	}
+	return nil
 }
 
 func extractTextFromGeminiResponse(body []byte) (string, bool) {

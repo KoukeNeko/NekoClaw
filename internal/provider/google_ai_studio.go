@@ -52,6 +52,13 @@ type aiStudioModelResponse struct {
 	} `json:"models"`
 }
 
+type aiStudioUsageMetadata struct {
+	PromptTokenCount        int  `json:"promptTokenCount"`
+	CandidatesTokenCount    int  `json:"candidatesTokenCount"`
+	TotalTokenCount         int  `json:"totalTokenCount"`
+	CachedContentTokenCount *int `json:"cachedContentTokenCount,omitempty"`
+}
+
 type aiStudioGenerateResponse struct {
 	PromptFeedback struct {
 		BlockReason        string `json:"blockReason"`
@@ -66,11 +73,7 @@ type aiStudioGenerateResponse struct {
 			} `json:"parts"`
 		} `json:"content"`
 	} `json:"candidates"`
-	UsageMetadata struct {
-		PromptTokenCount     int `json:"promptTokenCount"`
-		CandidatesTokenCount int `json:"candidatesTokenCount"`
-		TotalTokenCount      int `json:"totalTokenCount"`
-	} `json:"usageMetadata"`
+	UsageMetadata aiStudioUsageMetadata `json:"usageMetadata"`
 }
 
 func NewGoogleAIStudioProvider(opts GoogleAIStudioOptions) *GoogleAIStudioProvider {
@@ -663,12 +666,16 @@ func extractTextAndUsageFromAIStudio(body []byte) (string, core.UsageInfo, bool)
 	if len(parts) == 0 {
 		return "", core.UsageInfo{}, false
 	}
-	usage := core.UsageInfo{
-		InputTokens:  payload.UsageMetadata.PromptTokenCount,
-		OutputTokens: payload.UsageMetadata.CandidatesTokenCount,
-		TotalTokens:  payload.UsageMetadata.TotalTokenCount,
-	}
-	return strings.Join(parts, "\n"), usage, true
+	return strings.Join(parts, "\n"), buildAIStudioUsage(payload.UsageMetadata), true
+}
+
+func buildAIStudioUsage(meta aiStudioUsageMetadata) core.UsageInfo {
+	return buildGeminiUsage(
+		meta.PromptTokenCount,
+		meta.CandidatesTokenCount,
+		meta.TotalTokenCount,
+		meta.CachedContentTokenCount,
+	)
 }
 
 func aiStudioBlockedFailure(body []byte, endpoint string, status int) *FailureError {

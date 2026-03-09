@@ -83,7 +83,7 @@ type anthropicTextBlock struct {
 }
 
 type anthropicImageBlock struct {
-	Type   string                   `json:"type"`
+	Type   string                    `json:"type"`
 	Source anthropicImageBlockSource `json:"source"`
 }
 
@@ -93,16 +93,20 @@ type anthropicImageBlockSource struct {
 	Data      string `json:"data"`
 }
 
+type anthropicUsage struct {
+	InputTokens              int  `json:"input_tokens"`
+	OutputTokens             int  `json:"output_tokens"`
+	CacheReadInputTokens     *int `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens *int `json:"cache_creation_input_tokens,omitempty"`
+}
+
 type anthropicResponse struct {
 	Content []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
-	StopReason string `json:"stop_reason"`
-	Usage      struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-	} `json:"usage"`
+	StopReason string         `json:"stop_reason"`
+	Usage      anthropicUsage `json:"usage"`
 }
 
 type anthropicToolRequest struct {
@@ -134,11 +138,8 @@ type anthropicToolResponse struct {
 		Name  string          `json:"name,omitempty"`
 		Input json.RawMessage `json:"input,omitempty"`
 	} `json:"content"`
-	StopReason string `json:"stop_reason"`
-	Usage      struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-	} `json:"usage"`
+	StopReason string         `json:"stop_reason"`
+	Usage      anthropicUsage `json:"usage"`
 }
 
 func NewAnthropicProvider(opts AnthropicOptions) *AnthropicProvider {
@@ -388,8 +389,7 @@ func (p *AnthropicProvider) readAnthropicSSE(ctx context.Context, resp *http.Res
 
 	var (
 		currentEvent string
-		inputTokens  int
-		outputTokens int
+		usage        core.UsageInfo
 	)
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -421,16 +421,13 @@ func (p *AnthropicProvider) readAnthropicSSE(ctx context.Context, resp *http.Res
 
 		switch currentEvent {
 		case "message_start":
-			// Extract initial input_tokens from the message envelope.
 			var envelope struct {
 				Message struct {
-					Usage struct {
-						InputTokens int `json:"input_tokens"`
-					} `json:"usage"`
+					Usage anthropicUsage `json:"usage"`
 				} `json:"message"`
 			}
 			if json.Unmarshal([]byte(data), &envelope) == nil {
-				inputTokens = envelope.Message.Usage.InputTokens
+				usage = buildAnthropicUsage(envelope.Message.Usage)
 			}
 
 		case "content_block_delta":
@@ -446,23 +443,15 @@ func (p *AnthropicProvider) readAnthropicSSE(ctx context.Context, resp *http.Res
 			}
 
 		case "message_delta":
-			// Extract final output_tokens from the message delta.
 			var msgDelta struct {
-				Usage struct {
-					OutputTokens int `json:"output_tokens"`
-				} `json:"usage"`
+				Usage anthropicUsage `json:"usage"`
 			}
 			if json.Unmarshal([]byte(data), &msgDelta) == nil {
-				outputTokens = msgDelta.Usage.OutputTokens
+				usage.OutputTokens = msgDelta.Usage.OutputTokens
+				usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 			}
 
 		case "message_stop":
-			// Final event — send the done chunk with accumulated usage.
-			usage := core.UsageInfo{
-				InputTokens:  inputTokens,
-				OutputTokens: outputTokens,
-				TotalTokens:  inputTokens + outputTokens,
-			}
 			ch <- GenerateStreamChunk{
 				Done:     true,
 				Endpoint: p.baseURL,
@@ -481,11 +470,6 @@ func (p *AnthropicProvider) readAnthropicSSE(ctx context.Context, resp *http.Res
 
 	// Stream ended without message_stop — synthesize a done chunk with
 	// whatever usage was accumulated so partial responses are not lost.
-	usage := core.UsageInfo{
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		TotalTokens:  inputTokens + outputTokens,
-	}
 	ch <- GenerateStreamChunk{
 		Done:     true,
 		Endpoint: p.baseURL,
@@ -609,11 +593,7 @@ func (p *AnthropicProvider) GenerateToolTurn(ctx context.Context, req ToolTurnRe
 			})
 		}
 	}
-	usage := core.UsageInfo{
-		InputTokens:  decoded.Usage.InputTokens,
-		OutputTokens: decoded.Usage.OutputTokens,
-	}
-	usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	usage := buildAnthropicUsage(decoded.Usage)
 	return ToolTurnResponse{
 		Text:       strings.Join(textParts, "\n"),
 		Endpoint:   p.baseURL,
@@ -951,12 +931,32 @@ func extractTextAndUsageFromAnthropic(body []byte) (string, core.UsageInfo, bool
 	if len(parts) == 0 {
 		return "", core.UsageInfo{}, false
 	}
+	return strings.Join(parts, "\n"), buildAnthropicUsage(payload.Usage), true
+}
+
+func buildAnthropicUsage(raw anthropicUsage) core.UsageInfo {
 	usage := core.UsageInfo{
-		InputTokens:  payload.Usage.InputTokens,
-		OutputTokens: payload.Usage.OutputTokens,
+		InputTokens:  raw.InputTokens,
+		OutputTokens: raw.OutputTokens,
 	}
 	usage.TotalTokens = usage.InputTokens + usage.OutputTokens
-	return strings.Join(parts, "\n"), usage, true
+	if raw.CacheReadInputTokens != nil {
+		usage.CachedTokens = intPtr(*raw.CacheReadInputTokens)
+	}
+	if raw.CacheReadInputTokens != nil || raw.CacheCreationInputTokens != nil {
+		promptTotal := raw.InputTokens
+		promptUncached := raw.InputTokens
+		if raw.CacheReadInputTokens != nil {
+			promptTotal += *raw.CacheReadInputTokens
+		}
+		if raw.CacheCreationInputTokens != nil {
+			promptTotal += *raw.CacheCreationInputTokens
+			promptUncached += *raw.CacheCreationInputTokens
+		}
+		usage.PromptTokensTotal = intPtr(promptTotal)
+		usage.PromptTokensUncached = intPtr(promptUncached)
+	}
+	return usage
 }
 
 func summarizeAnthropicError(body []byte) string {

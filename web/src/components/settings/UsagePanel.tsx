@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getTranscript, getUsageSummary } from "@/api/client";
 import type {
   TranscriptEntry,
+  UsageSummaryPerformance,
   UsageSummary,
   UsageSummaryModel,
   UsageSummaryProvider,
@@ -68,6 +69,23 @@ function readErrorMessage(error: unknown, fallback: string): string {
     return error.message.trim();
   }
   return fallback;
+}
+
+function formatOptionalTokens(value?: number): string {
+  if (value == null) return "—";
+  return formatTokens(value);
+}
+
+function formatOptionalPercent(value?: number): string {
+  if (value == null) return "—";
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function formatOptionalRate(value?: number): string {
+  if (value == null) return "—";
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M tok/s`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K tok/s`;
+  return `${value.toFixed(1)} tok/s`;
 }
 
 function sortSessions(
@@ -268,6 +286,85 @@ function UsageStatsGrid({
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function PerformanceOverview({
+  performance,
+}: {
+  performance: UsageSummaryPerformance;
+}) {
+  const topCards = [
+    {
+      label: "總處理 TOKEN 數",
+      value: formatOptionalTokens(performance.processed_prompt_tokens),
+      desc: "Prompt-side total for new requests",
+    },
+    {
+      label: "緩存 TOKEN 數",
+      value: formatOptionalTokens(performance.cached_tokens),
+      desc: "Cache-hit tokens only",
+    },
+    {
+      label: "緩存效率",
+      value: formatOptionalPercent(performance.cache_efficiency),
+      desc: "cached / processed prompt tokens",
+    },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 xl:grid-cols-3">
+        {topCards.map((item) => (
+          <div
+            key={item.label}
+            className="card border border-base-300 bg-base-100 shadow-sm"
+          >
+            <div className="card-body items-center justify-center gap-4 px-6 py-8 text-center">
+              <div className="text-xs uppercase tracking-[0.24em] text-base-content/42">
+                {item.label}
+              </div>
+              <div className="text-5xl font-semibold tracking-tight tabular-nums text-base-content/90">
+                {item.value}
+              </div>
+              <div className="text-xs text-base-content/55">{item.desc}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="card border border-base-300 bg-base-100 shadow-sm">
+        <div className="card-body gap-0 p-0">
+          <div className="flex items-center gap-3 border-b border-base-300 px-5 py-4">
+            <div className="text-sm font-semibold tracking-wide text-base-content/82">
+              平均速度
+            </div>
+          </div>
+          <div className="grid md:grid-cols-2">
+            <div className="space-y-3 px-5 py-6 md:border-r md:border-base-300">
+              <div className="text-sm font-medium text-base-content/58">
+                提示詞處理（不含緩存）
+              </div>
+              <div className="text-4xl font-semibold tracking-tight tabular-nums text-base-content/90">
+                {formatOptionalRate(performance.prompt_tokens_per_second)}
+              </div>
+            </div>
+            <div className="space-y-3 px-5 py-6">
+              <div className="text-sm font-medium text-base-content/58">
+                Token 生成
+              </div>
+              <div className="text-4xl font-semibold tracking-tight tabular-nums text-base-content/90">
+                {formatOptionalRate(performance.output_tokens_per_second)}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-box border border-base-300 bg-base-100 px-4 py-3 text-sm text-base-content/58">
+        快取與速度指標只統計含效能欄位的新 request。舊紀錄不回填，缺值顯示 —。
+      </div>
     </div>
   );
 }
@@ -833,6 +930,8 @@ export function UsagePanel() {
           </div>
         </div>
       </div>
+
+      <PerformanceOverview performance={summary.performance} />
 
       <UsageStatsGrid
         summary={summary}

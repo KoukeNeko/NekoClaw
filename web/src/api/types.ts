@@ -65,6 +65,9 @@ export interface UsageInfo {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  cached_tokens?: number;
+  prompt_tokens_total?: number;
+  prompt_tokens_uncached?: number;
 }
 
 export interface CompressionMeta {
@@ -216,9 +219,18 @@ export interface UsageSummarySession {
   top_model?: string;
 }
 
+export interface UsageSummaryPerformance {
+  processed_prompt_tokens?: number;
+  cached_tokens?: number;
+  cache_efficiency?: number;
+  prompt_tokens_per_second?: number;
+  output_tokens_per_second?: number;
+}
+
 export interface UsageSummary {
   generated_at: string;
   totals: UsageSummaryTotals;
+  performance: UsageSummaryPerformance;
   trend: UsageSummaryTrendPoint[];
   providers: UsageSummaryProvider[];
   models: UsageSummaryModel[];

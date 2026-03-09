@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -97,6 +98,74 @@ func TestAnthropicGenerateUsesAPIKeyHeaderForAPIKey(t *testing.T) {
 	}
 	if strings.Contains(gotBeta, "oauth-2025-04-20") {
 		t.Fatalf("did not expect oauth-only beta header for api-key mode: %q", gotBeta)
+	}
+}
+
+func TestExtractTextAndUsageFromAnthropicParsesPromptCaching(t *testing.T) {
+	text, usage, ok := extractTextAndUsageFromAnthropic([]byte(`{
+		"content":[{"type":"text","text":"cached reply"}],
+		"usage":{
+			"input_tokens":80,
+			"output_tokens":12,
+			"cache_read_input_tokens":40,
+			"cache_creation_input_tokens":10
+		}
+	}`))
+	if !ok {
+		t.Fatalf("expected usage parse to succeed")
+	}
+	if text != "cached reply" {
+		t.Fatalf("unexpected text: %q", text)
+	}
+	if usage.CachedTokens == nil || *usage.CachedTokens != 40 {
+		t.Fatalf("unexpected cached tokens: %+v", usage)
+	}
+	if usage.PromptTokensTotal == nil || *usage.PromptTokensTotal != 130 {
+		t.Fatalf("unexpected prompt total: %+v", usage)
+	}
+	if usage.PromptTokensUncached == nil || *usage.PromptTokensUncached != 90 {
+		t.Fatalf("unexpected prompt uncached: %+v", usage)
+	}
+}
+
+func TestReadAnthropicSSEParsesPromptCaching(t *testing.T) {
+	body := strings.NewReader(strings.Join([]string{
+		"event: message_start",
+		"data: {\"message\":{\"usage\":{\"input_tokens\":60,\"cache_read_input_tokens\":25,\"cache_creation_input_tokens\":5}}}",
+		"",
+		"event: content_block_delta",
+		"data: {\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}",
+		"",
+		"event: message_delta",
+		"data: {\"usage\":{\"output_tokens\":15}}",
+		"",
+		"event: message_stop",
+		"data: {}",
+		"",
+	}, "\n"))
+
+	p := NewAnthropicProvider(AnthropicOptions{})
+	ch := make(chan GenerateStreamChunk, 8)
+	go p.readAnthropicSSE(context.Background(), &http.Response{Body: io.NopCloser(body)}, ch)
+
+	var done GenerateStreamChunk
+	for chunk := range ch {
+		if chunk.Done {
+			done = chunk
+		}
+	}
+
+	if done.Usage.CachedTokens == nil || *done.Usage.CachedTokens != 25 {
+		t.Fatalf("unexpected cached tokens: %+v", done.Usage)
+	}
+	if done.Usage.PromptTokensTotal == nil || *done.Usage.PromptTokensTotal != 90 {
+		t.Fatalf("unexpected prompt total: %+v", done.Usage)
+	}
+	if done.Usage.PromptTokensUncached == nil || *done.Usage.PromptTokensUncached != 65 {
+		t.Fatalf("unexpected prompt uncached: %+v", done.Usage)
+	}
+	if done.Usage.OutputTokens != 15 || done.Usage.TotalTokens != 75 {
+		t.Fatalf("unexpected output usage: %+v", done.Usage)
 	}
 }
 

@@ -164,9 +164,12 @@ type ChatResponse struct {
 
 // UsageInfo holds token usage from a single API call.
 type UsageInfo struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-	TotalTokens  int `json:"total_tokens"`
+	InputTokens          int  `json:"input_tokens"`
+	OutputTokens         int  `json:"output_tokens"`
+	TotalTokens          int  `json:"total_tokens"`
+	CachedTokens         *int `json:"cached_tokens,omitempty"`
+	PromptTokensTotal    *int `json:"prompt_tokens_total,omitempty"`
+	PromptTokensUncached *int `json:"prompt_tokens_uncached,omitempty"`
 }
 
 // ---------------------------------------------------------------------------

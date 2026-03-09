@@ -64,7 +64,7 @@ type openAIToolResponsesRequest struct {
 	TopP             *float64 `json:"top_p,omitempty"`
 	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
 	PresencePenalty  *float64 `json:"presence_penalty,omitempty"`
-	Tools      []struct {
+	Tools            []struct {
 		Type        string          `json:"type"`
 		Name        string          `json:"name"`
 		Description string          `json:"description,omitempty"`
@@ -621,15 +621,7 @@ func extractTextAndUsageFromOpenAI(body []byte) (string, core.UsageInfo, bool) {
 		return "", core.UsageInfo{}, false
 	}
 
-	usage := core.UsageInfo{
-		InputTokens:  payload.Usage.InputTokens,
-		OutputTokens: payload.Usage.OutputTokens,
-		TotalTokens:  payload.Usage.TotalTokens,
-	}
-	if usage.TotalTokens <= 0 {
-		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
-	}
-	return text, usage, true
+	return text, extractOpenAIUsageFromBody(body), true
 }
 
 func extractTextUsageAndToolCallsFromOpenAI(body []byte) (string, core.UsageInfo, []ToolCall, bool) {
@@ -692,7 +684,40 @@ func extractOpenAIUsage(payload map[string]any) core.UsageInfo {
 	if usage.TotalTokens <= 0 {
 		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
+	if cachedTokens, ok := extractOpenAICachedTokens(raw); ok {
+		usage.CachedTokens = intPtr(cachedTokens)
+		promptUncached := usage.InputTokens - cachedTokens
+		if promptUncached < 0 {
+			promptUncached = 0
+		}
+		usage.PromptTokensUncached = intPtr(promptUncached)
+	}
+	if usage.InputTokens > 0 || usage.CachedTokens != nil || usage.OutputTokens > 0 || usage.TotalTokens > 0 {
+		usage.PromptTokensTotal = intPtr(usage.InputTokens)
+	}
 	return usage
+}
+
+func extractOpenAIUsageFromBody(body []byte) core.UsageInfo {
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return core.UsageInfo{}
+	}
+	return extractOpenAIUsage(payload)
+}
+
+func extractOpenAICachedTokens(raw map[string]any) (int, bool) {
+	for _, key := range []string{"input_tokens_details", "prompt_tokens_details"} {
+		details, ok := raw[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, exists := details["cached_tokens"]; !exists {
+			continue
+		}
+		return int(anyToFloat(details["cached_tokens"])), true
+	}
+	return 0, false
 }
 
 func anyToFloat(v any) float64 {

@@ -26,10 +26,14 @@ func TestUsageSummaryEndpointReturnsAggregatedShape(t *testing.T) {
 			MsgProvider: "openai",
 			MsgModel:    "gpt-5",
 			MsgUsage: &core.UsageInfo{
-				InputTokens:  100,
-				OutputTokens: 20,
-				TotalTokens:  120,
+				InputTokens:          100,
+				OutputTokens:         20,
+				TotalTokens:          120,
+				CachedTokens:         usageTestIntPtr(40),
+				PromptTokensTotal:    usageTestIntPtr(150),
+				PromptTokensUncached: usageTestIntPtr(110),
 			},
+			MsgElapsedMs: 2000,
 		},
 		core.NewCompactionEntry("summary", 1, 50, "next"),
 	)
@@ -69,6 +73,12 @@ func TestUsageSummaryEndpointReturnsAggregatedShape(t *testing.T) {
 	if got.Totals.SessionCount != 2 || got.Totals.RequestCount != 2 || got.Totals.CompactionCount != 1 {
 		t.Fatalf("unexpected totals: %+v", got.Totals)
 	}
+	if got.Performance.ProcessedPromptTokens == nil || *got.Performance.ProcessedPromptTokens != 150 {
+		t.Fatalf("unexpected performance processed prompt tokens: %+v", got.Performance)
+	}
+	if got.Performance.CachedTokens == nil || *got.Performance.CachedTokens != 40 {
+		t.Fatalf("unexpected performance cached tokens: %+v", got.Performance)
+	}
 	if len(got.Providers) != 2 || got.Providers[0].Provider != "openai" || got.Providers[1].Provider != "anthropic" {
 		t.Fatalf("unexpected providers: %+v", got.Providers)
 	}
@@ -78,4 +88,9 @@ func TestUsageSummaryEndpointReturnsAggregatedShape(t *testing.T) {
 	if got.Sessions[0].UpdatedAt.Before(got.Sessions[1].UpdatedAt) {
 		t.Fatalf("sessions should be sorted by updated_at desc: %+v", got.Sessions)
 	}
+}
+
+func usageTestIntPtr(v int) *int {
+	value := v
+	return &value
 }

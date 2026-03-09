@@ -80,6 +80,56 @@ func TestOpenAIProviderGenerateParsesResponsesOutput(t *testing.T) {
 	}
 }
 
+func TestOpenAIProviderGenerateParsesPromptCachingUsage(t *testing.T) {
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return newHTTPResponse(http.StatusOK, `{
+				"output":[
+					{
+						"type":"message",
+						"role":"assistant",
+						"content":[{"type":"output_text","text":"cached"}]
+					}
+				],
+				"usage":{
+					"input_tokens":120,
+					"output_tokens":10,
+					"total_tokens":130,
+					"input_tokens_details":{"cached_tokens":70}
+				}
+			}`), nil
+		}),
+	}
+	p := NewOpenAIProvider(OpenAIOptions{
+		ProviderID: "openai",
+		HTTPClient: client,
+	})
+
+	resp, err := p.Generate(context.Background(), GenerateRequest{
+		Model: "gpt-5.1-codex",
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: "hi"},
+		},
+		Account: core.Account{
+			Provider: "openai",
+			Type:     core.AccountAPIKey,
+			Token:    "sk-openai-key",
+		},
+	})
+	if err != nil {
+		t.Fatalf("generate failed: %v", err)
+	}
+	if resp.Usage.CachedTokens == nil || *resp.Usage.CachedTokens != 70 {
+		t.Fatalf("unexpected cached tokens: %+v", resp.Usage)
+	}
+	if resp.Usage.PromptTokensTotal == nil || *resp.Usage.PromptTokensTotal != 120 {
+		t.Fatalf("unexpected prompt total: %+v", resp.Usage)
+	}
+	if resp.Usage.PromptTokensUncached == nil || *resp.Usage.PromptTokensUncached != 50 {
+		t.Fatalf("unexpected uncached prompt tokens: %+v", resp.Usage)
+	}
+}
+
 func TestOpenAIProviderDefaultModelForCodex(t *testing.T) {
 	p := NewOpenAIProvider(OpenAIOptions{
 		ProviderID: "openai-codex",

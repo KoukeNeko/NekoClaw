@@ -146,6 +146,87 @@ func TestSummarizeSessionStoreMergesTailModelsIntoOther(t *testing.T) {
 	}
 }
 
+func TestSummarizeSessionStoreAggregatesPerformance(t *testing.T) {
+	now := time.Date(2026, 3, 8, 15, 0, 0, 0, time.FixedZone("UTC+8", 8*60*60))
+	store := core.NewSessionStore()
+
+	store.Append("alpha",
+		assistantEntryWithMeta(now, "openai", "gpt-5", &core.UsageInfo{
+			InputTokens:          120,
+			OutputTokens:         30,
+			TotalTokens:          150,
+			CachedTokens:         testIntPtr(80),
+			PromptTokensTotal:    testIntPtr(200),
+			PromptTokensUncached: testIntPtr(120),
+		}, 5000),
+		assistantEntryWithMeta(now.Add(time.Minute), "anthropic", "claude-sonnet-4", &core.UsageInfo{
+			InputTokens:          80,
+			OutputTokens:         20,
+			TotalTokens:          100,
+			CachedTokens:         testIntPtr(0),
+			PromptTokensTotal:    testIntPtr(80),
+			PromptTokensUncached: testIntPtr(80),
+		}, 4000),
+		assistantEntryWithMeta(now.Add(2*time.Minute), "mock", "legacy-model", &core.UsageInfo{
+			InputTokens:  50,
+			OutputTokens: 25,
+			TotalTokens:  75,
+		}, 3000),
+	)
+
+	summary := SummarizeSessionStore(store, now)
+
+	if summary.Performance.ProcessedPromptTokens == nil || *summary.Performance.ProcessedPromptTokens != 280 {
+		t.Fatalf("processed_prompt_tokens=%v want 280", summary.Performance.ProcessedPromptTokens)
+	}
+	if summary.Performance.CachedTokens == nil || *summary.Performance.CachedTokens != 80 {
+		t.Fatalf("cached_tokens=%v want 80", summary.Performance.CachedTokens)
+	}
+	if summary.Performance.CacheEfficiency == nil {
+		t.Fatalf("cache_efficiency should be set")
+	}
+	if got := *summary.Performance.CacheEfficiency; got < 0.285 || got > 0.286 {
+		t.Fatalf("cache_efficiency=%f want ~0.2857", got)
+	}
+	if summary.Performance.PromptTokensPerSecond == nil {
+		t.Fatalf("prompt_tokens_per_second should be set")
+	}
+	if got := *summary.Performance.PromptTokensPerSecond; got < 22.22 || got > 22.23 {
+		t.Fatalf("prompt_tokens_per_second=%f want ~22.222", got)
+	}
+	if summary.Performance.OutputTokensPerSecond == nil {
+		t.Fatalf("output_tokens_per_second should be set")
+	}
+	if got := *summary.Performance.OutputTokensPerSecond; got < 6.24 || got > 6.26 {
+		t.Fatalf("output_tokens_per_second=%f want ~6.25", got)
+	}
+}
+
+func TestSummarizeSessionStorePreservesZeroCacheMetrics(t *testing.T) {
+	now := time.Date(2026, 3, 8, 18, 0, 0, 0, time.UTC)
+	store := core.NewSessionStore()
+
+	store.Append("alpha",
+		assistantEntryWithMeta(now, "openai", "gpt-5", &core.UsageInfo{
+			InputTokens:          100,
+			OutputTokens:         20,
+			TotalTokens:          120,
+			CachedTokens:         testIntPtr(0),
+			PromptTokensTotal:    testIntPtr(100),
+			PromptTokensUncached: testIntPtr(100),
+		}, 4000),
+	)
+
+	summary := SummarizeSessionStore(store, now)
+
+	if summary.Performance.CachedTokens == nil || *summary.Performance.CachedTokens != 0 {
+		t.Fatalf("cached_tokens=%v want 0", summary.Performance.CachedTokens)
+	}
+	if summary.Performance.CacheEfficiency == nil || *summary.Performance.CacheEfficiency != 0 {
+		t.Fatalf("cache_efficiency=%v want 0", summary.Performance.CacheEfficiency)
+	}
+}
+
 func userEntry(ts time.Time, content string) core.SessionEntry {
 	entry := core.NewMessageEntry(core.RoleUser, content)
 	entry.Timestamp = ts
@@ -153,15 +234,20 @@ func userEntry(ts time.Time, content string) core.SessionEntry {
 }
 
 func assistantEntry(ts time.Time, providerID, modelID string, info *core.UsageInfo) core.SessionEntry {
+	return assistantEntryWithMeta(ts, providerID, modelID, info, 0)
+}
+
+func assistantEntryWithMeta(ts time.Time, providerID, modelID string, info *core.UsageInfo, elapsedMs int64) core.SessionEntry {
 	return core.SessionEntry{
-		Type:        core.EntryMessage,
-		ID:          core.NewEntryID(),
-		Timestamp:   ts,
-		Role:        core.RoleAssistant,
-		Content:     "reply",
-		MsgProvider: providerID,
-		MsgModel:    modelID,
-		MsgUsage:    info,
+		Type:         core.EntryMessage,
+		ID:           core.NewEntryID(),
+		Timestamp:    ts,
+		Role:         core.RoleAssistant,
+		Content:      "reply",
+		MsgProvider:  providerID,
+		MsgModel:     modelID,
+		MsgUsage:     info,
+		MsgElapsedMs: elapsedMs,
 	}
 }
 
@@ -169,4 +255,9 @@ func compactionEntry(ts time.Time) core.SessionEntry {
 	entry := core.NewCompactionEntry("compressed", 2, 150, "next")
 	entry.Timestamp = ts
 	return entry
+}
+
+func testIntPtr(v int) *int {
+	value := v
+	return &value
 }

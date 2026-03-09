@@ -38,7 +38,7 @@ func TestGenerateUsesStreamGenerateContentAndParsesSSE(t *testing.T) {
 
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello \"}]}}]}}\n\n"))
-		_, _ = w.Write([]byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"World\"}]}}],\"usageMetadata\":{\"totalTokenCount\":12}}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"World\"}]}}],\"usageMetadata\":{\"promptTokenCount\":48,\"candidatesTokenCount\":12,\"totalTokenCount\":60,\"cachedContentTokenCount\":18}}}\n\n"))
 	}))
 	defer srv.Close()
 
@@ -81,6 +81,15 @@ func TestGenerateUsesStreamGenerateContentAndParsesSSE(t *testing.T) {
 	}
 	if gotRole != "model" {
 		t.Fatalf("unexpected assistant role mapping: %q", gotRole)
+	}
+	if resp.Usage.CachedTokens == nil || *resp.Usage.CachedTokens != 18 {
+		t.Fatalf("unexpected cached tokens: %+v", resp.Usage)
+	}
+	if resp.Usage.PromptTokensTotal == nil || *resp.Usage.PromptTokensTotal != 48 {
+		t.Fatalf("unexpected prompt total: %+v", resp.Usage)
+	}
+	if resp.Usage.PromptTokensUncached == nil || *resp.Usage.PromptTokensUncached != 30 {
+		t.Fatalf("unexpected prompt uncached: %+v", resp.Usage)
 	}
 }
 
