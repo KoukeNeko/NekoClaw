@@ -12,7 +12,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,21 +38,19 @@ type accountFile struct {
 }
 
 func main() {
-	ensureGeminiOAuthEnvAliases()
-
 	var (
-		mode               = flag.String("mode", envOr("NEKOCLAW_MODE", "web"), "run mode: api | web")
-		addr               = flag.String("addr", envOr("NEKOCLAW_ADDR", "127.0.0.1:8085"), "api listen address")
-		defaultProvider    = flag.String("provider", envOr("NEKOCLAW_PROVIDER", "google-gemini-cli"), "default provider")
-		defaultModel       = flag.String("model", envOr("NEKOCLAW_MODEL", "default"), "default model")
-		accountsPath       = flag.String("accounts", envOr("NEKOCLAW_ACCOUNTS_FILE", "./accounts.json"), "account json path")
-		geminiEndpoints    = flag.String("gemini-endpoints", envOr("GEMINI_INTERNAL_ENDPOINTS", defaultGeminiEndpoints()), "comma-separated gemini internal endpoints")
-		geminiGeneratePath = flag.String("gemini-generate-path", envOr("GEMINI_INTERNAL_GENERATE_PATH", "/v1internal:streamGenerateContent?alt=sse"), "gemini internal generate path")
-		authDir            = flag.String("auth-dir", envOr("NEKOCLAW_AUTH_DIR", ""), "auth state directory (defaults to ~/.nekoclaw/auth)")
-		sessionsDir        = flag.String("sessions-dir", envOr("NEKOCLAW_SESSIONS_DIR", ""), "session persistence directory (defaults to ~/.nekoclaw/sessions)")
-		memoryDir          = flag.String("memory-dir", envOr("NEKOCLAW_MEMORY_DIR", ""), "memory directory for MEMORY.md and daily logs (defaults to ~/.nekoclaw/memory)")
-		callbackHost       = flag.String("oauth-callback-host", envOr("OPENCLAW_GEMINI_OAUTH_CALLBACK_HOST", "127.0.0.1"), "gemini oauth callback host")
-		callbackPort       = flag.Int("oauth-callback-port", envOrInt("OPENCLAW_GEMINI_OAUTH_CALLBACK_PORT", 8085), "gemini oauth callback port")
+		mode               = flag.String("mode", "web", "run mode: api | web")
+		addr               = flag.String("addr", "127.0.0.1:8085", "api listen address")
+		defaultProvider    = flag.String("provider", "google-gemini-cli", "default provider")
+		defaultModel       = flag.String("model", "default", "default model")
+		accountsPath       = flag.String("accounts", "./accounts.json", "account json path")
+		geminiEndpoints    = flag.String("gemini-endpoints", defaultGeminiEndpoints(), "comma-separated gemini internal endpoints")
+		geminiGeneratePath = flag.String("gemini-generate-path", "/v1internal:streamGenerateContent?alt=sse", "gemini internal generate path")
+		authDir            = flag.String("auth-dir", "", "auth state directory (defaults to ~/.nekoclaw/auth)")
+		sessionsDir        = flag.String("sessions-dir", "", "session persistence directory (defaults to ~/.nekoclaw/sessions)")
+		memoryDir          = flag.String("memory-dir", "", "memory directory for MEMORY.md and daily logs (defaults to ~/.nekoclaw/memory)")
+		callbackHost       = flag.String("oauth-callback-host", "127.0.0.1", "gemini oauth callback host")
+		callbackPort       = flag.Int("oauth-callback-port", 8085, "gemini oauth callback port")
 	)
 	flag.Parse()
 	runMode := strings.ToLower(strings.TrimSpace(*mode))
@@ -76,8 +73,8 @@ func main() {
 		fatal(err)
 	}
 
-	providerExplicit := flagWasProvided("provider") || envIsSet("NEKOCLAW_PROVIDER")
-	modelExplicit := flagWasProvided("model") || envIsSet("NEKOCLAW_MODEL")
+	providerExplicit := flagWasProvided("provider")
+	modelExplicit := flagWasProvided("model")
 	resolvedProvider, resolvedModel := resolveRuntimeDefaultSelection(
 		service.GetDefaultProvider(),
 		service.GetDefaultModel(),
@@ -209,17 +206,11 @@ func main() {
 	}
 }
 
-// startDiscordBot creates a Discord bot if a token is available.
-// Environment variables take precedence over config.json settings.
+// startDiscordBot creates a Discord bot if a token is available in persisted config.
 // Returns nil bot (no error) when no token is configured.
 func startDiscordBot(svc *app.Service) (*discord.Bot, error) {
-	token := strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
-
-	// Fall back to config.json if env var is empty.
-	if token == "" {
-		cfg := svc.GetDiscordConfig()
-		token = strings.TrimSpace(cfg.BotToken)
-	}
+	cfg := svc.GetDiscordConfig()
+	token := strings.TrimSpace(cfg.BotToken)
 
 	if token == "" {
 		return nil, nil
@@ -236,17 +227,11 @@ func startDiscordBot(svc *app.Service) (*discord.Bot, error) {
 	return bot, nil
 }
 
-// startTelegramBot creates a Telegram bot if a token is available.
-// Environment variables take precedence over config.json settings.
+// startTelegramBot creates a Telegram bot if a token is available in persisted config.
 // Returns nil bot (no error) when no token is configured.
 func startTelegramBot(svc *app.Service) (*telegram.Bot, error) {
-	token := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
-
-	// Fall back to config.json if env var is empty.
-	if token == "" {
-		cfg := svc.GetTelegramConfig()
-		token = strings.TrimSpace(cfg.BotToken)
-	}
+	cfg := svc.GetTelegramConfig()
+	token := strings.TrimSpace(cfg.BotToken)
 
 	if token == "" {
 		return nil, nil
@@ -264,15 +249,9 @@ func startTelegramBot(svc *app.Service) (*telegram.Bot, error) {
 }
 
 func configureRuntimeLogging(runMode string, authDir string) func() {
-	if strings.TrimSpace(os.Getenv("NEKOCLAW_LOG_STDERR")) == "1" {
-		return func() {}
-	}
 	switch runMode {
 	case "web":
-		logPath := strings.TrimSpace(os.Getenv("NEKOCLAW_LOG_FILE"))
-		if logPath == "" {
-			logPath = resolveDefaultLogFilePath(authDir)
-		}
+		logPath := resolveDefaultLogFilePath(authDir)
 		if logPath == "" {
 			log.SetOutput(io.Discard)
 			logger.SetOutput(io.Discard)
@@ -371,7 +350,7 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	stateDir := resolveStateDir()
 
 	// Resolve MCP config directory (default: ~/.nekoclaw/mcp/).
-	mcpDir := strings.TrimSpace(envOr("NEKOCLAW_MCP_DIR", ""))
+	mcpDir := ""
 	if mcpDir == "" {
 		if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
 			mcpDir = filepath.Join(home, ".nekoclaw", "mcp")
@@ -379,7 +358,7 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	}
 
 	// Resolve personas directory (default: ~/.nekoclaw/personas/).
-	personasDir := strings.TrimSpace(envOr("NEKOCLAW_PERSONAS_DIR", ""))
+	personasDir := ""
 	if personasDir == "" {
 		if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
 			personasDir = filepath.Join(home, ".nekoclaw", "personas")
@@ -404,7 +383,7 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		MemoryDir:     memoryDir,
 		SearchIndex:   searchIndex,
 		WorkspaceRoot: workspaceRoot,
-		ToolRunTTL:    envOrDuration("NEKOCLAW_TOOL_RUN_TTL", 10*time.Minute),
+		ToolRunTTL:    10 * time.Minute,
 		MCPConfigDir:  mcpDir,
 		PersonasDir:   personasDir,
 		ToolsConfig:   appConfig.Tools,
@@ -421,23 +400,17 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		GeneratePath: opts.GeminiGeneratePath,
 	})
 	svc.RegisterProvider(geminiProvider)
-	aiStudioProvider := provider.NewGoogleAIStudioProvider(provider.GoogleAIStudioOptions{
-		BaseURL: envOr("GOOGLE_AI_STUDIO_BASE_URL", ""),
-	})
+	aiStudioProvider := provider.NewGoogleAIStudioProvider(provider.GoogleAIStudioOptions{})
 	svc.RegisterProvider(aiStudioProvider)
-	anthropicProvider := provider.NewAnthropicProvider(provider.AnthropicOptions{
-		BaseURL: envOr("ANTHROPIC_BASE_URL", ""),
-	})
+	anthropicProvider := provider.NewAnthropicProvider(provider.AnthropicOptions{})
 	svc.RegisterProvider(anthropicProvider)
 	openAIProvider := provider.NewOpenAIProvider(provider.OpenAIOptions{
 		ProviderID:   "openai",
-		BaseURL:      envOr("OPENAI_BASE_URL", ""),
 		DefaultModel: "gpt-5.1-codex",
 	})
 	svc.RegisterProvider(openAIProvider)
 	openAICodexProvider := provider.NewOpenAIProvider(provider.OpenAIOptions{
 		ProviderID:   "openai-codex",
-		BaseURL:      envOr("OPENAI_CODEX_BASE_URL", envOr("OPENAI_BASE_URL", "")),
 		DefaultModel: "gpt-5.3-codex",
 	})
 	svc.RegisterProvider(openAICodexProvider)
@@ -446,11 +419,6 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	accounts = append(accounts, loadGeminiAccountsFromEnv()...)
-	accounts = append(accounts, loadAIStudioAccountsFromEnv()...)
-	accounts = append(accounts, loadAnthropicAccountsFromEnv()...)
-	accounts = append(accounts, loadOpenAIAccountsFromEnv()...)
-	accounts = append(accounts, loadOpenAICodexAccountsFromEnv()...)
 
 	byProvider := map[string][]core.Account{}
 	for _, account := range accounts {
@@ -525,10 +493,10 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	})
 	svc.SetAuthIntegration(oauthManager, authStore)
 	svc.SetAnthropicLoginManager(auth.NewAnthropicLoginManager(auth.AnthropicLoginManagerOptions{
-		JobTTL: envOrDuration("NEKOCLAW_ANTHROPIC_BROWSER_LOGIN_TTL", 10*time.Minute),
+		JobTTL: 10 * time.Minute,
 	}))
 	svc.SetOpenAICodexLoginManager(auth.NewOpenAICodexLoginManager(auth.OpenAICodexLoginManagerOptions{
-		JobTTL: envOrDuration("NEKOCLAW_OPENAI_CODEX_BROWSER_LOGIN_TTL", 10*time.Minute),
+		JobTTL: 10 * time.Minute,
 	}))
 
 	if err := hydrateGeminiProfiles(svc, authStore); err != nil {
@@ -588,17 +556,11 @@ func hydrateGeminiProfiles(svc *app.Service, store *auth.Store) error {
 			continue
 		}
 		projectID := strings.TrimSpace(profile.ProjectID)
-		projectSource := "stored"
 		if projectID == "" {
-			envProject := resolveGoogleCloudProject()
-			if envProject == "" {
-				logSystem.Warnf("profile skipped: provider=google-gemini-cli profile_id=%s reason=missing_project",
-					profile.ProfileID,
-				)
-				continue
-			}
-			projectID = envProject
-			projectSource = "env_fallback"
+			logSystem.Warnf("profile skipped: provider=google-gemini-cli profile_id=%s reason=missing_project",
+				profile.ProfileID,
+			)
+			continue
 		}
 		pool.SetCredential(profile.ProfileID, core.Account{
 			ID:       profile.ProfileID,
@@ -610,13 +572,13 @@ func hydrateGeminiProfiles(svc *app.Service, store *auth.Store) error {
 				"profile_id":     profile.ProfileID,
 				"project_id":     projectID,
 				"endpoint":       strings.TrimSpace(profile.Endpoint),
-				"project_source": projectSource,
+				"project_source": "stored",
 			},
 		})
 		logSystem.Logf("profile hydrated: provider=google-gemini-cli profile_id=%s endpoint=%s project_source=%s",
 			profile.ProfileID,
 			strings.TrimSpace(profile.Endpoint),
-			projectSource,
+			"stored",
 		)
 	}
 	return nil
@@ -820,462 +782,6 @@ func loadAccounts(path string) ([]core.Account, error) {
 	return payload.Accounts, nil
 }
 
-func loadGeminiAccountsFromEnv() []core.Account {
-	multi := splitCSV(envOr("GEMINI_INTERNAL_TOKENS", ""))
-	single := strings.TrimSpace(os.Getenv("GEMINI_INTERNAL_TOKEN"))
-	if single != "" {
-		multi = append(multi, single)
-	}
-	if len(multi) == 0 {
-		return nil
-	}
-
-	projectID := strings.TrimSpace(os.Getenv("GEMINI_INTERNAL_PROJECT_ID"))
-	endpoint := strings.TrimSpace(os.Getenv("GEMINI_INTERNAL_ENDPOINT"))
-	accounts := make([]core.Account, 0, len(multi))
-	for i, token := range multi {
-		metadata := core.Metadata{}
-		if projectID != "" {
-			metadata["project_id"] = projectID
-		}
-		if endpoint != "" {
-			metadata["endpoint"] = strings.TrimRight(endpoint, "/")
-		}
-		accounts = append(accounts, core.Account{
-			ID:       fmt.Sprintf("gemini-env-%d", i+1),
-			Provider: "google-gemini-cli",
-			Type:     core.AccountOAuth,
-			Token:    token,
-			Metadata: metadata,
-		})
-	}
-	return accounts
-}
-
-func loadAIStudioAccountsFromEnv() []core.Account {
-	keys := collectAIStudioKeysFromEnv()
-	if len(keys) == 0 {
-		return nil
-	}
-	accounts := make([]core.Account, 0, len(keys))
-	for idx, key := range keys {
-		hint := maskAPIKeyHint(key)
-		suffix := strings.TrimPrefix(hint, "****")
-		if suffix == "" {
-			suffix = fmt.Sprintf("%d", idx+1)
-		}
-		profileID := fmt.Sprintf("google-ai-studio:env_%s_%d", suffix, idx+1)
-		accounts = append(accounts, core.Account{
-			ID:       profileID,
-			Provider: "google-ai-studio",
-			Type:     core.AccountAPIKey,
-			Token:    key,
-			Metadata: core.Metadata{
-				"display_name": fmt.Sprintf("env key %d", idx+1),
-				"key_hint":     hint,
-			},
-		})
-	}
-	return accounts
-}
-
-func loadAnthropicAccountsFromEnv() []core.Account {
-	type accountSeed struct {
-		secret      string
-		accountType core.AccountType
-	}
-
-	tokenSecrets := collectAnthropicTokensFromEnv()
-	keySecrets := collectAnthropicAPIKeysFromEnv()
-	if len(tokenSecrets) == 0 && len(keySecrets) == 0 {
-		return nil
-	}
-
-	seen := map[string]struct{}{}
-	seeds := make([]accountSeed, 0, len(tokenSecrets)+len(keySecrets))
-	for _, secret := range tokenSecrets {
-		secret = strings.TrimSpace(secret)
-		if secret == "" {
-			continue
-		}
-		key := string(core.AccountToken) + ":" + secret
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		seeds = append(seeds, accountSeed{secret: secret, accountType: core.AccountToken})
-	}
-	for _, secret := range keySecrets {
-		secret = strings.TrimSpace(secret)
-		if secret == "" {
-			continue
-		}
-		key := string(core.AccountAPIKey) + ":" + secret
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		seeds = append(seeds, accountSeed{secret: secret, accountType: core.AccountAPIKey})
-	}
-
-	accounts := make([]core.Account, 0, len(seeds))
-	for idx, seed := range seeds {
-		hint := maskAPIKeyHint(seed.secret)
-		suffix := strings.TrimPrefix(hint, "****")
-		if suffix == "" {
-			suffix = fmt.Sprintf("%d", idx+1)
-		}
-		typeSlug := "api"
-		displayName := fmt.Sprintf("api key %d", idx+1)
-		if seed.accountType == core.AccountToken {
-			typeSlug = "token"
-			displayName = fmt.Sprintf("setup token %d", idx+1)
-		}
-		profileID := fmt.Sprintf("anthropic:env_%s_%s_%d", typeSlug, suffix, idx+1)
-		accounts = append(accounts, core.Account{
-			ID:       profileID,
-			Provider: "anthropic",
-			Type:     seed.accountType,
-			Token:    seed.secret,
-			Metadata: core.Metadata{
-				"display_name": displayName,
-				"key_hint":     hint,
-			},
-		})
-	}
-	return accounts
-}
-
-func loadOpenAIAccountsFromEnv() []core.Account {
-	keys := collectOpenAIAPIKeysFromEnv()
-	if len(keys) == 0 {
-		return nil
-	}
-	accounts := make([]core.Account, 0, len(keys))
-	for idx, key := range keys {
-		hint := maskAPIKeyHint(key)
-		suffix := strings.TrimPrefix(hint, "****")
-		if suffix == "" {
-			suffix = fmt.Sprintf("%d", idx+1)
-		}
-		profileID := fmt.Sprintf("openai:env_%s_%d", suffix, idx+1)
-		accounts = append(accounts, core.Account{
-			ID:       profileID,
-			Provider: "openai",
-			Type:     core.AccountAPIKey,
-			Token:    key,
-			Metadata: core.Metadata{
-				"display_name": fmt.Sprintf("openai key %d", idx+1),
-				"key_hint":     hint,
-			},
-		})
-	}
-	return accounts
-}
-
-func loadOpenAICodexAccountsFromEnv() []core.Account {
-	tokens := collectOpenAICodexTokensFromEnv()
-	if len(tokens) == 0 {
-		return nil
-	}
-	accounts := make([]core.Account, 0, len(tokens))
-	for idx, token := range tokens {
-		hint := maskAPIKeyHint(token)
-		suffix := strings.TrimPrefix(hint, "****")
-		if suffix == "" {
-			suffix = fmt.Sprintf("%d", idx+1)
-		}
-		profileID := fmt.Sprintf("openai-codex:env_%s_%d", suffix, idx+1)
-		accounts = append(accounts, core.Account{
-			ID:       profileID,
-			Provider: "openai-codex",
-			Type:     core.AccountOAuth,
-			Token:    token,
-			Metadata: core.Metadata{
-				"display_name": fmt.Sprintf("openai codex oauth %d", idx+1),
-				"key_hint":     hint,
-			},
-		})
-	}
-	return accounts
-}
-
-func collectAIStudioKeysFromEnv() []string {
-	values := make([]string, 0, 8)
-	appendValue := func(v string) {
-		if t := strings.TrimSpace(v); t != "" {
-			values = append(values, t)
-		}
-	}
-
-	for _, key := range []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"} {
-		appendValue(os.Getenv(key))
-	}
-	for _, key := range []string{"GEMINI_API_KEYS", "GOOGLE_API_KEYS"} {
-		for _, value := range splitCSV(os.Getenv(key)) {
-			appendValue(value)
-		}
-	}
-
-	type prefixed struct {
-		name  string
-		value string
-	}
-	prefixedValues := make([]prefixed, 0, 8)
-	for _, envEntry := range os.Environ() {
-		name, value, found := strings.Cut(envEntry, "=")
-		if !found {
-			continue
-		}
-		if strings.HasPrefix(name, "GEMINI_API_KEY_") || strings.HasPrefix(name, "GOOGLE_API_KEY_") {
-			if strings.TrimSpace(value) == "" {
-				continue
-			}
-			prefixedValues = append(prefixedValues, prefixed{name: name, value: value})
-		}
-	}
-	sort.SliceStable(prefixedValues, func(i, j int) bool {
-		return prefixedValues[i].name < prefixedValues[j].name
-	})
-	for _, item := range prefixedValues {
-		appendValue(item.value)
-	}
-
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
-}
-
-func collectAnthropicTokensFromEnv() []string {
-	values := make([]string, 0, 8)
-	appendValue := func(v string) {
-		if t := strings.TrimSpace(v); t != "" {
-			values = append(values, t)
-		}
-	}
-
-	for _, key := range []string{"ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_SETUP_TOKEN"} {
-		appendValue(os.Getenv(key))
-	}
-	for _, key := range []string{"ANTHROPIC_OAUTH_TOKENS"} {
-		for _, value := range splitCSV(os.Getenv(key)) {
-			appendValue(value)
-		}
-	}
-
-	type prefixed struct {
-		name  string
-		value string
-	}
-	prefixedValues := make([]prefixed, 0, 8)
-	for _, envEntry := range os.Environ() {
-		name, value, found := strings.Cut(envEntry, "=")
-		if !found {
-			continue
-		}
-		if strings.HasPrefix(name, "ANTHROPIC_OAUTH_TOKEN_") {
-			if strings.TrimSpace(value) == "" {
-				continue
-			}
-			prefixedValues = append(prefixedValues, prefixed{name: name, value: value})
-		}
-	}
-	sort.SliceStable(prefixedValues, func(i, j int) bool {
-		return prefixedValues[i].name < prefixedValues[j].name
-	})
-	for _, item := range prefixedValues {
-		appendValue(item.value)
-	}
-
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
-}
-
-func collectAnthropicAPIKeysFromEnv() []string {
-	values := make([]string, 0, 8)
-	appendValue := func(v string) {
-		if t := strings.TrimSpace(v); t != "" {
-			values = append(values, t)
-		}
-	}
-
-	for _, key := range []string{"ANTHROPIC_API_KEY"} {
-		appendValue(os.Getenv(key))
-	}
-	for _, key := range []string{"ANTHROPIC_API_KEYS"} {
-		for _, value := range splitCSV(os.Getenv(key)) {
-			appendValue(value)
-		}
-	}
-
-	type prefixed struct {
-		name  string
-		value string
-	}
-	prefixedValues := make([]prefixed, 0, 8)
-	for _, envEntry := range os.Environ() {
-		name, value, found := strings.Cut(envEntry, "=")
-		if !found {
-			continue
-		}
-		if strings.HasPrefix(name, "ANTHROPIC_API_KEY_") {
-			if strings.TrimSpace(value) == "" {
-				continue
-			}
-			prefixedValues = append(prefixedValues, prefixed{name: name, value: value})
-		}
-	}
-	sort.SliceStable(prefixedValues, func(i, j int) bool {
-		return prefixedValues[i].name < prefixedValues[j].name
-	})
-	for _, item := range prefixedValues {
-		appendValue(item.value)
-	}
-
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
-}
-
-func collectOpenAIAPIKeysFromEnv() []string {
-	values := make([]string, 0, 8)
-	appendValue := func(v string) {
-		if t := strings.TrimSpace(v); t != "" {
-			values = append(values, t)
-		}
-	}
-
-	for _, key := range []string{"OPENAI_API_KEY"} {
-		appendValue(os.Getenv(key))
-	}
-	for _, key := range []string{"OPENAI_API_KEYS"} {
-		for _, value := range splitCSV(os.Getenv(key)) {
-			appendValue(value)
-		}
-	}
-
-	type prefixed struct {
-		name  string
-		value string
-	}
-	prefixedValues := make([]prefixed, 0, 8)
-	for _, envEntry := range os.Environ() {
-		name, value, found := strings.Cut(envEntry, "=")
-		if !found {
-			continue
-		}
-		if strings.HasPrefix(name, "OPENAI_API_KEY_") {
-			if strings.TrimSpace(value) == "" {
-				continue
-			}
-			prefixedValues = append(prefixedValues, prefixed{name: name, value: value})
-		}
-	}
-	sort.SliceStable(prefixedValues, func(i, j int) bool {
-		return prefixedValues[i].name < prefixedValues[j].name
-	})
-	for _, item := range prefixedValues {
-		appendValue(item.value)
-	}
-
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
-}
-
-func collectOpenAICodexTokensFromEnv() []string {
-	values := make([]string, 0, 8)
-	appendValue := func(v string) {
-		if t := strings.TrimSpace(v); t != "" {
-			values = append(values, t)
-		}
-	}
-
-	for _, key := range []string{"OPENAI_OAUTH_TOKEN", "OPENAI_CODEX_OAUTH_TOKEN"} {
-		appendValue(os.Getenv(key))
-	}
-	for _, key := range []string{"OPENAI_OAUTH_TOKENS", "OPENAI_CODEX_OAUTH_TOKENS"} {
-		for _, value := range splitCSV(os.Getenv(key)) {
-			appendValue(value)
-		}
-	}
-
-	type prefixed struct {
-		name  string
-		value string
-	}
-	prefixedValues := make([]prefixed, 0, 8)
-	for _, envEntry := range os.Environ() {
-		name, value, found := strings.Cut(envEntry, "=")
-		if !found {
-			continue
-		}
-		if strings.HasPrefix(name, "OPENAI_OAUTH_TOKEN_") || strings.HasPrefix(name, "OPENAI_CODEX_OAUTH_TOKEN_") {
-			if strings.TrimSpace(value) == "" {
-				continue
-			}
-			prefixedValues = append(prefixedValues, prefixed{name: name, value: value})
-		}
-	}
-	sort.SliceStable(prefixedValues, func(i, j int) bool {
-		return prefixedValues[i].name < prefixedValues[j].name
-	})
-	for _, item := range prefixedValues {
-		appendValue(item.value)
-	}
-
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
-}
-
-func maskAPIKeyHint(apiKey string) string {
-	apiKey = strings.TrimSpace(apiKey)
-	if apiKey == "" {
-		return "****"
-	}
-	if len(apiKey) <= 6 {
-		return "****" + apiKey
-	}
-	return "****" + apiKey[len(apiKey)-6:]
-}
-
 func splitCSV(value string) []string {
 	parts := strings.Split(value, ",")
 	out := make([]string, 0, len(parts))
@@ -1286,48 +792,6 @@ func splitCSV(value string) []string {
 		}
 	}
 	return out
-}
-
-func resolveGoogleCloudProject() string {
-	if project := strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT")); project != "" {
-		return project
-	}
-	if project := strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT_ID")); project != "" {
-		return project
-	}
-	return ""
-}
-
-func envOr(key string, fallback string) string {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	return value
-}
-
-func envOrInt(key string, fallback int) int {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return fallback
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n <= 0 {
-		return fallback
-	}
-	return n
-}
-
-func envOrDuration(key string, fallback time.Duration) time.Duration {
-	raw := strings.TrimSpace(os.Getenv(key))
-	if raw == "" {
-		return fallback
-	}
-	value, err := time.ParseDuration(raw)
-	if err != nil || value <= 0 {
-		return fallback
-	}
-	return value
 }
 
 func resolveRuntimeDefaultSelection(
@@ -1367,27 +831,6 @@ func flagWasProvided(name string) bool {
 		}
 	})
 	return provided
-}
-
-func envIsSet(key string) bool {
-	_, ok := os.LookupEnv(key)
-	return ok
-}
-
-func ensureGeminiOAuthEnvAliases() {
-	aliasEnv("OPENCLAW_GEMINI_OAUTH_CLIENT_ID", "GEMINI_CLI_OAUTH_CLIENT_ID")
-	aliasEnv("OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET", "GEMINI_CLI_OAUTH_CLIENT_SECRET")
-}
-
-func aliasEnv(primary, secondary string) {
-	if strings.TrimSpace(os.Getenv(primary)) != "" {
-		return
-	}
-	value := strings.TrimSpace(os.Getenv(secondary))
-	if value == "" {
-		return
-	}
-	_ = os.Setenv(primary, value)
 }
 
 func resolveOAuthCallbackPort(explicit int, apiAddr string) int {

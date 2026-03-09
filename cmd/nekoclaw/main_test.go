@@ -2,7 +2,6 @@ package main
 
 import (
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -20,42 +19,6 @@ func TestResolveDefaultLogFilePath_UsesHomeDefaultWhenAuthDirEmpty(t *testing.T)
 	want := filepath.Join(home, ".nekoclaw", "logs", "nekoclaw.log")
 	if got != want {
 		t.Fatalf("resolveDefaultLogFilePath(empty) = %q, want %q", got, want)
-	}
-}
-
-func TestLoadAIStudioAccountsFromEnv_MergesAndDedupes(t *testing.T) {
-	t.Setenv("GEMINI_API_KEY", "key-a")
-	t.Setenv("GOOGLE_API_KEY", "key-a")
-	t.Setenv("GEMINI_API_KEYS", "key-b,key-c")
-	t.Setenv("GOOGLE_API_KEYS", "key-c,key-d")
-	t.Setenv("GEMINI_API_KEY_TEAM", "key-e")
-	t.Setenv("GOOGLE_API_KEY_X", "key-f")
-
-	accounts := loadAIStudioAccountsFromEnv()
-	if len(accounts) != 6 {
-		t.Fatalf("unexpected accounts length: %d", len(accounts))
-	}
-	seenTokens := map[string]struct{}{}
-	for _, account := range accounts {
-		if account.Provider != "google-ai-studio" {
-			t.Fatalf("unexpected provider: %s", account.Provider)
-		}
-		if account.Type != core.AccountAPIKey {
-			t.Fatalf("unexpected account type: %s", account.Type)
-		}
-		if strings.TrimSpace(account.Token) == "" {
-			t.Fatalf("expected token")
-		}
-		seenTokens[account.Token] = struct{}{}
-	}
-	keys := make([]string, 0, len(seenTokens))
-	for key := range seenTokens {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	want := []string{"key-a", "key-b", "key-c", "key-d", "key-e", "key-f"}
-	if strings.Join(keys, ",") != strings.Join(want, ",") {
-		t.Fatalf("unexpected key set: got=%v want=%v", keys, want)
 	}
 }
 
@@ -160,54 +123,6 @@ func TestBuildService_LoadsSavedDefaultSelectionFromConfig(t *testing.T) {
 	}
 }
 
-func TestLoadAnthropicAccountsFromEnv_MergesAndDedupes(t *testing.T) {
-	token1 := "sk-ant-oat01-" + strings.Repeat("a", 80)
-	token2 := "sk-ant-oat01-" + strings.Repeat("b", 80)
-	key1 := "sk-ant-api-1"
-	key2 := "sk-ant-api-2"
-	key3 := "sk-ant-api-3"
-
-	t.Setenv("ANTHROPIC_OAUTH_TOKEN", token1)
-	t.Setenv("ANTHROPIC_SETUP_TOKEN", token1)
-	t.Setenv("ANTHROPIC_OAUTH_TOKENS", token2+","+token1)
-	t.Setenv("ANTHROPIC_OAUTH_TOKEN_TEAM", token2)
-	t.Setenv("ANTHROPIC_API_KEY", key1)
-	t.Setenv("ANTHROPIC_API_KEYS", key2+","+key1)
-	t.Setenv("ANTHROPIC_API_KEY_TEAM", key3)
-
-	accounts := loadAnthropicAccountsFromEnv()
-	if len(accounts) != 5 {
-		t.Fatalf("unexpected accounts length: %d", len(accounts))
-	}
-
-	type keyed struct {
-		secret string
-		typ    core.AccountType
-	}
-	seen := map[keyed]struct{}{}
-	for _, account := range accounts {
-		if account.Provider != "anthropic" {
-			t.Fatalf("unexpected provider: %s", account.Provider)
-		}
-		if strings.TrimSpace(account.Token) == "" {
-			t.Fatalf("missing token")
-		}
-		seen[keyed{secret: account.Token, typ: account.Type}] = struct{}{}
-	}
-	want := []keyed{
-		{secret: token1, typ: core.AccountToken},
-		{secret: token2, typ: core.AccountToken},
-		{secret: key1, typ: core.AccountAPIKey},
-		{secret: key2, typ: core.AccountAPIKey},
-		{secret: key3, typ: core.AccountAPIKey},
-	}
-	for _, item := range want {
-		if _, ok := seen[item]; !ok {
-			t.Fatalf("missing expected account: %+v", item)
-		}
-	}
-}
-
 func TestHydrateAnthropicProfilesLoadsCredentials(t *testing.T) {
 	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterPool(core.NewAccountPool("anthropic", nil, nil, core.DefaultCooldownConfig()))
@@ -266,68 +181,6 @@ func TestHydrateAnthropicProfilesLoadsCredentials(t *testing.T) {
 	}
 	if keyAccount.Type != core.AccountAPIKey {
 		t.Fatalf("unexpected key account type: %s", keyAccount.Type)
-	}
-}
-
-func TestLoadOpenAIAccountsFromEnv_MergesAndDedupes(t *testing.T) {
-	t.Setenv("OPENAI_API_KEY", "sk-openai-a")
-	t.Setenv("OPENAI_API_KEYS", "sk-openai-b,sk-openai-c,sk-openai-a")
-	t.Setenv("OPENAI_API_KEY_TEAM", "sk-openai-d")
-
-	accounts := loadOpenAIAccountsFromEnv()
-	if len(accounts) != 4 {
-		t.Fatalf("unexpected accounts length: %d", len(accounts))
-	}
-	seenTokens := map[string]struct{}{}
-	for _, account := range accounts {
-		if account.Provider != "openai" {
-			t.Fatalf("unexpected provider: %s", account.Provider)
-		}
-		if account.Type != core.AccountAPIKey {
-			t.Fatalf("unexpected account type: %s", account.Type)
-		}
-		seenTokens[account.Token] = struct{}{}
-	}
-	keys := make([]string, 0, len(seenTokens))
-	for key := range seenTokens {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	want := []string{"sk-openai-a", "sk-openai-b", "sk-openai-c", "sk-openai-d"}
-	if strings.Join(keys, ",") != strings.Join(want, ",") {
-		t.Fatalf("unexpected key set: got=%v want=%v", keys, want)
-	}
-}
-
-func TestLoadOpenAICodexAccountsFromEnv_MergesAndDedupes(t *testing.T) {
-	t.Setenv("OPENAI_OAUTH_TOKEN", "oauth-a")
-	t.Setenv("OPENAI_CODEX_OAUTH_TOKEN", "oauth-b")
-	t.Setenv("OPENAI_OAUTH_TOKENS", "oauth-c,oauth-a")
-	t.Setenv("OPENAI_CODEX_OAUTH_TOKENS", "oauth-d,oauth-b")
-	t.Setenv("OPENAI_OAUTH_TOKEN_TEAM", "oauth-e")
-
-	accounts := loadOpenAICodexAccountsFromEnv()
-	if len(accounts) != 5 {
-		t.Fatalf("unexpected accounts length: %d", len(accounts))
-	}
-	seenTokens := map[string]struct{}{}
-	for _, account := range accounts {
-		if account.Provider != "openai-codex" {
-			t.Fatalf("unexpected provider: %s", account.Provider)
-		}
-		if account.Type != core.AccountOAuth {
-			t.Fatalf("unexpected account type: %s", account.Type)
-		}
-		seenTokens[account.Token] = struct{}{}
-	}
-	keys := make([]string, 0, len(seenTokens))
-	for key := range seenTokens {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	want := []string{"oauth-a", "oauth-b", "oauth-c", "oauth-d", "oauth-e"}
-	if strings.Join(keys, ",") != strings.Join(want, ",") {
-		t.Fatalf("unexpected key set: got=%v want=%v", keys, want)
 	}
 }
 
@@ -459,7 +312,7 @@ func TestHydrateGeminiProfilesSkipsMissingProjectWithoutEnv(t *testing.T) {
 	}
 }
 
-func TestHydrateGeminiProfilesUsesEnvFallbackProject(t *testing.T) {
+func TestHydrateGeminiProfilesIgnoresProjectEnvironmentFallback(t *testing.T) {
 	t.Setenv("GOOGLE_CLOUD_PROJECT", "env-project-1")
 
 	svc := app.NewService(app.ServiceOptions{})
@@ -489,15 +342,8 @@ func TestHydrateGeminiProfilesUsesEnvFallbackProject(t *testing.T) {
 	if pool == nil {
 		t.Fatalf("missing pool")
 	}
-	account, ok := pool.GetAccount("p2")
-	if !ok {
-		t.Fatalf("expected profile p2 loaded with env fallback")
-	}
-	if account.Metadata["project_id"] != "env-project-1" {
-		t.Fatalf("unexpected project_id: %q", account.Metadata["project_id"])
-	}
-	if account.Metadata["project_source"] != "env_fallback" {
-		t.Fatalf("unexpected project_source: %q", account.Metadata["project_source"])
+	if _, ok := pool.GetAccount("p2"); ok {
+		t.Fatalf("expected profile p2 not loaded from environment fallback")
 	}
 }
 

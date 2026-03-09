@@ -345,9 +345,6 @@ func (m *GeminiOAuthManager) clearExpiredLocked(now time.Time) {
 }
 
 func defaultRemoteDetector() bool {
-	if strings.TrimSpace(os.Getenv("NEKOCLAW_FORCE_MANUAL_OAUTH")) == "1" {
-		return true
-	}
 	if strings.TrimSpace(os.Getenv("SSH_CONNECTION")) != "" {
 		return true
 	}

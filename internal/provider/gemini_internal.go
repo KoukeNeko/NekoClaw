@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"runtime"
 	"sort"
 	"strings"
@@ -1436,12 +1435,6 @@ func hasCurrentTier(payload map[string]any) bool {
 func resolveGoogleAPIClientHeader() string {
 	// OpenClaw's Gemini OAuth extension sends "gl-node/<version>" here.
 	// Keep the same shape to match backend heuristics.
-	if explicit := strings.TrimSpace(os.Getenv("NEKOCLAW_GEMINI_X_GOOG_API_CLIENT")); explicit != "" {
-		return explicit
-	}
-	if nodeVersion := strings.TrimPrefix(strings.TrimSpace(os.Getenv("NODE_VERSION")), "v"); nodeVersion != "" {
-		return "gl-node/" + nodeVersion
-	}
 	return "gl-node/20.0.0"
 }
 

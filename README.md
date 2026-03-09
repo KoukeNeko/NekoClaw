@@ -112,24 +112,11 @@ OAuth client source:
 
 - Required: installed `gemini` CLI (NekoClaw extracts the OAuth client config from it)
 
-Runtime OAuth env:
+Runtime state:
 
-- `OPENCLAW_GEMINI_OAUTH_CALLBACK_HOST` (default: `127.0.0.1`)
-- `OPENCLAW_GEMINI_OAUTH_CALLBACK_PORT` (default: `8085`)
-- `NEKOCLAW_AUTH_DIR` (default: `~/.nekoclaw/auth`)
-- `NEKOCLAW_LOG_FILE` (optional; in `web` mode defaults to `~/.nekoclaw/logs/nekoclaw.log`)
-- `NEKOCLAW_LOG_STDERR=1` (optional; keep logs on terminal instead of redirecting to the log file)
-
-### Token from env (optional)
-
-```bash
-export GEMINI_INTERNAL_TOKEN="<oauth-access-token>"
-# or multiple:
-export GEMINI_INTERNAL_TOKENS="token1,token2"
-go run ./cmd/nekoclaw -mode web -provider google-gemini-cli -model gemini-3-pro-preview
-```
-
-Token-only Gemini usage does not support project injection via env. It must succeed via project discovery or existing stored metadata.
+- OAuth state defaults to `~/.nekoclaw/auth`
+- Web mode logs default to `~/.nekoclaw/logs/nekoclaw.log`
+- Callback host/port default to `127.0.0.1:8085` unless overridden by CLI flags
 
 ## Google AI Studio Provider
 
@@ -153,13 +140,7 @@ API endpoints:
 - `POST /v1/auth/ai-studio/delete`
 - `GET /v1/ai-studio/models`
 
-Env credential loading (optional):
-
-- `GEMINI_API_KEY` / `GOOGLE_API_KEY`
-- `GEMINI_API_KEYS` / `GOOGLE_API_KEYS` (CSV)
-- `GEMINI_API_KEY_*`
-- `GOOGLE_API_KEY_*`
-- `GOOGLE_AI_STUDIO_BASE_URL` (optional override)
+Credentials are managed through Web UI Settings > Auth and persisted in the auth store.
 
 ## Anthropic Provider (Claude setup-token / API key / browser login)
 
@@ -192,15 +173,7 @@ API endpoints:
 - `POST /v1/auth/anthropic/browser/cancel`
 - `GET /v1/auth/anthropic/browser/jobs/<job_id>`
 
-Env credential loading (optional):
-
-- `ANTHROPIC_OAUTH_TOKEN` / `ANTHROPIC_SETUP_TOKEN`
-- `ANTHROPIC_OAUTH_TOKENS` (CSV)
-- `ANTHROPIC_OAUTH_TOKEN_*`
-- `ANTHROPIC_API_KEY`
-- `ANTHROPIC_API_KEYS` (CSV)
-- `ANTHROPIC_API_KEY_*`
-- `ANTHROPIC_BASE_URL` (default `https://api.anthropic.com`)
+Credentials are managed through Web UI Settings > Auth and persisted in the auth store.
 
 ## OpenAI / OpenAI Codex Providers
 
@@ -215,7 +188,7 @@ OpenClaw-aligned runtime behavior:
   - `openai` -> `gpt-5.1-codex`
   - `openai-codex` -> `gpt-5.3-codex`
 - `openai` and `openai-codex` credentials are not mixed.
-- if `provider=openai` has no API key but `openai-codex` OAuth exists, chat returns a clear guardrail error (use `openai-codex/...` or set `OPENAI_API_KEY`).
+- if `provider=openai` has no API key but `openai-codex` OAuth exists, chat returns a clear guardrail error (use `openai-codex/...` or add an OpenAI API key in Web UI Settings > Auth).
 
 Web UI flow (Settings -> Auth):
 
@@ -241,22 +214,7 @@ API endpoints:
 - `POST /v1/auth/openai/delete`
 - `POST /v1/auth/openai-codex/delete`
 
-Env credential loading (optional):
-
-- OpenAI API key:
-  - `OPENAI_API_KEY`
-  - `OPENAI_API_KEYS` (CSV)
-  - `OPENAI_API_KEY_*`
-- OpenAI Codex OAuth token:
-  - `OPENAI_OAUTH_TOKEN`
-  - `OPENAI_OAUTH_TOKENS` (CSV)
-  - `OPENAI_OAUTH_TOKEN_*`
-  - `OPENAI_CODEX_OAUTH_TOKEN`
-  - `OPENAI_CODEX_OAUTH_TOKENS` (CSV)
-  - `OPENAI_CODEX_OAUTH_TOKEN_*`
-- Base URL:
-  - `OPENAI_BASE_URL` (default `https://api.openai.com/v1`)
-  - `OPENAI_CODEX_BASE_URL` (optional override for `openai-codex`)
+Credentials are managed through Web UI Settings > Auth and persisted in the auth store.
 
 ## Accounts File (optional)
 
@@ -297,9 +255,9 @@ NekoClaw includes a built-in Discord bot that runs alongside all modes (`api` / 
 
 ### Configuration
 
-Set via environment variable or Web UI Settings > Discord:
+Set via Web UI Settings > Discord:
 
-- `DISCORD_BOT_TOKEN` — Bot token (env takes precedence over config.json)
+- **Bot Token** — persisted in `config.json`
 
 Web UI settings also support:
 
@@ -335,9 +293,9 @@ NekoClaw includes a built-in Telegram bot using long polling and runs alongside 
 
 ### Configuration
 
-Set via environment variable or Web UI Settings > Telegram:
+Set via Web UI Settings > Telegram:
 
-- `TELEGRAM_BOT_TOKEN` — Bot token (env takes precedence over config.json)
+- **Bot Token** — persisted in `config.json`
 
 ### Bot Commands
 
@@ -375,7 +333,7 @@ NekoClaw includes a persistent memory system that gives the LLM long-term contex
 └── search.db        # SQLite FTS5 full-text search index
 ```
 
-Override path: `--memory-dir` flag or `NEKOCLAW_MEMORY_DIR` env.
+Override path: `--memory-dir` flag.
 
 ### How It Works
 

@@ -150,18 +150,11 @@ func loadOpenAICodexAccessTokenFromAuthFile() (string, error) {
 }
 
 func openAICodexAuthFilePath() (string, error) {
-	if custom := strings.TrimSpace(os.Getenv("OPENAI_CODEX_AUTH_FILE")); custom != "" {
-		return custom, nil
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
 	}
-	home := strings.TrimSpace(os.Getenv("CODEX_HOME"))
-	if home == "" {
-		resolvedHome, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		home = filepath.Join(resolvedHome, ".codex")
-	}
-	return filepath.Join(home, "auth.json"), nil
+	return filepath.Join(home, ".codex", "auth.json"), nil
 }
 
 func anyToString(value any) string {

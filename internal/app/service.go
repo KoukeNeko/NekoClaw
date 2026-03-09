@@ -3946,7 +3946,7 @@ func (s *Service) inferOpenAIMissingAPIKey(providerID string, pool *core.Account
 		return nil
 	}
 	return fmt.Errorf(
-		`No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.3-codex (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.1-codex.`,
+		`No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.3-codex (OAuth) or add an OpenAI API key in Settings > Auth to use openai/gpt-5.1-codex.`,
 	)
 }
 
