@@ -5,10 +5,7 @@
 - API 服務可由本機存取（預設 `127.0.0.1:8085`）
 - callback 預設 `http://localhost:8085/oauth2callback`
 - OAuth client 預設從已安裝的 `gemini` CLI 讀取
-- 如需暫時覆蓋，仍可使用 deprecated fallback：
-  - `OPENCLAW_GEMINI_OAUTH_CLIENT_ID`
-  - `OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET`
-  - 或相容別名 `GEMINI_CLI_OAUTH_CLIENT_ID` / `GEMINI_CLI_OAUTH_CLIENT_SECRET`
+- 容器或主機必須可執行 `gemini`
 
 ## 2) Loopback 流程（預設）
 

@@ -68,9 +68,7 @@ func writeFakeGeminiCLI(t *testing.T, clientID, clientSecret string) string {
 	return binDir
 }
 
-func TestResolveOAuthClientConfigPrefersGeminiCLIOverEnv(t *testing.T) {
-	t.Setenv("OPENCLAW_GEMINI_OAUTH_CLIENT_ID", "111111111111-env.apps.googleusercontent.com")
-	t.Setenv("OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET", "GOCSPX-env-secret")
+func TestResolveOAuthClientConfigLoadsGeminiCLI(t *testing.T) {
 	binDir := writeFakeGeminiCLI(
 		t,
 		"222222222222-cli.apps.googleusercontent.com",
@@ -94,9 +92,12 @@ func TestResolveOAuthClientConfigPrefersGeminiCLIOverEnv(t *testing.T) {
 }
 
 func TestCompleteOAuthFailsWhenLoadCodeAssistUnavailable(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-	t.Setenv("OPENCLAW_GEMINI_OAUTH_CLIENT_ID", "test-client-id")
-	t.Setenv("OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET", "test-client-secret")
+	binDir := writeFakeGeminiCLI(
+		t,
+		"123456789012-cli.apps.googleusercontent.com",
+		"GOCSPX-cli-secret",
+	)
+	t.Setenv("PATH", binDir)
 
 	resetOAuthClientConfigCache()
 	t.Cleanup(resetOAuthClientConfigCache)
@@ -137,9 +138,12 @@ func TestCompleteOAuthFailsWhenLoadCodeAssistUnavailable(t *testing.T) {
 }
 
 func TestCompleteOAuthAllowsSecurityPolicyPathWithEnvProject(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-	t.Setenv("OPENCLAW_GEMINI_OAUTH_CLIENT_ID", "test-client-id")
-	t.Setenv("OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET", "test-client-secret")
+	binDir := writeFakeGeminiCLI(
+		t,
+		"123456789012-cli.apps.googleusercontent.com",
+		"GOCSPX-cli-secret",
+	)
+	t.Setenv("PATH", binDir)
 	t.Setenv("GOOGLE_CLOUD_PROJECT", "env-project-1")
 
 	resetOAuthClientConfigCache()

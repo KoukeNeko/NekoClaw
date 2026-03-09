@@ -110,9 +110,7 @@ API endpoints:
 
 OAuth client source:
 
-- Preferred: installed `gemini` CLI (NekoClaw extracts the OAuth client config from it)
-- Deprecated fallback: `OPENCLAW_GEMINI_OAUTH_CLIENT_ID` / `OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET`
-- Deprecated compatibility aliases: `GEMINI_CLI_OAUTH_CLIENT_ID` / `GEMINI_CLI_OAUTH_CLIENT_SECRET`
+- Required: installed `gemini` CLI (NekoClaw extracts the OAuth client config from it)
 
 Runtime OAuth env:
 
