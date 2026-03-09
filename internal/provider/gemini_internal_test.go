@@ -49,8 +49,7 @@ func TestDiscoverProjectEndpointFallback(t *testing.T) {
 	}
 }
 
-func TestDiscoverProjectSecurityPolicyUsesEnvProject(t *testing.T) {
-	t.Setenv("GOOGLE_CLOUD_PROJECT", "proj-lro")
+func TestDiscoverProjectSecurityPolicyRequiresProvisionedProject(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1internal:loadCodeAssist":
@@ -71,17 +70,14 @@ func TestDiscoverProjectSecurityPolicyUsesEnvProject(t *testing.T) {
 	p := NewGeminiInternalProvider(GeminiInternalOptions{
 		Endpoints: []string{srv.URL},
 	})
-	result, err := p.DiscoverProject(context.Background(), DiscoverProjectRequest{
+	_, err := p.DiscoverProject(context.Background(), DiscoverProjectRequest{
 		Token: "test-token",
 	})
-	if err != nil {
-		t.Fatalf("discover project failed: %v", err)
+	if err == nil {
+		t.Fatalf("expected missing provisioned project error")
 	}
-	if result.ProjectID != "proj-lro" {
-		t.Fatalf("expected proj-lro, got %q", result.ProjectID)
-	}
-	if result.ActiveEndpoint != srv.URL {
-		t.Fatalf("expected active endpoint %q, got %q", srv.URL, result.ActiveEndpoint)
+	if !strings.Contains(err.Error(), "provisioned Google Cloud project") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -106,7 +102,7 @@ func TestDiscoverProjectRequiresProjectForNonFreeTier(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected non-free tier project error")
 	}
-	if !strings.Contains(err.Error(), "GOOGLE_CLOUD_PROJECT") {
+	if !strings.Contains(err.Error(), "provisioned Google Cloud project") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -240,9 +236,7 @@ func TestDiscoverProjectRetriesWithFallbackPlatformWhenPrimaryRejected(t *testin
 	}
 }
 
-func TestDiscoverProjectFallsBackToEnvProjectWhenAllLoadEndpointsFail(t *testing.T) {
-	t.Setenv("GOOGLE_CLOUD_PROJECT", "env-project-fallback")
-
+func TestDiscoverProjectFailsWhenAllLoadEndpointsFail(t *testing.T) {
 	failA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1internal:loadCodeAssist" {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -266,17 +260,14 @@ func TestDiscoverProjectFallsBackToEnvProjectWhenAllLoadEndpointsFail(t *testing
 	p := NewGeminiInternalProvider(GeminiInternalOptions{
 		Endpoints: []string{failA.URL, failB.URL},
 	})
-	result, err := p.DiscoverProject(context.Background(), DiscoverProjectRequest{
+	_, err := p.DiscoverProject(context.Background(), DiscoverProjectRequest{
 		Token: "test-token",
 	})
-	if err != nil {
-		t.Fatalf("discover project failed: %v", err)
+	if err == nil {
+		t.Fatalf("expected endpoint failure")
 	}
-	if result.ProjectID != "env-project-fallback" {
-		t.Fatalf("expected env fallback project, got %q", result.ProjectID)
-	}
-	if result.ActiveEndpoint != "" {
-		t.Fatalf("expected empty active endpoint for env fallback, got %q", result.ActiveEndpoint)
+	if !strings.Contains(err.Error(), "loadCodeAssist failed on all configured endpoints") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -301,9 +292,9 @@ func TestDiscoverProjectUsesLegacyTierWhenAllowedTierHasNoDefault(t *testing.T) 
 		Token: "test-token",
 	})
 	if err == nil {
-		t.Fatalf("expected project env requirement error")
+		t.Fatalf("expected provisioned project requirement error")
 	}
-	if !strings.Contains(err.Error(), "GOOGLE_CLOUD_PROJECT") {
+	if !strings.Contains(err.Error(), "provisioned Google Cloud project") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

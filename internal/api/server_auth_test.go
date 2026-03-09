@@ -206,6 +206,8 @@ func TestGeminiOAuthManualCompleteProjectDiscoveryFailure(t *testing.T) {
 }
 
 func TestChatMissingProjectReturnsStructuredError(t *testing.T) {
+	t.Setenv("GOOGLE_CLOUD_PROJECT", "still-ignored")
+
 	provider := &fakeGeminiProviderWithCounter{}
 	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterProvider(provider)
@@ -281,6 +283,8 @@ func TestChatMissingProjectAutoDiscoversLikeOpenClaw(t *testing.T) {
 }
 
 func TestGeminiAuthProfilesIncludesProjectReadiness(t *testing.T) {
+	t.Setenv("GOOGLE_CLOUD_PROJECT", "still-ignored")
+
 	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterProvider(fakeGeminiProvider{})
 	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
@@ -334,6 +338,8 @@ func TestGeminiAuthProfilesIncludesProjectReadiness(t *testing.T) {
 }
 
 func TestChatNoAvailableGeminiProfilesWithMissingProjectReturnsStructuredError(t *testing.T) {
+	t.Setenv("GOOGLE_CLOUD_PROJECT", "still-ignored")
+
 	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterProvider(fakeGeminiProvider{})
 	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))

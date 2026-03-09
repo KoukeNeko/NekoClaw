@@ -137,14 +137,13 @@ func TestCompleteOAuthFailsWhenLoadCodeAssistUnavailable(t *testing.T) {
 	}
 }
 
-func TestCompleteOAuthAllowsSecurityPolicyPathWithEnvProject(t *testing.T) {
+func TestCompleteOAuthFailsWhenSecurityPolicyNeedsProvisionedProject(t *testing.T) {
 	binDir := writeFakeGeminiCLI(
 		t,
 		"123456789012-cli.apps.googleusercontent.com",
 		"GOCSPX-cli-secret",
 	)
 	t.Setenv("PATH", binDir)
-	t.Setenv("GOOGLE_CLOUD_PROJECT", "env-project-1")
 
 	resetOAuthClientConfigCache()
 	t.Cleanup(resetOAuthClientConfigCache)
@@ -169,20 +168,20 @@ func TestCompleteOAuthAllowsSecurityPolicyPathWithEnvProject(t *testing.T) {
 		HTTPClient: client,
 	})
 
-	credential, err := p.CompleteOAuth(context.Background(), OAuthCompleteRequest{
+	_, err := p.CompleteOAuth(context.Background(), OAuthCompleteRequest{
 		Code:               "code-1",
 		Verifier:           "verifier-1",
 		RedirectURI:        "http://localhost:8085/oauth2callback",
 		EndpointPreference: "",
 		ProjectID:          "",
 	})
-	if err != nil {
-		t.Fatalf("complete oauth failed: %v", err)
+	if err == nil {
+		t.Fatalf("expected project discovery failure")
 	}
-	if credential.ProjectID != "env-project-1" {
-		t.Fatalf("unexpected project id: %q", credential.ProjectID)
+	if !errors.Is(err, ErrProjectDiscoveryFailed) {
+		t.Fatalf("expected project discovery failure, got: %v", err)
 	}
-	if credential.ActiveEndpoint != "https://endpoint-a.test" {
-		t.Fatalf("unexpected active endpoint: %q", credential.ActiveEndpoint)
+	if !strings.Contains(err.Error(), "provision") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

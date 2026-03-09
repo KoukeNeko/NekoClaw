@@ -329,7 +329,7 @@ func (s *Server) handleDiscordEvent(w http.ResponseWriter, r *http.Request) {
 			respondJSON(w, http.StatusOK, map[string]any{
 				"session_id": sessionID,
 				"provider":   providerID,
-				"reply":      "Gemini profiles 缺少 project_id。請重新 OAuth 或設定 GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_PROJECT_ID。",
+				"reply":      "Gemini profiles 缺少 project_id。請重新執行 Gemini OAuth，並確認 gemini CLI provisioning 已完成。",
 				"is_error":   true,
 			})
 			return
@@ -1512,7 +1512,7 @@ func respondGeminiProjectDiscoveryError(w http.ResponseWriter, err error) {
 		"project_discovery_failed",
 		chooseNonEmpty(
 			strings.TrimSpace(err.Error()),
-			"Could not discover or provision a Google Cloud project. Set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID, then retry OAuth.",
+			"Could not discover or provision a Google Cloud project. Re-run Gemini OAuth or ensure gemini CLI provisioning succeeded.",
 		),
 	)
 }

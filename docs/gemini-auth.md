@@ -44,10 +44,7 @@
 > 不再手動選 endpoint / project。  
 > endpoint 由系統自動 fallback；project 由 `loadCodeAssist/onboardUser` 自動決策。
 
-若帳號 tier 需要明確 project，請設定：
-
-- `GOOGLE_CLOUD_PROJECT`
-- 或 `GOOGLE_CLOUD_PROJECT_ID`
+若 profile 仍然缺少 project_id，請重新執行 Gemini OAuth，並確認 `gemini` CLI 端的 provisioning 已完成。
 
 ## 5) 儲存模型
 

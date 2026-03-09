@@ -130,7 +130,7 @@ func (p *GeminiInternalProvider) CompleteOAuth(ctx context.Context, req OAuthCom
 	}
 	if strings.TrimSpace(discovered.ProjectID) == "" {
 		return OAuthCredential{}, fmt.Errorf(
-			"%w: Could not discover or provision a Google Cloud project. Set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID, then retry OAuth.",
+			"%w: Could not discover or provision a Google Cloud project. Re-run Gemini OAuth or ensure gemini CLI provisioning succeeded.",
 			ErrProjectDiscoveryFailed,
 		)
 	}

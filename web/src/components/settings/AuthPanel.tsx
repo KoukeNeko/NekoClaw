@@ -1826,8 +1826,8 @@ export function AuthPanel() {
                         {!selectedGemini.project_ready && (
                           <div className="alert alert-warning">
                             <span>
-                              這個 profile 的 project 尚未準備完成，必要時請確認
-                              `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_PROJECT_ID`。
+                              這個 profile 的 project 尚未準備完成。請重新執行 Gemini
+                              OAuth，並確認 gemini CLI provisioning 已完成。
                             </span>
                           </div>
                         )}

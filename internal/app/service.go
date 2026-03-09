@@ -1078,7 +1078,6 @@ func (s *Service) ListGeminiProfiles() ([]GeminiProfileStatus, error) {
 
 	result := make([]GeminiProfileStatus, 0, len(profiles))
 	now := time.Now()
-	envProject := resolveGoogleCloudProject()
 	for _, profile := range profiles {
 		status := GeminiProfileStatus{
 			ProfileID: profile.ProfileID,
@@ -1114,7 +1113,7 @@ func (s *Service) ListGeminiProfiles() ([]GeminiProfileStatus, error) {
 			status.Available = (profile.CooldownUntil.IsZero() || now.After(profile.CooldownUntil)) &&
 				(profile.DisabledUntil.IsZero() || now.After(profile.DisabledUntil))
 		}
-		status.ProjectReady = strings.TrimSpace(status.ProjectID) != "" || envProject != ""
+		status.ProjectReady = strings.TrimSpace(status.ProjectID) != ""
 		if !status.ProjectReady {
 			status.UnavailableReason = "missing_project"
 			status.Available = false
@@ -1140,9 +1139,9 @@ func (s *Service) UseGeminiProfile(profileID string) error {
 	if profile.ProfileID == "" {
 		return auth.ErrProfileNotFound
 	}
-	if strings.TrimSpace(profile.ProjectID) == "" && resolveGoogleCloudProject() == "" {
+	if strings.TrimSpace(profile.ProjectID) == "" {
 		return fmt.Errorf(
-			"%w: profile=%s. Re-run Gemini OAuth or set GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_PROJECT_ID.",
+			"%w: profile=%s. Re-run Gemini OAuth or ensure gemini CLI provisioning succeeded.",
 			ErrGeminiMissingProject,
 			profileID,
 		)
@@ -3398,7 +3397,7 @@ func (s *Service) completeGeminiOAuth(
 	credential.ProjectID = strings.TrimSpace(credential.ProjectID)
 	if credential.ProjectID == "" {
 		err := fmt.Errorf(
-			"%w: Could not discover or provision a Google Cloud project. Set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID, then retry OAuth.",
+			"%w: Could not discover or provision a Google Cloud project. Re-run Gemini OAuth or ensure gemini CLI provisioning succeeded.",
 			provider.ErrProjectDiscoveryFailed,
 		)
 		logService.Errorf("project discovery failed: provider=google-gemini-cli error=%q", err)
@@ -3622,17 +3621,10 @@ func (s *Service) ensureGeminiProject(
 	}
 	projectID := strings.TrimSpace(account.Metadata["project_id"])
 	if projectID == "" {
-		if envProject := resolveGoogleCloudProject(); envProject != "" {
-			projectID = envProject
-			account.Metadata["project_id"] = envProject
-		}
-	}
-
-	if projectID == "" {
 		discoveryProvider, ok := prov.(geminiProjectDiscoveryProvider)
 		if !ok {
 			return account, fmt.Errorf(
-				"%w: profile=%s. Re-run Gemini OAuth or set GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_PROJECT_ID.",
+				"%w: profile=%s. Re-run Gemini OAuth or ensure gemini CLI provisioning succeeded.",
 				ErrGeminiMissingProject,
 				account.ID,
 			)
@@ -3647,7 +3639,7 @@ func (s *Service) ensureGeminiProject(
 				err,
 			)
 			return account, fmt.Errorf(
-				"%w: profile=%s. %v. Re-run Gemini OAuth or set GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_PROJECT_ID.",
+				"%w: profile=%s. %v. Re-run Gemini OAuth or ensure gemini CLI provisioning succeeded.",
 				ErrGeminiMissingProject,
 				account.ID,
 				err,
@@ -3665,7 +3657,7 @@ func (s *Service) ensureGeminiProject(
 	projectID = strings.TrimSpace(account.Metadata["project_id"])
 	if projectID == "" {
 		return account, fmt.Errorf(
-			"%w: profile=%s. Re-run Gemini OAuth or set GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_PROJECT_ID.",
+			"%w: profile=%s. Re-run Gemini OAuth or ensure gemini CLI provisioning succeeded.",
 			ErrGeminiMissingProject,
 			account.ID,
 		)
@@ -3881,9 +3873,6 @@ func (s *Service) inferGeminiMissingProjectFromPool(
 	if providerID != "google-gemini-cli" || reason != core.FailureUnknown {
 		return nil
 	}
-	if resolveGoogleCloudProject() != "" {
-		return nil
-	}
 	if pool != nil && len(pool.Snapshot()) > 0 {
 		return nil
 	}
@@ -3906,7 +3895,7 @@ func (s *Service) inferGeminiMissingProjectFromPool(
 	}
 	if readyCount == 0 && missingCount > 0 {
 		return fmt.Errorf(
-			"%w: all gemini profiles are missing project_id. Re-run Gemini OAuth or set GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_PROJECT_ID.",
+			"%w: all gemini profiles are missing project_id. Re-run Gemini OAuth or ensure gemini CLI provisioning succeeded.",
 			ErrGeminiMissingProject,
 		)
 	}
@@ -3936,16 +3925,6 @@ func (s *Service) inferOpenAIMissingAPIKey(providerID string, pool *core.Account
 	return fmt.Errorf(
 		`No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.3-codex (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.1-codex.`,
 	)
-}
-
-func resolveGoogleCloudProject() string {
-	if project := strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT")); project != "" {
-		return project
-	}
-	if project := strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT_ID")); project != "" {
-		return project
-	}
-	return ""
 }
 
 func hashProjectIDForLog(projectID string) string {

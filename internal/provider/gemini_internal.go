@@ -777,7 +777,6 @@ func (p *GeminiInternalProvider) DiscoverProject(
 		return DiscoverProjectResult{}, fmt.Errorf("token is required")
 	}
 
-	projectIDFromEnv := resolveGoogleCloudProject()
 	endpointOrder := append([]string(nil), p.endpoints...)
 	if len(endpointOrder) == 0 {
 		endpointOrder = []string{defaultGeminiProdEndpoint, defaultGeminiDailyEndpoint, defaultGeminiAutoEndpoint}
@@ -801,12 +800,6 @@ func (p *GeminiInternalProvider) DiscoverProject(
 				"pluginType": "GEMINI",
 			},
 		}
-		if projectIDFromEnv != "" {
-			loadBody["cloudaicompanionProject"] = projectIDFromEnv
-			loadMeta, _ := loadBody["metadata"].(map[string]any)
-			loadMeta["duetProject"] = projectIDFromEnv
-		}
-
 		activeEndpoint = ""
 		loadData = nil
 		loadErr = nil
@@ -845,12 +838,6 @@ func (p *GeminiInternalProvider) DiscoverProject(
 	}
 
 	if activeEndpoint == "" {
-		if projectIDFromEnv != "" {
-			return DiscoverProjectResult{
-				ProjectID:      projectIDFromEnv,
-				ActiveEndpoint: "",
-			}, nil
-		}
 		if loadErr != nil {
 			return DiscoverProjectResult{}, fmt.Errorf("loadCodeAssist failed on all configured endpoints: %w", loadErr)
 		}
@@ -864,24 +851,17 @@ func (p *GeminiInternalProvider) DiscoverProject(
 
 	tier := extractTierID(loadData)
 	if hasCurrentTier(loadData) {
-		if projectIDFromEnv != "" {
-			return DiscoverProjectResult{
-				ProjectID:      projectIDFromEnv,
-				ActiveEndpoint: activeEndpoint,
-				TierID:         tier,
-			}, nil
-		}
 		return DiscoverProjectResult{}, fmt.Errorf(
-			"This account requires GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID to be set.",
+			"This account requires a provisioned Google Cloud project. Re-run Gemini OAuth or ensure gemini CLI provisioning succeeded.",
 		)
 	}
 
 	if tier == "" {
 		tier = tierLegacy
 	}
-	if tier != tierFree && projectIDFromEnv == "" {
+	if tier != tierFree {
 		return DiscoverProjectResult{}, fmt.Errorf(
-			"This account requires GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID to be set.",
+			"This account requires a provisioned Google Cloud project. Re-run Gemini OAuth or ensure gemini CLI provisioning succeeded.",
 		)
 	}
 
@@ -893,10 +873,6 @@ func (p *GeminiInternalProvider) DiscoverProject(
 	onboardBody := map[string]any{
 		"tierId":   tier,
 		"metadata": onboardMetadata,
-	}
-	if tier != tierFree && projectIDFromEnv != "" {
-		onboardBody["cloudaicompanionProject"] = projectIDFromEnv
-		onboardMetadata["duetProject"] = projectIDFromEnv
 	}
 	payload, status, err := p.postJSON(
 		ctx,
@@ -922,11 +898,8 @@ func (p *GeminiInternalProvider) DiscoverProject(
 			return DiscoverProjectResult{ProjectID: projectID, ActiveEndpoint: activeEndpoint, TierID: tier}, nil
 		}
 	}
-	if projectIDFromEnv != "" {
-		return DiscoverProjectResult{ProjectID: projectIDFromEnv, ActiveEndpoint: activeEndpoint, TierID: tier}, nil
-	}
 	return DiscoverProjectResult{}, fmt.Errorf(
-		"Could not discover or provision a Google Cloud project. Set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID.",
+		"Could not discover or provision a Google Cloud project. Re-run Gemini OAuth or ensure gemini CLI provisioning succeeded.",
 	)
 }
 
@@ -1458,16 +1431,6 @@ func hasCurrentTier(payload map[string]any) bool {
 	}
 	_, ok := payload["currentTier"]
 	return ok
-}
-
-func resolveGoogleCloudProject() string {
-	if project := strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT")); project != "" {
-		return project
-	}
-	if project := strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT_ID")); project != "" {
-		return project
-	}
-	return ""
 }
 
 func resolveGoogleAPIClientHeader() string {

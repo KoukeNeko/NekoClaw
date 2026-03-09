@@ -83,7 +83,7 @@ Gemini OAuth flow supports:
 - manual fallback (paste callback URL or code)
 - PKCE/state verification
 - endpoint auto selection (`cloudcode-pa` -> `daily` -> `autopush`)
-- project auto discovery via `loadCodeAssist/onboardUser` (tier needs may require `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID`)
+- project auto discovery via `loadCodeAssist/onboardUser` (if provisioning fails, re-run Gemini OAuth and confirm gemini CLI provisioning succeeded)
 - token persistence: OS keychain + metadata JSON (no plaintext token in repo)
 
 Web UI flow (Settings -> Auth):
@@ -126,9 +126,10 @@ Runtime OAuth env:
 export GEMINI_INTERNAL_TOKEN="<oauth-access-token>"
 # or multiple:
 export GEMINI_INTERNAL_TOKENS="token1,token2"
-export GEMINI_INTERNAL_PROJECT_ID="my-gcp-project"
 go run ./cmd/nekoclaw -mode web -provider google-gemini-cli -model gemini-3-pro-preview
 ```
+
+Token-only Gemini usage does not support project injection via env. It must succeed via project discovery or existing stored metadata.
 
 ## Google AI Studio Provider
 
