@@ -12,6 +12,7 @@ import { ToolsPanel } from "./ToolsPanel";
 import { MemoryPanel } from "./MemoryPanel";
 import { MCPPanel } from "./MCPPanel";
 import { UsagePanel } from "./UsagePanel";
+import { ConsolePanel } from "./ConsolePanel";
 
 /**
  * Settings page — daisyUI tabs (official radio + tab-content pattern).
@@ -36,6 +37,7 @@ const TABS: TabDef[] = [
   { route: "settings/discord", label: "Discord" },
   { route: "settings/telegram", label: "Telegram" },
   { route: "settings/tools", label: "工具" },
+  { route: "settings/console", label: "Console" },
 ];
 
 /** Resolve active route to the corresponding panel component. */
@@ -65,6 +67,8 @@ function renderPanel(route: Route) {
       return <TelegramPanel />;
     case "settings/tools":
       return <ToolsPanel />;
+    case "settings/console":
+      return <ConsolePanel />;
     default: {
       const label = TABS.find((t) => t.route === route)?.label ?? "";
       return <PlaceholderPanel name={label} />;

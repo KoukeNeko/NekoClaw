@@ -48,7 +48,8 @@ export type Route =
   | "settings/mcp"
   | "settings/discord"
   | "settings/telegram"
-  | "settings/tools";
+  | "settings/tools"
+  | "settings/console";
 
 // ---------------------------------------------------------------------------
 // Store shape

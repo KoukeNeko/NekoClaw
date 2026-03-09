@@ -369,7 +369,7 @@ func TestExtractToolCallsFromGeminiResponse_InvalidJSON(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBuildGeminiGenerationConfig_Nil(t *testing.T) {
-	result := buildGeminiGenerationConfig(nil)
+	result := buildGeminiGenerationConfig("gemini-2.5-pro", nil)
 	if result != nil {
 		t.Errorf("expected nil, got %v", result)
 	}
@@ -378,8 +378,15 @@ func TestBuildGeminiGenerationConfig_Nil(t *testing.T) {
 func TestBuildGeminiGenerationConfig_WithValues(t *testing.T) {
 	temp := 0.7
 	topP := 0.9
-	gen := &GenerationParams{Temperature: &temp, TopP: &topP}
-	result := buildGeminiGenerationConfig(gen)
+	freq := 0.3
+	pres := 0.2
+	gen := &GenerationParams{
+		Temperature:      &temp,
+		TopP:             &topP,
+		FrequencyPenalty: &freq,
+		PresencePenalty:  &pres,
+	}
+	result := buildGeminiGenerationConfig("gemini-2.5-pro", gen)
 	if result == nil {
 		t.Fatal("expected non-nil config")
 	}
@@ -389,11 +396,46 @@ func TestBuildGeminiGenerationConfig_WithValues(t *testing.T) {
 	if result["topP"] != 0.9 {
 		t.Errorf("expected topP 0.9, got %v", result["topP"])
 	}
+	if result["frequencyPenalty"] != 0.3 {
+		t.Errorf("expected frequencyPenalty 0.3, got %v", result["frequencyPenalty"])
+	}
+	if result["presencePenalty"] != 0.2 {
+		t.Errorf("expected presencePenalty 0.2, got %v", result["presencePenalty"])
+	}
+}
+
+func TestBuildGeminiGenerationConfig_OmitsPenaltyForFlashLiteModels(t *testing.T) {
+	temp := 0.7
+	topP := 0.9
+	freq := 0.3
+	pres := 0.2
+	gen := &GenerationParams{
+		Temperature:      &temp,
+		TopP:             &topP,
+		FrequencyPenalty: &freq,
+		PresencePenalty:  &pres,
+	}
+	result := buildGeminiGenerationConfig("models/gemini-3.1-flash-lite-preview", gen)
+	if result == nil {
+		t.Fatal("expected non-nil config")
+	}
+	if result["temperature"] != 0.7 {
+		t.Errorf("expected temperature 0.7, got %v", result["temperature"])
+	}
+	if result["topP"] != 0.9 {
+		t.Errorf("expected topP 0.9, got %v", result["topP"])
+	}
+	if _, ok := result["frequencyPenalty"]; ok {
+		t.Errorf("expected frequencyPenalty to be omitted, got %v", result["frequencyPenalty"])
+	}
+	if _, ok := result["presencePenalty"]; ok {
+		t.Errorf("expected presencePenalty to be omitted, got %v", result["presencePenalty"])
+	}
 }
 
 func TestBuildGeminiGenerationConfig_EmptyParams(t *testing.T) {
 	gen := &GenerationParams{}
-	result := buildGeminiGenerationConfig(gen)
+	result := buildGeminiGenerationConfig("gemini-2.5-pro", gen)
 	if result != nil {
 		t.Errorf("expected nil for empty params, got %v", result)
 	}

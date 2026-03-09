@@ -49,6 +49,10 @@ var (
 	// useColors controls whether ANSI color codes are emitted.
 	// Disabled automatically when output is redirected to a file.
 	useColors = true
+
+	liveMu           sync.RWMutex
+	liveSubscribers  = map[uint64]chan string{}
+	nextSubscriberID uint64
 )
 
 // SetOutput redirects all logger output to w.
@@ -66,6 +70,24 @@ func SetDiscordOutput(sender DiscordSender, channelID string) {
 	defer senderMu.Unlock()
 	discordSender = sender
 	logChannelID = channelID
+}
+
+// SubscribeLines returns a live stream of plain-text log lines.
+// The returned unsubscribe function removes the subscriber.
+func SubscribeLines() (<-chan string, func()) {
+	ch := make(chan string, 256)
+
+	liveMu.Lock()
+	nextSubscriberID++
+	id := nextSubscriberID
+	liveSubscribers[id] = ch
+	liveMu.Unlock()
+
+	return ch, func() {
+		liveMu.Lock()
+		delete(liveSubscribers, id)
+		liveMu.Unlock()
+	}
 }
 
 // Module is a lightweight logger that prints messages with a colored module prefix.
@@ -112,18 +134,31 @@ func (m *Module) writeLine(msg, msgColor string) {
 	colors := useColors
 	outputMu.RUnlock()
 
+	ts := time.Now()
+	plainLine, renderedLine := m.renderLine(ts, msg, msgColor, colors)
+	fmt.Fprintln(w, renderedLine)
+	broadcastLine(plainLine)
+}
+
+func (m *Module) renderLine(ts time.Time, msg, msgColor string, colors bool) (string, string) {
 	padded := m.name + strings.Repeat(" ", max(1, defaultWidth-len(m.name)))
+	plainLine := fmt.Sprintf("%s %s| %s", ts.Format("15:04:05"), padded, msg)
 	if colors {
 		if msgColor != "" {
-			fmt.Fprintf(w, "%s%s%s%s| %s%s%s\n", m.color, Bold, padded, Reset+Dim, Reset+msgColor, msg, Reset)
-		} else {
-			fmt.Fprintf(w, "%s%s%s%s| %s%s\n", m.color, Bold, padded, Reset+Dim, Reset, msg)
+			return plainLine, fmt.Sprintf(
+				"%s%s%s%s| %s%s%s",
+				m.color,
+				Bold,
+				padded,
+				Reset+Dim,
+				Reset+msgColor,
+				msg,
+				Reset,
+			)
 		}
-	} else {
-		// Plain text for file output — include timestamp for grep-ability.
-		ts := time.Now().Format("15:04:05")
-		fmt.Fprintf(w, "%s %s| %s\n", ts, padded, msg)
+		return plainLine, fmt.Sprintf("%s%s%s%s| %s%s", m.color, Bold, padded, Reset+Dim, Reset, msg)
 	}
+	return plainLine, plainLine
 }
 
 // sendToDiscord forwards log messages to Discord channel if configured.
@@ -180,4 +215,24 @@ func truncateDiscordContent(msg string, maxChars int) string {
 	}
 	keep := maxChars - len(suffix)
 	return string(runes[:keep]) + discordTruncateSuffix
+}
+
+func broadcastLine(line string) {
+	liveMu.RLock()
+	if len(liveSubscribers) == 0 {
+		liveMu.RUnlock()
+		return
+	}
+	subscribers := make([]chan string, 0, len(liveSubscribers))
+	for _, ch := range liveSubscribers {
+		subscribers = append(subscribers, ch)
+	}
+	liveMu.RUnlock()
+
+	for _, ch := range subscribers {
+		select {
+		case ch <- line:
+		default:
+		}
+	}
 }

@@ -38,6 +38,7 @@ const VALID_ROUTES: Route[] = [
   "settings/discord",
   "settings/telegram",
   "settings/tools",
+  "settings/console",
 ];
 
 function parseHash(): Route {

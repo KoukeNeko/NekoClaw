@@ -700,6 +700,30 @@ export interface ToolStatusResult {
 }
 
 // ---------------------------------------------------------------------------
+// Console stream
+// ---------------------------------------------------------------------------
+
+export interface ConsoleSnapshotEvent {
+  type: "snapshot";
+  log_path: string;
+  lines: string[];
+}
+
+export interface ConsoleAppendEvent {
+  type: "append";
+  line: string;
+}
+
+export interface ConsolePingEvent {
+  type: "ping";
+}
+
+export type ConsoleStreamEvent =
+  | ConsoleSnapshotEvent
+  | ConsoleAppendEvent
+  | ConsolePingEvent;
+
+// ---------------------------------------------------------------------------
 // Browser security
 // ---------------------------------------------------------------------------
 

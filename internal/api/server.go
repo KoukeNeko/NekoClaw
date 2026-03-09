@@ -25,9 +25,10 @@ import (
 )
 
 type Server struct {
-	svc      *app.Service
-	webFS    fs.FS // embedded frontend assets (nil = no SPA serving)
-	security *security.Runtime
+	svc            *app.Service
+	webFS          fs.FS // embedded frontend assets (nil = no SPA serving)
+	security       *security.Runtime
+	consoleLogPath string
 }
 
 func NewServer(svc *app.Service) *Server {
@@ -42,6 +43,10 @@ func (s *Server) SetWebFS(webFS fs.FS) {
 
 func (s *Server) SetSecurityRuntime(runtime *security.Runtime) {
 	s.security = runtime
+}
+
+func (s *Server) SetConsoleLogPath(path string) {
+	s.consoleLogPath = strings.TrimSpace(path)
 }
 
 func (s *Server) Handler() http.Handler {
@@ -120,6 +125,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/personas/clear", s.handlePersonaClear)
 	mux.HandleFunc("/v1/personas/reload", s.handlePersonaReload)
 	mux.HandleFunc("/v1/tool-status", s.handleToolStatus)
+	mux.HandleFunc("/v1/console/stream", s.handleConsoleStream)
 	mux.HandleFunc("/v1/backups", s.handleBackups)
 	mux.HandleFunc("/v1/backups/create", s.handleBackupsCreate)
 	mux.HandleFunc("/v1/backups/import", s.handleBackupsImport)

@@ -161,7 +161,7 @@ func (p *GeminiInternalProvider) GenerateToolTurn(ctx context.Context, req ToolT
 			"parts": []map[string]any{{"text": systemInstruction}},
 		}
 	}
-	if genConfig := buildGeminiGenerationConfig(req.Generation); genConfig != nil {
+	if genConfig := buildGeminiGenerationConfig(modelID, req.Generation); genConfig != nil {
 		requestBody["generationConfig"] = genConfig
 	}
 
@@ -407,23 +407,8 @@ func (p *GeminiInternalProvider) Generate(ctx context.Context, req GenerateReque
 	requestBody := map[string]any{
 		"contents": toGeminiContents(req.Messages),
 	}
-	if req.Generation != nil {
-		genConfig := map[string]any{}
-		if req.Generation.Temperature != nil {
-			genConfig["temperature"] = *req.Generation.Temperature
-		}
-		if req.Generation.TopP != nil {
-			genConfig["topP"] = *req.Generation.TopP
-		}
-		if req.Generation.FrequencyPenalty != nil {
-			genConfig["frequencyPenalty"] = *req.Generation.FrequencyPenalty
-		}
-		if req.Generation.PresencePenalty != nil {
-			genConfig["presencePenalty"] = *req.Generation.PresencePenalty
-		}
-		if len(genConfig) > 0 {
-			requestBody["generationConfig"] = genConfig
-		}
+	if genConfig := buildGeminiGenerationConfig(strings.TrimSpace(req.Model), req.Generation); genConfig != nil {
+		requestBody["generationConfig"] = genConfig
 	}
 	payload := map[string]any{
 		"model":   strings.TrimSpace(req.Model),
@@ -508,23 +493,8 @@ func (p *GeminiInternalProvider) GenerateStream(ctx context.Context, req Generat
 	requestBody := map[string]any{
 		"contents": toGeminiContents(req.Messages),
 	}
-	if req.Generation != nil {
-		genConfig := map[string]any{}
-		if req.Generation.Temperature != nil {
-			genConfig["temperature"] = *req.Generation.Temperature
-		}
-		if req.Generation.TopP != nil {
-			genConfig["topP"] = *req.Generation.TopP
-		}
-		if req.Generation.FrequencyPenalty != nil {
-			genConfig["frequencyPenalty"] = *req.Generation.FrequencyPenalty
-		}
-		if req.Generation.PresencePenalty != nil {
-			genConfig["presencePenalty"] = *req.Generation.PresencePenalty
-		}
-		if len(genConfig) > 0 {
-			requestBody["generationConfig"] = genConfig
-		}
+	if genConfig := buildGeminiGenerationConfig(strings.TrimSpace(req.Model), req.Generation); genConfig != nil {
+		requestBody["generationConfig"] = genConfig
 	}
 	payload := map[string]any{
 		"model":   strings.TrimSpace(req.Model),

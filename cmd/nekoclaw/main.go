@@ -173,6 +173,7 @@ func main() {
 		}
 
 		server := api.NewServer(service)
+		server.SetConsoleLogPath(resolveDefaultLogFilePath(*authDir))
 		securityRuntime, err := security.NewRuntime(security.RuntimeOptions{
 			BaseDir: *authDir,
 			Config:  service.GetSecurityConfig(),
@@ -192,11 +193,14 @@ func main() {
 				fatal(fmt.Errorf("issue setup token: %w", tokenErr))
 			}
 			if strings.TrimSpace(token) != "" {
-				fmt.Printf("NekoClaw admin setup URL: %s\n", buildSecuritySetupURL(*addr, token))
+				setupURL := buildSecuritySetupURL(*addr, token)
+				fmt.Printf("NekoClaw admin setup URL: %s\n", setupURL)
+				logSystem.Logf("admin setup url: %s", setupURL)
 			}
 		}
 
 		fmt.Printf("NekoClaw Web UI listening on http://%s\n", *addr)
+		logSystem.Logf("web ui listening: http://%s", *addr)
 		apiErr := server.Run(ctx, *addr)
 		cancel()
 		wg.Wait()

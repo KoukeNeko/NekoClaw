@@ -411,8 +411,9 @@ func extractToolCallsFromGeminiJSON(body []byte) geminiExtractResult {
 	}
 }
 
-// buildGeminiGenerationConfig creates a generationConfig map from GenerationParams.
-func buildGeminiGenerationConfig(gen *GenerationParams) map[string]any {
+// buildGeminiGenerationConfig creates a generationConfig map from
+// GenerationParams, omitting fields that the selected Gemini model rejects.
+func buildGeminiGenerationConfig(model string, gen *GenerationParams) map[string]any {
 	if gen == nil {
 		return nil
 	}
@@ -423,16 +424,28 @@ func buildGeminiGenerationConfig(gen *GenerationParams) map[string]any {
 	if gen.TopP != nil {
 		config["topP"] = *gen.TopP
 	}
-	if gen.FrequencyPenalty != nil {
-		config["frequencyPenalty"] = *gen.FrequencyPenalty
-	}
-	if gen.PresencePenalty != nil {
-		config["presencePenalty"] = *gen.PresencePenalty
+	if geminiModelSupportsPenalty(model) {
+		if gen.FrequencyPenalty != nil {
+			config["frequencyPenalty"] = *gen.FrequencyPenalty
+		}
+		if gen.PresencePenalty != nil {
+			config["presencePenalty"] = *gen.PresencePenalty
+		}
 	}
 	if len(config) == 0 {
 		return nil
 	}
 	return config
+}
+
+func geminiModelSupportsPenalty(model string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(model, "models/")))
+	if normalized == "" {
+		return true
+	}
+	// Flash-lite variants reject presence/frequency penalty fields outright
+	// with "Penalty is not enabled for this model".
+	return !strings.Contains(normalized, "flash-lite")
 }
 
 // ---------------------------------------------------------------------------
