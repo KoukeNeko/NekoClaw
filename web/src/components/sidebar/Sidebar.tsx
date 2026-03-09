@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { ApiError, logoutSecurity } from "@/api/client";
 import { useAppStore } from "@/store/appStore";
 import { SessionList } from "./SessionList";
 import { ThemeDropdown } from "./ThemeDropdown";
@@ -18,6 +20,11 @@ function closeSidebarOnMobile() {
 export function Sidebar() {
   const route = useAppStore((s) => s.route);
   const setRoute = useAppStore((s) => s.setRoute);
+  const securityStatus = useAppStore((s) => s.securityStatus);
+  const setSecurityStatus = useAppStore((s) => s.setSecurityStatus);
+  const resetForAuthBoundary = useAppStore((s) => s.resetForAuthBoundary);
+  const [logoutBusy, setLogoutBusy] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
 
   function handleNewChat() {
     const now = new Date();
@@ -33,6 +40,23 @@ export function Sidebar() {
   function handleNavSettings() {
     setRoute("settings/general");
     closeSidebarOnMobile();
+  }
+
+  async function handleLogout() {
+    if (logoutBusy) return;
+    setLogoutBusy(true);
+    setLogoutError("");
+    try {
+      const nextStatus = await logoutSecurity();
+      setSecurityStatus(nextStatus);
+      resetForAuthBoundary();
+      setRoute(nextStatus.auth_enabled ? "login" : "chat");
+      closeSidebarOnMobile();
+    } catch (caught) {
+      setLogoutError(caught instanceof ApiError ? caught.message : "登出失敗");
+    } finally {
+      setLogoutBusy(false);
+    }
   }
 
   return (
@@ -116,12 +140,55 @@ export function Sidebar() {
               <span className="is-drawer-close:hidden">設定</span>
             </button>
           </li>
+          {securityStatus?.auth_enabled ? (
+            <li>
+              <button
+                className="py-2.5 is-drawer-close:tooltip is-drawer-close:tooltip-right"
+                data-tip="登出"
+                onClick={() => void handleLogout()}
+                disabled={logoutBusy}
+              >
+                {logoutBusy ? (
+                  <span className="loading loading-spinner loading-xs shrink-0" />
+                ) : (
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    strokeWidth={1.75}
+                    stroke="currentColor"
+                    className="size-4 shrink-0"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6A2.25 2.25 0 0 0 5.25 5.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15"
+                    />
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M18 12H9.75m0 0 2.625-2.625M9.75 12l2.625 2.625"
+                    />
+                  </svg>
+                )}
+                <span className="is-drawer-close:hidden">登出</span>
+              </button>
+            </li>
+          ) : null}
         </ul>
 
         {/* Theme switcher */}
         <div className="px-2 mb-2 w-full">
           <ThemeDropdown />
         </div>
+
+        {logoutError ? (
+          <div className="px-2 pb-2 is-drawer-close:hidden">
+            <div className="alert alert-error py-2 text-xs">
+              <span>{logoutError}</span>
+            </div>
+          </div>
+        ) : null}
 
         {/* Keyboard shortcuts — hidden when collapsed */}
         <div className="px-4 pb-2 flex flex-wrap gap-1 text-[10px] text-base-content/30 is-drawer-close:hidden">
