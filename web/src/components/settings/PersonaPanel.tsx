@@ -6,6 +6,7 @@ import {
   reloadPersonas,
   usePersona,
 } from "@/api/client";
+import { SelectionList, SelectionListItem } from "@/components/settings/SelectionList";
 import type { PersonaInfo } from "@/api/types";
 import { useAppStore } from "@/store/appStore";
 
@@ -357,39 +358,38 @@ export function PersonaPanel() {
                 </div>
               </div>
             ) : (
-              <ul className="menu rounded-box border border-base-300 bg-base-100 p-2">
+              <SelectionList>
                 {filteredPersonas.map((persona) => {
                   const isActive = active?.dir_name === persona.dir_name;
                   const isSelected = selectedDirName === persona.dir_name;
                   return (
-                    <li key={persona.dir_name}>
-                      <button
-                        className={isSelected ? "active" : ""}
-                        onClick={() => setSelectedDirName(persona.dir_name)}
-                      >
-                        <div className="min-w-0 flex-1 text-left">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="truncate font-semibold">
-                              {persona.name}
+                    <SelectionListItem
+                      key={persona.dir_name}
+                      selected={isSelected}
+                      onClick={() => setSelectedDirName(persona.dir_name)}
+                    >
+                      <div className="min-w-0 flex-1 text-left">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="truncate font-semibold">
+                            {persona.name}
+                          </span>
+                          {isActive && (
+                            <span className="badge badge-primary badge-xs">
+                              Active
                             </span>
-                            {isActive && (
-                              <span className="badge badge-primary badge-xs">
-                                Active
-                              </span>
-                            )}
-                          </div>
-                          <div className="truncate text-xs font-mono text-base-content/45">
-                            {persona.dir_name}
-                          </div>
-                          <div className="truncate text-xs text-base-content/60">
-                            {persona.description || "沒有描述"}
-                          </div>
+                          )}
                         </div>
-                      </button>
-                    </li>
+                        <div className="truncate text-xs font-mono text-base-content/45">
+                          {persona.dir_name}
+                        </div>
+                        <div className="truncate text-xs text-base-content/60">
+                          {persona.description || "沒有描述"}
+                        </div>
+                      </div>
+                    </SelectionListItem>
                   );
                 })}
-              </ul>
+              </SelectionList>
             )}
           </div>
         </div>
