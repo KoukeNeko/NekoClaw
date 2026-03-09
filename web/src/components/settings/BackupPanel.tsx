@@ -9,8 +9,14 @@ import {
   restoreBackup,
 } from "@/api/client";
 import type { BackupEntry } from "@/api/types";
-import { SelectionList, SelectionListItem } from "@/components/settings/SelectionList";
+import {
+  SelectionList,
+  SelectionListItem,
+} from "@/components/settings/SelectionList";
 import { formatDateTime, formatRelativeTime } from "@/utils/format";
+
+const MIN_BACKUP_PASSWORD_LENGTH = 12;
+const GENERATED_PASSWORD_LENGTH = 24;
 
 type StatusTone = "success" | "error" | "info";
 type StatusState = { tone: StatusTone; message: string } | null;
@@ -28,17 +34,37 @@ type ImportErrorState = {
   code: string;
   message: string;
 };
-type ImportDialogState = {
-  file: File;
-  phase: ImportPhase;
-  imported: BackupEntry | null;
-  error: ImportErrorState | null;
-};
 type ImportStepStatus = "pending" | "active" | "done" | "error";
 type ImportStep = {
   title: string;
   detail: string;
   status: ImportStepStatus;
+};
+type CreateDialogState = {
+  mode: "manual" | "generated";
+  password: string;
+  confirmPassword: string;
+  generatedPassword: string;
+  copiedGeneratedPassword: boolean;
+  acknowledgedGeneratedPassword: boolean;
+  error: string | null;
+};
+type ImportPasswordDialogState = {
+  file: File;
+  password: string;
+  error: string | null;
+};
+type ImportDialogState = {
+  file: File;
+  password: string;
+  phase: ImportPhase;
+  imported: BackupEntry | null;
+  error: ImportErrorState | null;
+};
+type RestoreDialogState = {
+  backup: BackupEntry;
+  password: string;
+  error: string | null;
 };
 
 function sortBackups(backups: BackupEntry[]): BackupEntry[] {
@@ -61,6 +87,7 @@ function filterBackups(backups: BackupEntry[], query: string): BackupEntry[] {
       backup.backup_id,
       backup.source,
       backup.restore_mode,
+      backup.encryption,
       ...backup.components.map((component) => component.label),
     ].some((value) => value.toLowerCase().includes(needle)),
   );
@@ -83,6 +110,18 @@ function sourceBadgeClass(source: BackupEntry["source"]): string {
 
 function sourceLabel(source: BackupEntry["source"]): string {
   return source === "imported" ? "匯入" : "建立";
+}
+
+function encryptionBadgeClass(encryption: BackupEntry["encryption"]): string {
+  return encryption === "zip-aes-256" ? "badge-success" : "badge-warning";
+}
+
+function encryptionLabel(encryption: BackupEntry["encryption"]): string {
+  return encryption === "zip-aes-256" ? "已加密" : "Legacy";
+}
+
+function isEncryptedBackup(backup: BackupEntry | null | undefined): backup is BackupEntry {
+  return !!backup && backup.encryption === "zip-aes-256";
 }
 
 function formatBytes(size: number): string {
@@ -160,7 +199,7 @@ function importPhaseProgressClass(phase: ImportPhase): string {
 function importPhaseDescription(phase: ImportPhase): string {
   switch (phase) {
     case "ready":
-      return "已接收檔案，準備送出匯入請求。";
+      return "已接收檔案與密碼，準備送出匯入請求。";
     case "running":
       return "正在上傳、驗證 archive，並寫入目前備份庫。";
     case "success":
@@ -185,19 +224,19 @@ function buildImportSteps(
   const steps = [
     {
       title: "建立匯入請求",
-      detail: "鎖定目前視窗、準備把選取的 zip 送往 /v1/backups/import。",
+      detail: "鎖定目前視窗並組裝 multipart request，附帶 archive 與備份密碼。",
     },
     {
       title: "上傳備份檔",
-      detail: "將 archive 內容送到 server，等待 multipart upload 完成。",
+      detail: "把 zip 與密碼送到 /v1/backups/import，等待 upload 完成。",
     },
     {
       title: "驗證 archive",
-      detail: "Server 會解壓、檢查 manifest.json，並確認 payload 結構可匯入。",
+      detail: "Server 會讀取 manifest.json，並用提供的密碼解密驗證 payload。",
     },
     {
       title: "寫入備份庫",
-      detail: "把驗證成功的內容寫進 backups library，然後回傳新的 backup entry。",
+      detail: "驗證成功後重封裝成備份庫條目，然後回傳新的 backup entry。",
     },
   ];
 
@@ -245,8 +284,65 @@ function fileMimeType(file: File): string {
   return file.type.trim() || "application/octet-stream";
 }
 
+function validatePassword(password: string): string | null {
+  if (!password) return "備份密碼不能為空";
+  if (password.length < MIN_BACKUP_PASSWORD_LENGTH) {
+    return `備份密碼至少需要 ${MIN_BACKUP_PASSWORD_LENGTH} 個字元`;
+  }
+  return null;
+}
+
+function generateBackupPassword(): string {
+  const alphabet =
+    "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789-_";
+  const random = new Uint8Array(GENERATED_PASSWORD_LENGTH);
+  window.crypto.getRandomValues(random);
+  return Array.from(random, (value) => alphabet[value % alphabet.length]).join(
+    "",
+  );
+}
+
+function importErrorHint(error: ImportErrorState | null): string | null {
+  if (!error) return null;
+  if (error.statusCode === 403 && error.code === "origin_mismatch") {
+    return "browser security same-origin 檢查擋下 request，請確認目前請求是從 NekoClaw Web UI 發出。";
+  }
+  if (error.code === "unsupported_legacy_backup") {
+    return "這個 archive 屬於未加密的舊格式，v2 只接受新的密碼保護備份。";
+  }
+  if (error.code === "invalid_backup_password") {
+    return "提供的備份密碼無法解密 payload，請確認這是建立該備份時使用的密碼。";
+  }
+  return null;
+}
+
+function syncDialog(dialog: HTMLDialogElement | null, open: boolean) {
+  if (!dialog) return;
+  if (open) {
+    if (!dialog.open) dialog.showModal();
+    return;
+  }
+  if (dialog.open) dialog.close();
+}
+
+function newCreateDialogState(): CreateDialogState {
+  return {
+    mode: "manual",
+    password: "",
+    confirmPassword: "",
+    generatedPassword: generateBackupPassword(),
+    copiedGeneratedPassword: false,
+    acknowledgedGeneratedPassword: false,
+    error: null,
+  };
+}
+
 export function BackupPanel() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const createDialogRef = useRef<HTMLDialogElement | null>(null);
+  const importPasswordDialogRef = useRef<HTMLDialogElement | null>(null);
+  const importStatusDialogRef = useRef<HTMLDialogElement | null>(null);
+  const restoreDialogRef = useRef<HTMLDialogElement | null>(null);
 
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [selectedBackupID, setSelectedBackupID] = useState("");
@@ -254,9 +350,18 @@ export function BackupPanel() {
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<BusyAction>("");
   const [status, setStatus] = useState<StatusState>(null);
-  const [restorePrompt, setRestorePrompt] = useState<BackupEntry | null>(null);
   const [restoreNotice, setRestoreNotice] = useState<string | null>(null);
-  const [importDialog, setImportDialog] = useState<ImportDialogState | null>(null);
+  const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(
+    null,
+  );
+  const [importPasswordDialog, setImportPasswordDialog] =
+    useState<ImportPasswordDialogState | null>(null);
+  const [importDialog, setImportDialog] = useState<ImportDialogState | null>(
+    null,
+  );
+  const [restoreDialog, setRestoreDialog] = useState<RestoreDialogState | null>(
+    null,
+  );
   const [importProgress, setImportProgress] = useState(0);
 
   async function syncBackups(showLoading = false, preferredID = "") {
@@ -266,7 +371,10 @@ export function BackupPanel() {
       const loaded = sortBackups(await listBackups());
       setBackups(loaded);
       setSelectedBackupID((current) => {
-        if (preferredID && loaded.some((backup) => backup.backup_id === preferredID)) {
+        if (
+          preferredID &&
+          loaded.some((backup) => backup.backup_id === preferredID)
+        ) {
           return preferredID;
         }
         if (current && loaded.some((backup) => backup.backup_id === current)) {
@@ -292,9 +400,25 @@ export function BackupPanel() {
 
   useEffect(() => {
     if (!status) return undefined;
-    const timer = window.setTimeout(() => setStatus(null), 2200);
+    const timer = window.setTimeout(() => setStatus(null), 2400);
     return () => window.clearTimeout(timer);
   }, [status]);
+
+  useEffect(() => {
+    syncDialog(createDialogRef.current, createDialog !== null);
+  }, [createDialog]);
+
+  useEffect(() => {
+    syncDialog(importPasswordDialogRef.current, importPasswordDialog !== null);
+  }, [importPasswordDialog]);
+
+  useEffect(() => {
+    syncDialog(importStatusDialogRef.current, importDialog !== null);
+  }, [importDialog]);
+
+  useEffect(() => {
+    syncDialog(restoreDialogRef.current, restoreDialog !== null);
+  }, [restoreDialog]);
 
   useEffect(() => {
     if (!importDialog) {
@@ -335,17 +459,27 @@ export function BackupPanel() {
           ? { ...current, phase: "running" }
           : current,
       );
+
       try {
-        const imported = await importBackupArchive(importDialog.file);
-        if (cancelled) return;
-        setQuery("");
-        setBackups((current) =>
-          sortBackups([
-            imported,
-            ...current.filter((backup) => backup.backup_id !== imported.backup_id),
-          ]),
+        const imported = await importBackupArchive(
+          importDialog.file,
+          importDialog.password,
         );
-        setSelectedBackupID(imported.backup_id);
+        if (cancelled) return;
+
+        setQuery("");
+        const ok = await syncBackups(false, imported.backup_id);
+        if (!ok) {
+          setBackups((current) =>
+            sortBackups([
+              imported,
+              ...current.filter(
+                (backup) => backup.backup_id !== imported.backup_id,
+              ),
+            ]),
+          );
+          setSelectedBackupID(imported.backup_id);
+        }
         setImportDialog((current) =>
           current
             ? {
@@ -369,9 +503,7 @@ export function BackupPanel() {
             : current,
         );
       } finally {
-        if (!cancelled) {
-          setBusyAction("");
-        }
+        if (!cancelled) setBusyAction("");
       }
     })();
 
@@ -403,11 +535,147 @@ export function BackupPanel() {
     null;
   const latestBackup = backups[0] ?? null;
   const importSteps = importDialog
-    ? buildImportSteps(importDialog.phase, importProgress, !!importDialog.imported)
+    ? buildImportSteps(
+        importDialog.phase,
+        importProgress,
+        !!importDialog.imported,
+      )
     : [];
   const activeImportStep =
-    importSteps.find((step) => step.status === "active" || step.status === "error") ??
-    null;
+    importSteps.find(
+      (step) => step.status === "active" || step.status === "error",
+    ) ?? null;
+
+  function openCreateDialog() {
+    setCreateDialog(newCreateDialogState());
+  }
+
+  function closeCreateDialog() {
+    if (busyAction === "create") return;
+    setCreateDialog(null);
+  }
+
+  async function handleCopyGeneratedPassword() {
+    if (!createDialog) return;
+    try {
+      await navigator.clipboard.writeText(createDialog.generatedPassword);
+      setCreateDialog((current) =>
+        current
+          ? {
+              ...current,
+              copiedGeneratedPassword: true,
+              error: null,
+            }
+          : current,
+      );
+    } catch {
+      setCreateDialog((current) =>
+        current
+          ? {
+              ...current,
+              error: "無法複製到剪貼簿，請手動保存這組密碼。",
+            }
+          : current,
+      );
+    }
+  }
+
+  async function submitCreateDialog() {
+    if (!createDialog) return;
+
+    const password =
+      createDialog.mode === "manual"
+        ? createDialog.password
+        : createDialog.generatedPassword;
+    const validationError = validatePassword(password);
+    if (validationError) {
+      setCreateDialog((current) =>
+        current ? { ...current, error: validationError } : current,
+      );
+      return;
+    }
+    if (
+      createDialog.mode === "manual" &&
+      createDialog.password !== createDialog.confirmPassword
+    ) {
+      setCreateDialog((current) =>
+        current
+          ? { ...current, error: "兩次輸入的備份密碼不一致" }
+          : current,
+      );
+      return;
+    }
+    if (
+      createDialog.mode === "generated" &&
+      !createDialog.acknowledgedGeneratedPassword
+    ) {
+      setCreateDialog((current) =>
+        current
+          ? { ...current, error: "請先確認你已保存這組自動產生的備份密碼" }
+          : current,
+      );
+      return;
+    }
+
+    setBusyAction("create");
+    try {
+      const created = await createBackup(password);
+      const ok = await syncBackups(false, created.backup_id);
+      if (ok) {
+        setStatus({ tone: "success", message: "已建立新的加密備份" });
+      }
+      setCreateDialog(null);
+    } catch (error) {
+      setCreateDialog((current) =>
+        current
+          ? {
+              ...current,
+              error: toErrorMessage(error, "建立備份失敗"),
+            }
+          : current,
+      );
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  function handleImport(file: File | null) {
+    if (!file) return;
+    setImportPasswordDialog({
+      file,
+      password: "",
+      error: null,
+    });
+  }
+
+  function closeImportPasswordDialog() {
+    if (busyAction === "import") return;
+    setImportPasswordDialog(null);
+  }
+
+  function submitImportPasswordDialog() {
+    if (!importPasswordDialog) return;
+    const validationError = validatePassword(importPasswordDialog.password);
+    if (validationError) {
+      setImportPasswordDialog((current) =>
+        current ? { ...current, error: validationError } : current,
+      );
+      return;
+    }
+    setImportDialog({
+      file: importPasswordDialog.file,
+      password: importPasswordDialog.password,
+      phase: "ready",
+      imported: null,
+      error: null,
+    });
+    setImportPasswordDialog(null);
+  }
+
+  function closeImportStatusDialog() {
+    if (busyAction === "import") return;
+    setImportDialog(null);
+  }
 
   async function handleReload() {
     setBusyAction("reload");
@@ -419,39 +687,6 @@ export function BackupPanel() {
     } finally {
       setBusyAction("");
     }
-  }
-
-  async function handleCreate() {
-    setBusyAction("create");
-    try {
-      const created = await createBackup();
-      const ok = await syncBackups(false, created.backup_id);
-      if (ok) {
-        setStatus({ tone: "success", message: "已建立新備份" });
-      }
-    } catch (error) {
-      setStatus({
-        tone: "error",
-        message: toErrorMessage(error, "建立備份失敗"),
-      });
-    } finally {
-      setBusyAction("");
-    }
-  }
-
-  function handleImport(file: File | null) {
-    if (!file) return;
-    setImportDialog({
-      file,
-      phase: "ready",
-      imported: null,
-      error: null,
-    });
-  }
-
-  function closeImportDialog() {
-    if (busyAction === "import") return;
-    setImportDialog(null);
   }
 
   async function handleDownload() {
@@ -496,26 +731,58 @@ export function BackupPanel() {
     }
   }
 
-  async function confirmRestore() {
-    if (!restorePrompt) return;
+  function openRestoreDialog(backup: BackupEntry | null) {
+    if (!isEncryptedBackup(backup)) return;
+    setRestoreDialog({
+      backup,
+      password: "",
+      error: null,
+    });
+  }
+
+  function closeRestoreDialog() {
+    if (busyAction === "restore") return;
+    setRestoreDialog(null);
+  }
+
+  async function submitRestoreDialog() {
+    if (!restoreDialog) return;
+    const validationError = validatePassword(restoreDialog.password);
+    if (validationError) {
+      setRestoreDialog((current) =>
+        current ? { ...current, error: validationError } : current,
+      );
+      return;
+    }
+
     setBusyAction("restore");
     try {
-      const result = await restoreBackup(restorePrompt.backup_id);
-      const ok = await syncBackups(false, restorePrompt.backup_id);
+      const result = await restoreBackup(
+        restoreDialog.backup.backup_id,
+        restoreDialog.password,
+      );
+      const ok = await syncBackups(false, restoreDialog.backup.backup_id);
       if (ok) {
-        setStatus({ tone: "success", message: `已套用 ${restorePrompt.file_name}` });
+        setStatus({
+          tone: "success",
+          message: `已套用 ${restoreDialog.backup.file_name}`,
+        });
       }
       if (result.restart_required) {
         setRestoreNotice(
-          `備份 ${restorePrompt.file_name} 已寫入磁碟。請手動重啟 NekoClaw，讓 config、auth、memory、sessions 與 bot bindings 全部切換到這份備份。`,
+          `備份 ${restoreDialog.backup.file_name} 已寫入磁碟。請手動重啟 NekoClaw，新的 config、auth、memory、sessions、MCP、personas 與 bot bindings 才會生效；目前後台密碼會保留。`,
         );
       }
-      setRestorePrompt(null);
+      setRestoreDialog(null);
     } catch (error) {
-      setStatus({
-        tone: "error",
-        message: toErrorMessage(error, "還原備份失敗"),
-      });
+      setRestoreDialog((current) =>
+        current
+          ? {
+              ...current,
+              error: toErrorMessage(error, "還原備份失敗"),
+            }
+          : current,
+      );
     } finally {
       setBusyAction("");
     }
@@ -583,13 +850,13 @@ export function BackupPanel() {
             <div className="space-y-2">
               <div className="flex flex-wrap items-center gap-2">
                 <div className="badge badge-outline badge-sm">Backup</div>
-                <div className="badge badge-warning badge-sm">含機密資料</div>
+                <div className="badge badge-success badge-sm">ZIP AES-256</div>
                 <div className="badge badge-ghost badge-sm">整包還原</div>
               </div>
               <div>
                 <h2 className="card-title text-2xl">備份 / 還原</h2>
                 <p className="text-sm text-base-content/60">
-                  使用與 Persona 頁面一致的管理版型，集中建立、匯入、下載、刪除與還原完整狀態備份。
+                  建立備份時必須設定 ZIP 密碼；還原與匯入時也需要輸入同一組備份密碼。
                 </p>
               </div>
             </div>
@@ -607,7 +874,7 @@ export function BackupPanel() {
               </button>
               <button
                 className="btn btn-primary btn-sm join-item"
-                onClick={handleCreate}
+                onClick={openCreateDialog}
                 disabled={busyAction !== ""}
               >
                 {busyAction === "create" && (
@@ -640,18 +907,24 @@ export function BackupPanel() {
                 {latestBackup ? formatDateTime(latestBackup.created_at) : "尚無"}
               </div>
               <div className="stat-desc">
-                {latestBackup ? formatRelativeTime(latestBackup.created_at) : "先建立第一份備份"}
+                {latestBackup
+                  ? formatRelativeTime(latestBackup.created_at)
+                  : "先建立第一份備份"}
               </div>
             </div>
             <div className="stat">
               <div className="stat-title">備份範圍</div>
               <div className="stat-value text-lg">完整狀態</div>
-              <div className="stat-desc">config / auth / memory / sessions / MCP / personas / bindings</div>
+              <div className="stat-desc">
+                config / auth / memory / sessions / MCP / personas / bindings
+              </div>
             </div>
             <div className="stat">
               <div className="stat-title">還原模式</div>
-              <div className="stat-value text-lg">需重啟</div>
-              <div className="stat-desc">寫入後不熱套用，避免半套 runtime 狀態</div>
+              <div className="stat-value text-lg">需密碼</div>
+              <div className="stat-desc">
+                還原需輸入備份密碼，寫入後仍要手動重啟服務
+              </div>
             </div>
           </div>
         </div>
@@ -660,6 +933,12 @@ export function BackupPanel() {
       {restoreNotice ? (
         <div className="alert alert-warning">
           <span>{restoreNotice}</span>
+        </div>
+      ) : null}
+
+      {status ? (
+        <div className={`alert ${statusClass(status.tone)}`}>
+          <span>{status.message}</span>
         </div>
       ) : null}
 
@@ -681,16 +960,12 @@ export function BackupPanel() {
               <input
                 type="text"
                 className="grow outline-none focus:outline-none focus:ring-0 focus-visible:outline-none"
-                placeholder="搜尋檔名、備份 ID、來源或 component"
+                placeholder="搜尋檔名、備份 ID、來源、加密狀態或 component"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
               />
             </label>
-            <button
-              className="btn join-item"
-              onClick={() => setQuery("")}
-              disabled={!query}
-            >
+            <button className="btn join-item" onClick={() => setQuery("")} disabled={!query}>
               清除
             </button>
           </div>
@@ -719,7 +994,7 @@ export function BackupPanel() {
                   </div>
                   <p className="text-sm text-base-content/60">
                     {backups.length === 0
-                      ? "可以先建立第一份完整備份，或匯入既有 archive。"
+                      ? "可以先建立第一份加密備份，或匯入既有的密碼保護 archive。"
                       : "調整搜尋條件，或清除搜尋後重新查看完整清單。"}
                   </p>
                   <div className="card-actions justify-end">
@@ -727,7 +1002,7 @@ export function BackupPanel() {
                       <>
                         <button
                           className="btn btn-primary btn-sm"
-                          onClick={handleCreate}
+                          onClick={openCreateDialog}
                           disabled={busyAction !== ""}
                         >
                           建立備份
@@ -758,24 +1033,25 @@ export function BackupPanel() {
                       selected={isSelected}
                       onClick={() => setSelectedBackupID(backup.backup_id)}
                     >
-                        <div className="min-w-0 flex-1 text-left">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="truncate font-semibold">
-                              {backup.file_name}
-                            </span>
-                            <span className={`badge badge-xs ${sourceBadgeClass(backup.source)}`}>
-                              {sourceLabel(backup.source)}
-                            </span>
-                          </div>
-                          <div className="truncate text-xs font-mono text-base-content/45">
-                            {backup.backup_id}
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2 text-xs text-base-content/60">
-                            <span>{formatRelativeTime(backup.created_at)}</span>
-                            <span>{formatBytes(backup.size_bytes)}</span>
-                            <span>{backup.components.length} 個 component</span>
-                          </div>
+                      <div className="min-w-0 flex-1 text-left">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="truncate font-semibold">{backup.file_name}</span>
+                          <span className={`badge badge-xs ${sourceBadgeClass(backup.source)}`}>
+                            {sourceLabel(backup.source)}
+                          </span>
+                          <span className={`badge badge-xs ${encryptionBadgeClass(backup.encryption)}`}>
+                            {encryptionLabel(backup.encryption)}
+                          </span>
                         </div>
+                        <div className="truncate text-xs font-mono text-base-content/45">
+                          {backup.backup_id}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-base-content/60">
+                          <span>{formatRelativeTime(backup.created_at)}</span>
+                          <span>{formatBytes(backup.size_bytes)}</span>
+                          <span>{backup.components.length} 個 component</span>
+                        </div>
+                      </div>
                     </SelectionListItem>
                   );
                 })}
@@ -789,8 +1065,13 @@ export function BackupPanel() {
             <div className="flex items-center justify-between gap-3">
               <h3 className="card-title text-lg">備份詳情</h3>
               {selectedBackup ? (
-                <div className={`badge badge-sm ${sourceBadgeClass(selectedBackup.source)}`}>
-                  {sourceLabel(selectedBackup.source)}
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className={`badge badge-sm ${sourceBadgeClass(selectedBackup.source)}`}>
+                    {sourceLabel(selectedBackup.source)}
+                  </div>
+                  <div className={`badge badge-sm ${encryptionBadgeClass(selectedBackup.encryption)}`}>
+                    {encryptionLabel(selectedBackup.encryption)}
+                  </div>
                 </div>
               ) : (
                 <div className="badge badge-ghost badge-sm">未選取</div>
@@ -806,13 +1087,16 @@ export function BackupPanel() {
                 <div className="space-y-3">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <h4 className="text-xl font-semibold">
-                        {selectedBackup.file_name}
-                      </h4>
+                      <h4 className="text-xl font-semibold">{selectedBackup.file_name}</h4>
                       <div className="badge badge-warning">含機密資料</div>
+                      <div className={`badge ${encryptionBadgeClass(selectedBackup.encryption)}`}>
+                        {encryptionLabel(selectedBackup.encryption)}
+                      </div>
                     </div>
                     <p className="mt-2 text-sm text-base-content/70">
-                      這份備份會覆蓋目前磁碟上的主要持久化狀態，但不會覆蓋目前 Web 後台密碼；還原完成後必須手動重啟服務。
+                      {selectedBackup.encryption === "zip-aes-256"
+                        ? "這份備份的 payload 已用 ZIP AES-256 保護。還原時需要輸入備份密碼，且完成後必須手動重啟服務。"
+                        : "這是一份舊版未加密 archive。可以下載保存，但不支援直接匯入或還原。"}
                     </p>
                   </div>
 
@@ -826,11 +1110,19 @@ export function BackupPanel() {
                   </div>
                 </div>
 
-                <div className="alert alert-warning">
-                  <span>
-                    還原會替換 config、auth、sessions、memory、MCP、personas 與 bot bindings，但會保留目前後台密碼。
-                  </span>
-                </div>
+                {selectedBackup.encryption === "zip-aes-256" ? (
+                  <div className="alert alert-warning">
+                    <span>
+                      還原會替換 config、auth、sessions、memory、MCP、personas 與 bot bindings，但會保留目前後台密碼，且需要輸入備份密碼。
+                    </span>
+                  </div>
+                ) : (
+                  <div className="alert alert-warning">
+                    <span>
+                      此舊版備份未使用密碼保護，為避免匯入未加密 archive，現在不支援直接還原。
+                    </span>
+                  </div>
+                )}
 
                 <div className="flex flex-wrap gap-2">
                   {selectedBackup.components.map((component) => (
@@ -858,7 +1150,8 @@ export function BackupPanel() {
                         Created
                       </div>
                       <div className="text-sm">
-                        {formatDateTime(selectedBackup.created_at)} ({formatRelativeTime(selectedBackup.created_at)})
+                        {formatDateTime(selectedBackup.created_at)} (
+                        {formatRelativeTime(selectedBackup.created_at)})
                       </div>
                     </div>
                   </li>
@@ -868,6 +1161,18 @@ export function BackupPanel() {
                         Source
                       </div>
                       <div className="text-sm">{sourceLabel(selectedBackup.source)}</div>
+                    </div>
+                  </li>
+                  <li className="list-row">
+                    <div>
+                      <div className="text-xs uppercase tracking-wide text-base-content/50">
+                        Encryption
+                      </div>
+                      <div className="text-sm">
+                        {selectedBackup.encryption === "zip-aes-256"
+                          ? "ZIP AES-256"
+                          : "Legacy / none"}
+                      </div>
                     </div>
                   </li>
                   <li className="list-row">
@@ -893,21 +1198,13 @@ export function BackupPanel() {
                 </ul>
 
                 <div className="card-actions justify-end">
-                  <button
-                    className="btn"
-                    onClick={handleDownload}
-                    disabled={busyAction !== ""}
-                  >
+                  <button className="btn" onClick={handleDownload} disabled={busyAction !== ""}>
                     {busyAction === "download" && (
                       <span className="loading loading-spinner loading-xs" />
                     )}
                     下載備份
                   </button>
-                  <button
-                    className="btn"
-                    onClick={handleDelete}
-                    disabled={busyAction !== ""}
-                  >
+                  <button className="btn" onClick={handleDelete} disabled={busyAction !== ""}>
                     {busyAction === "delete" && (
                       <span className="loading loading-spinner loading-xs" />
                     )}
@@ -915,10 +1212,18 @@ export function BackupPanel() {
                   </button>
                   <button
                     className="btn btn-primary"
-                    onClick={() => setRestorePrompt(selectedBackup)}
-                    disabled={busyAction !== ""}
+                    onClick={() => openRestoreDialog(selectedBackup)}
+                    disabled={busyAction !== "" || !isEncryptedBackup(selectedBackup)}
+                    title={
+                      isEncryptedBackup(selectedBackup)
+                        ? "還原這份備份"
+                        : "Legacy 備份不支援直接還原"
+                    }
                   >
-                    還原這份備份
+                    {busyAction === "restore" && (
+                      <span className="loading loading-spinner loading-xs" />
+                    )}
+                    還原備份
                   </button>
                 </div>
               </>
@@ -927,305 +1232,533 @@ export function BackupPanel() {
         </div>
       </div>
 
-      {restorePrompt ? (
-        <dialog className="modal modal-open">
-          <div className="modal-box max-w-lg">
-            <h3 className="text-lg font-semibold">確認還原備份</h3>
-            <div className="mt-3 space-y-3 text-sm text-base-content/75">
-              <p>
-                你即將還原 <span className="font-medium">{restorePrompt.file_name}</span>。
+      <dialog
+        ref={createDialogRef}
+        className="modal"
+        onClose={() => {
+          if (createDialog) setCreateDialog(null);
+        }}
+        onCancel={(event) => {
+          if (busyAction === "create") event.preventDefault();
+        }}
+      >
+        <div className="modal-box max-w-3xl space-y-6">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-2xl font-semibold">建立加密備份</h3>
+              <p className="mt-2 text-sm text-base-content/60">
+                建立時會把 payload 用 ZIP AES-256 保護。這組密碼不會儲存在 NekoClaw 內，請自行妥善保存。
               </p>
-              <p>這會覆蓋目前的持久化資料，包含 auth、memory、sessions、MCP 與 bot bindings。</p>
-              <p>目前 Web 後台密碼會保留，不會被這份備份覆蓋回舊值。</p>
-              <p>還原完成後不會熱套用；你需要手動重啟 NekoClaw。</p>
             </div>
-            <div className="modal-action">
-              <button
-                className="btn"
-                onClick={() => setRestorePrompt(null)}
-                disabled={busyAction === "restore"}
-              >
-                取消
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={() => void confirmRestore()}
-                disabled={busyAction === "restore"}
-              >
-                {busyAction === "restore" && (
-                  <span className="loading loading-spinner loading-xs" />
-                )}
-                確認還原
-              </button>
-            </div>
+            <div className="badge badge-success badge-lg">ZIP AES-256</div>
           </div>
-          <form method="dialog" className="modal-backdrop">
-            <button onClick={() => setRestorePrompt(null)}>close</button>
-          </form>
-        </dialog>
-      ) : null}
 
-      {importDialog ? (
-        <dialog className="modal modal-open">
-          <div className="modal-box max-w-2xl">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h3 className="text-lg font-semibold">匯入備份檔</h3>
-                <p className="mt-1 text-sm text-base-content/65">
-                  上傳完成後會先驗證 archive，再寫入目前備份庫。
-                </p>
+          {createDialog ? (
+            <>
+              <div className="tabs tabs-boxed bg-base-100">
+                <button
+                  type="button"
+                  className={`tab ${createDialog.mode === "manual" ? "tab-active" : ""}`}
+                  onClick={() =>
+                    setCreateDialog((current) =>
+                      current
+                        ? {
+                            ...current,
+                            mode: "manual",
+                            error: null,
+                          }
+                        : current,
+                    )
+                  }
+                >
+                  手動輸入
+                </button>
+                <button
+                  type="button"
+                  className={`tab ${createDialog.mode === "generated" ? "tab-active" : ""}`}
+                  onClick={() =>
+                    setCreateDialog((current) =>
+                      current
+                        ? {
+                            ...current,
+                            mode: "generated",
+                            generatedPassword:
+                              current.generatedPassword || generateBackupPassword(),
+                            error: null,
+                          }
+                        : current,
+                    )
+                  }
+                >
+                  自動產生
+                </button>
               </div>
-              <div className={`badge badge-sm ${importPhaseBadgeClass(importDialog.phase)}`}>
-                {importPhaseLabel(importDialog.phase)}
-              </div>
+
+              {createDialog.mode === "manual" ? (
+                <div className="grid gap-4 rounded-box border border-base-300 bg-base-100 p-4 md:grid-cols-2">
+                  <label className="form-control">
+                    <div className="label">
+                      <span className="label-text">備份密碼</span>
+                    </div>
+                    <input
+                      type="password"
+                      className="input input-bordered"
+                      value={createDialog.password}
+                      onChange={(event) =>
+                        setCreateDialog((current) =>
+                          current
+                            ? {
+                                ...current,
+                                password: event.target.value,
+                                error: null,
+                              }
+                            : current,
+                        )
+                      }
+                      placeholder="至少 12 個字元"
+                    />
+                  </label>
+                  <label className="form-control">
+                    <div className="label">
+                      <span className="label-text">確認密碼</span>
+                    </div>
+                    <input
+                      type="password"
+                      className="input input-bordered"
+                      value={createDialog.confirmPassword}
+                      onChange={(event) =>
+                        setCreateDialog((current) =>
+                          current
+                            ? {
+                                ...current,
+                                confirmPassword: event.target.value,
+                                error: null,
+                              }
+                            : current,
+                        )
+                      }
+                      placeholder="再次輸入同一組密碼"
+                    />
+                  </label>
+                  <div className="md:col-span-2 text-sm text-base-content/60">
+                    這組密碼未來在匯入與還原時都需要重新輸入，遺失後無法找回。
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4 rounded-box border border-base-300 bg-base-100 p-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <div className="text-sm font-medium">自動產生的備份密碼</div>
+                      <div className="mt-2 rounded-box border border-base-300 bg-base-200 px-4 py-3 font-mono text-base">
+                        {createDialog.generatedPassword}
+                      </div>
+                      <p className="mt-2 text-sm text-base-content/60">
+                        只會在這個 modal 顯示一次。建立完成後不會再回傳，也不會儲存在 server。
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() =>
+                          setCreateDialog((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  generatedPassword: generateBackupPassword(),
+                                  copiedGeneratedPassword: false,
+                                  acknowledgedGeneratedPassword: false,
+                                  error: null,
+                                }
+                              : current,
+                          )
+                        }
+                        disabled={busyAction === "create"}
+                      >
+                        重新產生
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={handleCopyGeneratedPassword}
+                        disabled={busyAction === "create"}
+                      >
+                        {createDialog.copiedGeneratedPassword ? "已複製" : "複製密碼"}
+                      </button>
+                    </div>
+                  </div>
+                  <label className="label cursor-pointer justify-start gap-3">
+                    <input
+                      type="checkbox"
+                      className="checkbox checkbox-sm"
+                      checked={createDialog.acknowledgedGeneratedPassword}
+                      onChange={(event) =>
+                        setCreateDialog((current) =>
+                          current
+                            ? {
+                                ...current,
+                                acknowledgedGeneratedPassword: event.target.checked,
+                                error: null,
+                              }
+                            : current,
+                        )
+                      }
+                    />
+                    <span className="label-text">
+                      我已經保存這組密碼，之後匯入或還原會用到它。
+                    </span>
+                  </label>
+                </div>
+              )}
+
+              {createDialog.error ? (
+                <div className="alert alert-error">
+                  <span>{createDialog.error}</span>
+                </div>
+              ) : null}
+            </>
+          ) : null}
+
+          <div className="modal-action">
+            <button className="btn" onClick={closeCreateDialog} disabled={busyAction === "create"}>
+              取消
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={submitCreateDialog}
+              disabled={busyAction === "create"}
+            >
+              {busyAction === "create" && (
+                <span className="loading loading-spinner loading-xs" />
+              )}
+              建立加密備份
+            </button>
+          </div>
+        </div>
+      </dialog>
+
+      <dialog
+        ref={importPasswordDialogRef}
+        className="modal"
+        onClose={() => {
+          if (importPasswordDialog) setImportPasswordDialog(null);
+        }}
+        onCancel={(event) => {
+          if (busyAction === "import") event.preventDefault();
+        }}
+      >
+        <div className="modal-box max-w-2xl space-y-6">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-2xl font-semibold">匯入備份檔</h3>
+              <p className="mt-2 text-sm text-base-content/60">
+                先輸入 archive 密碼，再開始驗證與匯入。只支援新的密碼保護備份格式。
+              </p>
             </div>
+            <div className="badge badge-warning badge-lg">需要密碼</div>
+          </div>
 
-            <div className="mt-5 space-y-4">
-              <div className="card border border-base-300 bg-base-100 shadow-sm">
-                <div className="card-body gap-3">
-                  <h4 className="text-sm font-semibold uppercase tracking-wide text-base-content/55">
-                    檔案資訊
-                  </h4>
-                  <ul className="list rounded-box border border-base-300 bg-base-100">
-                    <li className="list-row">
-                      <div>
-                        <div className="text-xs uppercase tracking-wide text-base-content/50">
-                          File
-                        </div>
-                        <div className="font-medium">{importDialog.file.name}</div>
-                      </div>
-                    </li>
-                    <li className="list-row">
-                      <div>
-                        <div className="text-xs uppercase tracking-wide text-base-content/50">
-                          Size
-                        </div>
-                        <div className="font-mono text-sm">
-                          {formatBytes(importDialog.file.size)}
-                        </div>
-                      </div>
-                    </li>
-                    <li className="list-row">
-                      <div>
-                        <div className="text-xs uppercase tracking-wide text-base-content/50">
-                          MIME Type
-                        </div>
-                        <div className="font-mono text-sm">
-                          {fileMimeType(importDialog.file)}
-                        </div>
-                      </div>
-                    </li>
-                  </ul>
+          {importPasswordDialog ? (
+            <>
+              <div className="rounded-box border border-base-300 bg-base-100 p-4">
+                <div className="text-xs uppercase tracking-wide text-base-content/50">File</div>
+                <div className="mt-1 font-semibold">{importPasswordDialog.file.name}</div>
+                <div className="mt-3 flex flex-wrap gap-4 text-sm text-base-content/60">
+                  <span>大小：{formatBytes(importPasswordDialog.file.size)}</span>
+                  <span>MIME：{fileMimeType(importPasswordDialog.file)}</span>
                 </div>
               </div>
 
-              <div className="card border border-base-300 bg-base-100 shadow-sm">
-                <div className="card-body gap-3">
-                  <h4 className="text-sm font-semibold uppercase tracking-wide text-base-content/55">
-                    目前狀態
-                  </h4>
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between gap-3 text-xs text-base-content/60">
-                      <span>
-                        {activeImportStep?.title
-                          ? `目前步驟：${activeImportStep.title}`
-                          : importPhaseDescription(importDialog.phase)}
-                      </span>
-                      <span className="font-mono">{importProgress}%</span>
-                    </div>
-                    <progress
-                      className={`progress w-full ${importPhaseProgressClass(importDialog.phase)}`}
-                      value={importProgress}
-                      max="100"
-                    />
-                  </div>
-                  <div className="text-xs text-base-content/60">
-                    {activeImportStep?.detail ?? importPhaseDescription(importDialog.phase)}
-                  </div>
-                  {importDialog.phase === "running" || importDialog.phase === "ready" ? (
-                    <div className="alert alert-warning">
-                      <span className="loading loading-spinner loading-sm" />
-                      <span>正在上傳與驗證備份檔，請勿關閉此視窗。</span>
-                    </div>
-                  ) : null}
-                  {importDialog.phase === "success" ? (
-                    <div className="alert alert-success">
-                      <span>備份檔已通過驗證並寫入備份庫，左側清單已切到這份新匯入的 archive。</span>
-                    </div>
-                  ) : null}
-                  {importDialog.phase === "error" ? (
-                    <div className="alert alert-error">
-                      <span>匯入未完成，備份庫沒有套用這次上傳結果。</span>
-                    </div>
-                  ) : null}
+              <label className="form-control">
+                <div className="label">
+                  <span className="label-text">備份密碼</span>
+                </div>
+                <input
+                  type="password"
+                  className="input input-bordered"
+                  value={importPasswordDialog.password}
+                  onChange={(event) =>
+                    setImportPasswordDialog((current) =>
+                      current
+                        ? {
+                            ...current,
+                            password: event.target.value,
+                            error: null,
+                          }
+                        : current,
+                    )
+                  }
+                  placeholder="輸入建立這份備份時使用的密碼"
+                />
+              </label>
 
-                  <div className="card border border-base-300 bg-base-200/60 shadow-sm">
-                    <div className="card-body gap-3 p-4">
-                      <div className="text-sm font-semibold">目前在做什麼</div>
-                      <ul className="space-y-3">
-                        {importSteps.map((step, index) => (
-                          <li
-                            key={step.title}
-                            className="flex items-start gap-3 rounded-box border border-base-300 bg-base-100 px-3 py-3"
-                          >
-                            <div className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full border border-base-300 text-xs font-semibold text-base-content/70">
-                              {index + 1}
-                            </div>
-                            <div className="min-w-0 flex-1 space-y-1">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <div className="font-medium">{step.title}</div>
-                                <div className={`badge badge-xs ${importStepBadgeClass(step.status)}`}>
-                                  {importStepLabel(step.status)}
-                                </div>
-                              </div>
-                              <div className="text-sm text-base-content/65">{step.detail}</div>
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
+              {importPasswordDialog.error ? (
+                <div className="alert alert-error">
+                  <span>{importPasswordDialog.error}</span>
+                </div>
+              ) : null}
+            </>
+          ) : null}
+
+          <div className="modal-action">
+            <button className="btn" onClick={closeImportPasswordDialog} disabled={busyAction === "import"}>
+              取消
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={submitImportPasswordDialog}
+              disabled={busyAction === "import"}
+            >
+              開始匯入
+            </button>
+          </div>
+        </div>
+      </dialog>
+
+      <dialog
+        ref={importStatusDialogRef}
+        className="modal"
+        onClose={() => {
+          if (importDialog && busyAction !== "import") setImportDialog(null);
+        }}
+        onCancel={(event) => {
+          if (busyAction === "import") event.preventDefault();
+        }}
+      >
+        <div className="modal-box max-w-5xl space-y-6">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-2xl font-semibold">匯入備份檔</h3>
+              <p className="mt-2 text-sm text-base-content/60">
+                上傳完成後會先驗證 archive，再寫入目前備份庫。
+              </p>
+            </div>
+            {importDialog ? (
+              <div className={`badge badge-lg ${importPhaseBadgeClass(importDialog.phase)}`}>
+                {importPhaseLabel(importDialog.phase)}
+              </div>
+            ) : null}
+          </div>
+
+          {importDialog ? (
+            <>
+              <div className="rounded-box border border-base-300 bg-base-100 p-4">
+                <h4 className="text-lg font-semibold">檔案資訊</h4>
+                <div className="mt-4 grid gap-4 md:grid-cols-3">
+                  <div>
+                    <div className="text-xs uppercase tracking-wide text-base-content/50">File</div>
+                    <div className="mt-1 font-medium">{importDialog.file.name}</div>
                   </div>
+                  <div>
+                    <div className="text-xs uppercase tracking-wide text-base-content/50">Size</div>
+                    <div className="mt-1 font-medium">{formatBytes(importDialog.file.size)}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs uppercase tracking-wide text-base-content/50">MIME Type</div>
+                    <div className="mt-1 font-medium">{fileMimeType(importDialog.file)}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-box border border-base-300 bg-base-100 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h4 className="text-lg font-semibold">目前狀態</h4>
+                  <div className="text-sm font-medium">{importProgress}%</div>
+                </div>
+                <p className="mt-3 text-sm text-base-content/70">
+                  {activeImportStep
+                    ? `${activeImportStep.title}：${activeImportStep.detail}`
+                    : importPhaseDescription(importDialog.phase)}
+                </p>
+                <progress
+                  className={`progress mt-4 h-3 w-full ${importPhaseProgressClass(importDialog.phase)}`}
+                  value={importProgress}
+                  max={100}
+                />
+                <div className="mt-4 space-y-3">
+                  {importSteps.map((step) => (
+                    <div
+                      key={step.title}
+                      className="rounded-box border border-base-300 bg-base-200 px-4 py-3"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="font-medium">{step.title}</div>
+                        <div className={`badge badge-sm ${importStepBadgeClass(step.status)}`}>
+                          {importStepLabel(step.status)}
+                        </div>
+                      </div>
+                      <p className="mt-2 text-sm text-base-content/60">{step.detail}</p>
+                    </div>
+                  ))}
                 </div>
               </div>
 
               {importDialog.imported ? (
-                <div className="card border border-base-300 bg-base-100 shadow-sm">
-                  <div className="card-body gap-3">
-                    <h4 className="text-sm font-semibold uppercase tracking-wide text-base-content/55">
-                      成功結果
-                    </h4>
-                    <ul className="list rounded-box border border-base-300 bg-base-100">
-                      <li className="list-row">
-                        <div>
-                          <div className="text-xs uppercase tracking-wide text-base-content/50">
-                            File
-                          </div>
-                          <div className="font-medium">{importDialog.imported.file_name}</div>
-                        </div>
-                      </li>
-                      <li className="list-row">
-                        <div>
-                          <div className="text-xs uppercase tracking-wide text-base-content/50">
-                            Backup ID
-                          </div>
-                          <div className="font-mono text-sm">{importDialog.imported.backup_id}</div>
-                        </div>
-                      </li>
-                      <li className="list-row">
-                        <div>
-                          <div className="text-xs uppercase tracking-wide text-base-content/50">
-                            Source
-                          </div>
-                          <div className="text-sm">{sourceLabel(importDialog.imported.source)}</div>
-                        </div>
-                      </li>
-                      <li className="list-row">
-                        <div>
-                          <div className="text-xs uppercase tracking-wide text-base-content/50">
-                            Created
-                          </div>
-                          <div className="text-sm">
-                            {formatDateTime(importDialog.imported.created_at)}
-                          </div>
-                        </div>
-                      </li>
-                      <li className="list-row">
-                        <div>
-                          <div className="text-xs uppercase tracking-wide text-base-content/50">
-                            Size
-                          </div>
-                          <div className="font-mono text-sm">
-                            {formatBytes(importDialog.imported.size_bytes)}
-                          </div>
-                        </div>
-                      </li>
-                    </ul>
-
-                    <div className="flex flex-wrap gap-2">
-                      {importDialog.imported.components.map((component) => (
-                        <div key={component.key} className="badge badge-outline gap-1 px-3 py-3">
-                          <span>{component.label}</span>
-                          <span className="font-mono text-[11px] opacity-70">
-                            {component.item_count}
-                          </span>
-                        </div>
-                      ))}
+                <div className="rounded-box border border-success/30 bg-success/5 p-4">
+                  <h4 className="text-lg font-semibold">成功結果</h4>
+                  <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    <div>
+                      <div className="text-xs uppercase tracking-wide text-base-content/50">File Name</div>
+                      <div className="mt-1 font-medium">{importDialog.imported.file_name}</div>
                     </div>
+                    <div>
+                      <div className="text-xs uppercase tracking-wide text-base-content/50">Backup ID</div>
+                      <div className="mt-1 font-mono text-sm">{importDialog.imported.backup_id}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs uppercase tracking-wide text-base-content/50">Source</div>
+                      <div className="mt-1">{sourceLabel(importDialog.imported.source)}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs uppercase tracking-wide text-base-content/50">Created At</div>
+                      <div className="mt-1">{formatDateTime(importDialog.imported.created_at)}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs uppercase tracking-wide text-base-content/50">Encryption</div>
+                      <div className="mt-1">ZIP AES-256</div>
+                    </div>
+                    <div>
+                      <div className="text-xs uppercase tracking-wide text-base-content/50">Size</div>
+                      <div className="mt-1">{formatBytes(importDialog.imported.size_bytes)}</div>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {importDialog.imported.components.map((component) => (
+                      <div key={component.key} className="badge badge-outline gap-1 px-3 py-3">
+                        <span>{component.label}</span>
+                        <span className="font-mono text-[11px] opacity-70">
+                          {component.item_count}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               ) : null}
 
               {importDialog.error ? (
-                <div className="card border border-error/40 bg-base-100 shadow-sm">
-                  <div className="card-body gap-3">
-                    <h4 className="text-sm font-semibold uppercase tracking-wide text-base-content/55">
-                      失敗細節
-                    </h4>
-                    <ul className="list rounded-box border border-base-300 bg-base-100">
-                      <li className="list-row">
-                        <div>
-                          <div className="text-xs uppercase tracking-wide text-base-content/50">
-                            HTTP Status
-                          </div>
-                          <div className="font-mono text-sm">
-                            {importDialog.error.statusCode || "n/a"}
-                          </div>
-                        </div>
-                      </li>
-                      <li className="list-row">
-                        <div>
-                          <div className="text-xs uppercase tracking-wide text-base-content/50">
-                            Error Code
-                          </div>
-                          <div className="font-mono text-sm">
-                            {importDialog.error.code || "n/a"}
-                          </div>
-                        </div>
-                      </li>
-                      <li className="list-row">
-                        <div>
-                          <div className="text-xs uppercase tracking-wide text-base-content/50">
-                            Message
-                          </div>
-                          <div className="text-sm">{importDialog.error.message}</div>
-                        </div>
-                      </li>
-                    </ul>
-
-                    {importDialog.error.statusCode === 403 &&
-                    importDialog.error.code === "origin_mismatch" ? (
-                      <div className="alert alert-warning">
-                        <span>Browser security 的 same-origin 檢查擋下了這次 request。</span>
+                <div className="rounded-box border border-error/30 bg-error/5 p-4">
+                  <h4 className="text-lg font-semibold">失敗細節</h4>
+                  <div className="mt-4 grid gap-4 md:grid-cols-3">
+                    <div>
+                      <div className="text-xs uppercase tracking-wide text-base-content/50">HTTP Status</div>
+                      <div className="mt-1 font-medium">
+                        {importDialog.error.statusCode || "-"}
                       </div>
-                    ) : null}
+                    </div>
+                    <div>
+                      <div className="text-xs uppercase tracking-wide text-base-content/50">Error Code</div>
+                      <div className="mt-1 font-mono text-sm">
+                        {importDialog.error.code || "-"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs uppercase tracking-wide text-base-content/50">Message</div>
+                      <div className="mt-1">{importDialog.error.message}</div>
+                    </div>
                   </div>
+                  {importErrorHint(importDialog.error) ? (
+                    <div className="alert alert-warning mt-4">
+                      <span>{importErrorHint(importDialog.error)}</span>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
-            </div>
+            </>
+          ) : null}
 
-            <div className="modal-action">
-              <button
-                className="btn"
-                onClick={closeImportDialog}
-                disabled={busyAction === "import"}
-              >
-                {importDialog.phase === "success" || importDialog.phase === "error"
-                  ? "關閉"
-                  : "處理中"}
-              </button>
-            </div>
-          </div>
-          <div className="modal-backdrop bg-black/40" />
-        </dialog>
-      ) : null}
-
-      {status ? (
-        <div className="toast toast-end toast-bottom z-50">
-          <div className={`alert shadow-lg ${statusClass(status.tone)}`}>
-            <span>{status.message}</span>
+          <div className="modal-action">
+            <button className="btn" onClick={closeImportStatusDialog} disabled={busyAction === "import"}>
+              {busyAction === "import" ? "處理中" : "關閉"}
+            </button>
           </div>
         </div>
-      ) : null}
+      </dialog>
+
+      <dialog
+        ref={restoreDialogRef}
+        className="modal"
+        onClose={() => {
+          if (restoreDialog) setRestoreDialog(null);
+        }}
+        onCancel={(event) => {
+          if (busyAction === "restore") event.preventDefault();
+        }}
+      >
+        <div className="modal-box max-w-2xl space-y-6">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-2xl font-semibold">還原備份</h3>
+              <p className="mt-2 text-sm text-base-content/60">
+                會完整覆蓋目前資料，但不會覆蓋目前後台密碼。還原完成後需要手動重啟服務。
+              </p>
+            </div>
+            <div className="badge badge-warning badge-lg">需要密碼</div>
+          </div>
+
+          {restoreDialog ? (
+            <>
+              <div className="rounded-box border border-base-300 bg-base-100 p-4">
+                <div className="text-xs uppercase tracking-wide text-base-content/50">Target Backup</div>
+                <div className="mt-1 font-semibold">{restoreDialog.backup.file_name}</div>
+                <div className="mt-3 text-sm text-base-content/60">
+                  建立於 {formatDateTime(restoreDialog.backup.created_at)}，還原時會替換主要持久化資料。
+                </div>
+              </div>
+
+              <div className="alert alert-warning">
+                <span>
+                  這個動作需要輸入建立該備份時使用的密碼；錯誤密碼會直接導致還原失敗。
+                </span>
+              </div>
+
+              <label className="form-control">
+                <div className="label">
+                  <span className="label-text">備份密碼</span>
+                </div>
+                <input
+                  type="password"
+                  className="input input-bordered"
+                  value={restoreDialog.password}
+                  onChange={(event) =>
+                    setRestoreDialog((current) =>
+                      current
+                        ? {
+                            ...current,
+                            password: event.target.value,
+                            error: null,
+                          }
+                        : current,
+                    )
+                  }
+                  placeholder="輸入建立這份備份時使用的密碼"
+                />
+              </label>
+
+              {restoreDialog.error ? (
+                <div className="alert alert-error">
+                  <span>{restoreDialog.error}</span>
+                </div>
+              ) : null}
+            </>
+          ) : null}
+
+          <div className="modal-action">
+            <button className="btn" onClick={closeRestoreDialog} disabled={busyAction === "restore"}>
+              取消
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={submitRestoreDialog}
+              disabled={busyAction === "restore"}
+            >
+              {busyAction === "restore" && (
+                <span className="loading loading-spinner loading-xs" />
+              )}
+              確認還原
+            </button>
+          </div>
+        </div>
+      </dialog>
     </div>
   );
 }

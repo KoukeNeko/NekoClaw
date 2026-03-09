@@ -267,24 +267,24 @@ func (s *Service) ListBackups() ([]backup.Entry, error) {
 	return manager.List()
 }
 
-func (s *Service) CreateBackup() (backup.Entry, error) {
+func (s *Service) CreateBackup(password string) (backup.Entry, error) {
 	s.mu.RLock()
 	manager := s.backupManager
 	s.mu.RUnlock()
 	if manager == nil {
 		return backup.Entry{}, backup.ErrNotConfigured
 	}
-	return manager.Create()
+	return manager.Create(password)
 }
 
-func (s *Service) ImportBackup(reader io.Reader) (backup.Entry, error) {
+func (s *Service) ImportBackup(reader io.Reader, password string) (backup.Entry, error) {
 	s.mu.RLock()
 	manager := s.backupManager
 	s.mu.RUnlock()
 	if manager == nil {
 		return backup.Entry{}, backup.ErrNotConfigured
 	}
-	return manager.Import(reader)
+	return manager.Import(reader, password)
 }
 
 func (s *Service) DeleteBackup(id string) error {
@@ -307,14 +307,14 @@ func (s *Service) BackupArchivePath(id string) (string, string, error) {
 	return manager.ArchivePath(id)
 }
 
-func (s *Service) RestoreBackup(id string) (backup.RestoreResult, error) {
+func (s *Service) RestoreBackup(id string, password string) (backup.RestoreResult, error) {
 	s.mu.RLock()
 	manager := s.backupManager
 	s.mu.RUnlock()
 	if manager == nil {
 		return backup.RestoreResult{}, backup.ErrNotConfigured
 	}
-	return manager.Restore(id)
+	return manager.Restore(id, password)
 }
 
 // ApplyMCPConfigs reconciles runtime custom MCP servers with config files.

@@ -1,7 +1,6 @@
 package backup
 
 import (
-	"archive/zip"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -16,13 +15,22 @@ import (
 	"time"
 
 	"github.com/doeshing/nekoclaw/internal/auth"
+	yzip "github.com/yeka/zip"
 )
 
 var (
-	ErrNotConfigured   = errors.New("backup manager not configured")
-	ErrBackupNotFound  = errors.New("backup not found")
-	ErrInvalidArchive  = errors.New("invalid backup archive")
-	ErrInvalidManifest = errors.New("invalid backup manifest")
+	ErrNotConfigured            = errors.New("backup manager not configured")
+	ErrBackupNotFound           = errors.New("backup not found")
+	ErrInvalidArchive           = errors.New("invalid backup archive")
+	ErrInvalidManifest          = errors.New("invalid backup manifest")
+	ErrPasswordRequired         = errors.New("backup password is required")
+	ErrInvalidPassword          = errors.New("invalid backup password")
+	ErrLegacyBackupUnsupported  = errors.New("legacy backups must be recreated as encrypted archives")
+)
+
+const (
+	minBackupPasswordLength = 12
+	maxBackupPasswordLength = 128
 )
 
 type ManagerOptions struct {
@@ -96,8 +104,11 @@ func NewManager(opts ManagerOptions) *Manager {
 	return manager
 }
 
-func (m *Manager) Create() (Entry, error) {
+func (m *Manager) Create(password string) (Entry, error) {
 	if err := m.ensureConfigured(); err != nil {
+		return Entry{}, err
+	}
+	if err := validateBackupPassword(password); err != nil {
 		return Entry{}, err
 	}
 
@@ -112,11 +123,14 @@ func (m *Manager) Create() (Entry, error) {
 	if err != nil {
 		return Entry{}, err
 	}
-	return m.writeSnapshotToLibrary(tempRoot, manifest)
+	return m.writeSnapshotToLibrary(tempRoot, manifest, password)
 }
 
-func (m *Manager) Import(reader io.Reader) (Entry, error) {
+func (m *Manager) Import(reader io.Reader, password string) (Entry, error) {
 	if err := m.ensureConfigured(); err != nil {
+		return Entry{}, err
+	}
+	if err := validateBackupPassword(password); err != nil {
 		return Entry{}, err
 	}
 
@@ -142,17 +156,21 @@ func (m *Manager) Import(reader io.Reader) (Entry, error) {
 	}
 	defer os.RemoveAll(tempRoot)
 
-	extractedRoot := filepath.Join(tempRoot, "extracted")
-	if err := extractZipToDir(uploadPath, extractedRoot); err != nil {
-		return Entry{}, fmt.Errorf("%w: %v", ErrInvalidArchive, err)
-	}
-
-	uploadedManifest, err := readManifest(filepath.Join(extractedRoot, "manifest.json"))
+	uploadedManifest, err := readManifestFromArchive(uploadPath)
 	if err != nil {
 		return Entry{}, fmt.Errorf("%w: %v", ErrInvalidManifest, err)
 	}
+	uploadedManifest = normalizeManifest(uploadedManifest)
 	if err := validateManifest(uploadedManifest); err != nil {
 		return Entry{}, fmt.Errorf("%w: %v", ErrInvalidManifest, err)
+	}
+	if uploadedManifest.Encryption != EncryptionZipAES256 {
+		return Entry{}, ErrLegacyBackupUnsupported
+	}
+
+	extractedRoot := filepath.Join(tempRoot, "extracted")
+	if err := extractZipToDir(uploadPath, extractedRoot, password); err != nil {
+		return Entry{}, err
 	}
 
 	createdAt := uploadedManifest.CreatedAt.UTC()
@@ -173,7 +191,7 @@ func (m *Manager) Import(reader io.Reader) (Entry, error) {
 	if err := writeManifest(filepath.Join(tempRoot, "manifest.json"), manifest); err != nil {
 		return Entry{}, err
 	}
-	return m.writeSnapshotToLibrary(tempRoot, manifest)
+	return m.writeSnapshotToLibrary(tempRoot, manifest, password)
 }
 
 func (m *Manager) List() ([]Entry, error) {
@@ -202,7 +220,7 @@ func (m *Manager) List() ([]Entry, error) {
 		if err := validateManifest(manifest); err != nil {
 			continue
 		}
-		manifest = normalizeManifestComponents(manifest)
+		manifest = normalizeManifest(manifest)
 		info, err := entry.Info()
 		if err != nil {
 			continue
@@ -238,8 +256,11 @@ func (m *Manager) ArchivePath(id string) (string, string, error) {
 	return m.archivePath(id)
 }
 
-func (m *Manager) Restore(id string) (RestoreResult, error) {
+func (m *Manager) Restore(id string, password string) (RestoreResult, error) {
 	if err := m.ensureConfigured(); err != nil {
+		return RestoreResult{}, err
+	}
+	if err := validateBackupPassword(password); err != nil {
 		return RestoreResult{}, err
 	}
 
@@ -254,17 +275,21 @@ func (m *Manager) Restore(id string) (RestoreResult, error) {
 	}
 	defer os.RemoveAll(tempRoot)
 
-	extractedRoot := filepath.Join(tempRoot, "archive")
-	if err := extractZipToDir(archivePath, extractedRoot); err != nil {
-		return RestoreResult{}, fmt.Errorf("%w: %v", ErrInvalidArchive, err)
-	}
-
-	manifest, err := readManifest(filepath.Join(extractedRoot, "manifest.json"))
+	manifest, err := readManifestFromArchive(archivePath)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%w: %v", ErrInvalidManifest, err)
 	}
+	manifest = normalizeManifest(manifest)
 	if err := validateManifest(manifest); err != nil {
 		return RestoreResult{}, fmt.Errorf("%w: %v", ErrInvalidManifest, err)
+	}
+	if manifest.Encryption != EncryptionZipAES256 {
+		return RestoreResult{}, ErrLegacyBackupUnsupported
+	}
+
+	extractedRoot := filepath.Join(tempRoot, "archive")
+	if err := extractZipToDir(archivePath, extractedRoot, password); err != nil {
+		return RestoreResult{}, err
 	}
 
 	rollbackRoot := filepath.Join(tempRoot, "rollback")
@@ -345,7 +370,7 @@ func (m *Manager) snapshotCurrentState(snapshotRoot string, manifest Manifest) (
 	return manifest, nil
 }
 
-func (m *Manager) writeSnapshotToLibrary(snapshotRoot string, manifest Manifest) (Entry, error) {
+func (m *Manager) writeSnapshotToLibrary(snapshotRoot string, manifest Manifest, password string) (Entry, error) {
 	if err := os.MkdirAll(m.backupsDir, 0o700); err != nil {
 		return Entry{}, err
 	}
@@ -359,7 +384,7 @@ func (m *Manager) writeSnapshotToLibrary(snapshotRoot string, manifest Manifest)
 		if err := writeManifest(filepath.Join(snapshotRoot, "manifest.json"), manifest); err != nil {
 			return Entry{}, err
 		}
-		if err := zipSnapshot(snapshotRoot, tempPath); err != nil {
+		if err := zipSnapshot(snapshotRoot, tempPath, password); err != nil {
 			return Entry{}, err
 		}
 		info, err := os.Stat(tempPath)
@@ -542,7 +567,10 @@ func buildComponentSummaries(payloadRoot string) ([]ComponentSummary, error) {
 	return components, nil
 }
 
-func normalizeManifestComponents(manifest Manifest) Manifest {
+func normalizeManifest(manifest Manifest) Manifest {
+	if manifest.Version == ManifestVersionLegacy && strings.TrimSpace(manifest.Encryption) == "" {
+		manifest.Encryption = EncryptionNone
+	}
 	filtered := make([]ComponentSummary, 0, len(manifest.Components))
 	for _, component := range manifest.Components {
 		if component.Key == ComponentSecurity {
@@ -566,15 +594,38 @@ func removeLegacySecurityPayload(payloadRoot string) error {
 	return nil
 }
 
+func validateBackupPassword(password string) error {
+	password = strings.TrimSpace(password)
+	if password == "" {
+		return ErrPasswordRequired
+	}
+	if len(password) < minBackupPasswordLength || len(password) > maxBackupPasswordLength {
+		return ErrInvalidPassword
+	}
+	return nil
+}
+
+func mapZipError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, yzip.ErrPassword), errors.Is(err, yzip.ErrDecryption), errors.Is(err, yzip.ErrAuthentication):
+		return ErrInvalidPassword
+	default:
+		return fmt.Errorf("%w: %v", ErrInvalidArchive, err)
+	}
+}
+
 func newManifest(source string, createdAt time.Time) Manifest {
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()
 	}
 	return Manifest{
-		Version:         ManifestVersion,
+		Version:         ManifestVersionEncrypted,
 		BackupID:        generateBackupID(),
 		CreatedAt:       createdAt.UTC(),
 		Source:          source,
+		Encryption:      EncryptionZipAES256,
 		ContainsSecrets: true,
 		RestoreMode:     RestoreModeReplace,
 		RestartRequired: true,
@@ -591,9 +642,7 @@ func newManifest(source string, createdAt time.Time) Manifest {
 }
 
 func validateManifest(manifest Manifest) error {
-	if manifest.Version != ManifestVersion {
-		return ErrInvalidManifest
-	}
+	manifest = normalizeManifest(manifest)
 	if strings.TrimSpace(manifest.BackupID) == "" {
 		return ErrInvalidManifest
 	}
@@ -605,7 +654,19 @@ func validateManifest(manifest Manifest) error {
 	if !manifest.ContainsSecrets || manifest.RestoreMode != RestoreModeReplace || !manifest.RestartRequired {
 		return ErrInvalidManifest
 	}
-	if len(manifest.Components) < 7 || len(manifest.Components) > 8 {
+	switch manifest.Version {
+	case ManifestVersionLegacy:
+		if manifest.Encryption != EncryptionNone {
+			return ErrInvalidManifest
+		}
+	case ManifestVersionEncrypted:
+		if manifest.Encryption != EncryptionZipAES256 {
+			return ErrInvalidManifest
+		}
+	default:
+		return ErrInvalidManifest
+	}
+	if len(manifest.Components) != 7 {
 		return ErrInvalidManifest
 	}
 	expected := map[string]struct{}{
@@ -618,9 +679,6 @@ func validateManifest(manifest Manifest) error {
 		ComponentBindings: {},
 	}
 	for _, component := range manifest.Components {
-		if component.Key == ComponentSecurity {
-			continue
-		}
 		if _, ok := expected[component.Key]; !ok {
 			return ErrInvalidManifest
 		}
@@ -691,11 +749,11 @@ func readManifest(path string) (Manifest, error) {
 	if err := readJSONFile(path, &manifest); err != nil {
 		return Manifest{}, err
 	}
-	return manifest, nil
+	return normalizeManifest(manifest), nil
 }
 
 func readManifestFromArchive(path string) (Manifest, error) {
-	reader, err := zip.OpenReader(path)
+	reader, err := yzip.OpenReader(path)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -714,7 +772,7 @@ func readManifestFromArchive(path string) (Manifest, error) {
 		if err := json.NewDecoder(rc).Decode(&manifest); err != nil {
 			return Manifest{}, err
 		}
-		return manifest, nil
+		return normalizeManifest(manifest), nil
 	}
 	return Manifest{}, fs.ErrNotExist
 }
@@ -741,7 +799,7 @@ func readJSONFile(path string, dest any) error {
 	return json.Unmarshal(data, dest)
 }
 
-func zipSnapshot(srcRoot string, destZip string) error {
+func zipSnapshot(srcRoot string, destZip string, password string) error {
 	if err := os.MkdirAll(filepath.Dir(destZip), 0o700); err != nil {
 		return err
 	}
@@ -751,7 +809,7 @@ func zipSnapshot(srcRoot string, destZip string) error {
 	}
 	defer file.Close()
 
-	writer := zip.NewWriter(file)
+	writer := yzip.NewWriter(file)
 
 	var paths []string
 	if err := filepath.WalkDir(srcRoot, func(path string, d fs.DirEntry, walkErr error) error {
@@ -781,12 +839,16 @@ func zipSnapshot(srcRoot string, destZip string) error {
 		if err != nil {
 			return err
 		}
-		header, err := zip.FileInfoHeader(info)
+		header, err := yzip.FileInfoHeader(info)
 		if err != nil {
 			return err
 		}
 		header.Name = rel
-		header.Method = zip.Deflate
+		header.Method = yzip.Deflate
+		if strings.HasPrefix(rel, "payload/") && strings.TrimSpace(password) != "" {
+			header.SetPassword(password)
+			header.SetEncryptionMethod(yzip.AES256Encryption)
+		}
 		target, err := writer.CreateHeader(header)
 		if err != nil {
 			return err
@@ -806,10 +868,10 @@ func zipSnapshot(srcRoot string, destZip string) error {
 	return writer.Close()
 }
 
-func extractZipToDir(zipPath, dst string) error {
-	reader, err := zip.OpenReader(zipPath)
+func extractZipToDir(zipPath, dst string, password string) error {
+	reader, err := yzip.OpenReader(zipPath)
 	if err != nil {
-		return err
+		return mapZipError(err)
 	}
 	defer reader.Close()
 
@@ -835,9 +897,15 @@ func extractZipToDir(zipPath, dst string) error {
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0o700); err != nil {
 			return err
 		}
+		if file.IsEncrypted() {
+			if strings.TrimSpace(password) == "" {
+				return ErrPasswordRequired
+			}
+			file.SetPassword(password)
+		}
 		reader, err := file.Open()
 		if err != nil {
-			return err
+			return mapZipError(err)
 		}
 		target, err := os.OpenFile(targetPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, file.Mode())
 		if err != nil {
@@ -847,7 +915,7 @@ func extractZipToDir(zipPath, dst string) error {
 		if _, err := io.Copy(target, reader); err != nil {
 			target.Close()
 			reader.Close()
-			return err
+			return mapZipError(err)
 		}
 		if err := target.Close(); err != nil {
 			reader.Close()

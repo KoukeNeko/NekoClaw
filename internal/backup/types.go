@@ -3,12 +3,16 @@ package backup
 import "time"
 
 const (
-	ManifestVersion = 1
+	ManifestVersionLegacy    = 1
+	ManifestVersionEncrypted = 2
 
 	SourceCreated  = "created"
 	SourceImported = "imported"
 
 	RestoreModeReplace = "replace"
+
+	EncryptionNone      = "none"
+	EncryptionZipAES256 = "zip-aes-256"
 )
 
 const (
@@ -33,6 +37,7 @@ type Manifest struct {
 	BackupID        string             `json:"backup_id"`
 	CreatedAt       time.Time          `json:"created_at"`
 	Source          string             `json:"source"`
+	Encryption      string             `json:"encryption,omitempty"`
 	ContainsSecrets bool               `json:"contains_secrets"`
 	RestoreMode     string             `json:"restore_mode"`
 	RestartRequired bool               `json:"restart_required"`

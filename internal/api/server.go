@@ -1795,7 +1795,14 @@ func (s *Server) handleBackupsCreate(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	entry, err := s.svc.CreateBackup()
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	entry, err := s.svc.CreateBackup(req.Password)
 	if err != nil {
 		respondBackupError(w, err)
 		return
@@ -1818,8 +1825,9 @@ func (s *Server) handleBackupsImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
+	password := r.FormValue("password")
 
-	entry, err := s.svc.ImportBackup(file)
+	entry, err := s.svc.ImportBackup(file, password)
 	if err != nil {
 		respondBackupError(w, err)
 		return
@@ -1853,7 +1861,8 @@ func (s *Server) handleBackupsDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID string `json:"id"`
+		ID       string `json:"id"`
+		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid json body")
@@ -1876,7 +1885,8 @@ func (s *Server) handleBackupsRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ID string `json:"id"`
+		ID       string `json:"id"`
+		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid json body")
@@ -1886,7 +1896,7 @@ func (s *Server) handleBackupsRestore(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "id is required")
 		return
 	}
-	result, err := s.svc.RestoreBackup(req.ID)
+	result, err := s.svc.RestoreBackup(req.ID, req.Password)
 	if err != nil {
 		respondBackupError(w, err)
 		return
@@ -1901,6 +1911,12 @@ func respondBackupError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, backup.ErrInvalidArchive), errors.Is(err, backup.ErrInvalidManifest):
 		respondError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, backup.ErrPasswordRequired):
+		respondErrorDetail(w, http.StatusBadRequest, "password_required", err.Error())
+	case errors.Is(err, backup.ErrInvalidPassword):
+		respondErrorDetail(w, http.StatusBadRequest, "invalid_backup_password", err.Error())
+	case errors.Is(err, backup.ErrLegacyBackupUnsupported):
+		respondErrorDetail(w, http.StatusConflict, "unsupported_legacy_backup", err.Error())
 	case errors.Is(err, backup.ErrBackupNotFound):
 		respondError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, backup.ErrNotConfigured):

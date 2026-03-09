@@ -1,8 +1,10 @@
 package api
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -16,14 +18,17 @@ import (
 	"github.com/doeshing/nekoclaw/internal/backup"
 	"github.com/doeshing/nekoclaw/internal/core"
 	"github.com/doeshing/nekoclaw/internal/security"
+	yzip "github.com/yeka/zip"
 )
+
+const apiBackupPassword = "backup-password-123"
 
 func TestBackupsEndpointsCreateListDownloadRestoreAndDelete(t *testing.T) {
 	svc, root := newBackupTestService(t)
 	seedBackupAPIState(t, root, svc)
 	handler := NewServer(svc).Handler()
 
-	createResp := performJSONRequest(t, handler, http.MethodPost, "/v1/backups/create", `{}`)
+	createResp := performJSONRequest(t, handler, http.MethodPost, "/v1/backups/create", `{"password":"`+apiBackupPassword+`"}`)
 	if createResp.Code != http.StatusOK {
 		t.Fatalf("unexpected create status: %d body=%s", createResp.Code, createResp.Body.String())
 	}
@@ -35,6 +40,9 @@ func TestBackupsEndpointsCreateListDownloadRestoreAndDelete(t *testing.T) {
 	}
 	if createPayload.Backup.BackupID == "" {
 		t.Fatal("expected backup id")
+	}
+	if createPayload.Backup.Encryption != backup.EncryptionZipAES256 {
+		t.Fatalf("encryption = %q, want %q", createPayload.Backup.Encryption, backup.EncryptionZipAES256)
 	}
 
 	listResp := performJSONRequest(t, handler, http.MethodGet, "/v1/backups", "")
@@ -70,7 +78,7 @@ func TestBackupsEndpointsCreateListDownloadRestoreAndDelete(t *testing.T) {
 		handler,
 		http.MethodPost,
 		"/v1/backups/restore",
-		`{"id":"`+createPayload.Backup.BackupID+`"}`,
+		`{"id":"`+createPayload.Backup.BackupID+`","password":"`+apiBackupPassword+`"}`,
 	)
 	if restoreResp.Code != http.StatusOK {
 		t.Fatalf("unexpected restore status: %d body=%s", restoreResp.Code, restoreResp.Body.String())
@@ -118,7 +126,7 @@ func TestBackupsImportAndValidation(t *testing.T) {
 	seedBackupAPIState(t, root, svc)
 	handler := NewServer(svc).Handler()
 
-	createResp := performJSONRequest(t, handler, http.MethodPost, "/v1/backups/create", `{}`)
+	createResp := performJSONRequest(t, handler, http.MethodPost, "/v1/backups/create", `{"password":"`+apiBackupPassword+`"}`)
 	if createResp.Code != http.StatusOK {
 		t.Fatalf("unexpected create status: %d body=%s", createResp.Code, createResp.Body.String())
 	}
@@ -133,12 +141,28 @@ func TestBackupsImportAndValidation(t *testing.T) {
 		t.Fatalf("read archive: %v", err)
 	}
 
-	invalidImport := performMultipartRequest(t, handler, "/v1/backups/import", "file", "broken.zip", []byte("not-a-zip"))
+	invalidImport := performMultipartRequest(
+		t,
+		handler,
+		"/v1/backups/import",
+		"file",
+		"broken.zip",
+		[]byte("not-a-zip"),
+		map[string]string{"password": apiBackupPassword},
+	)
 	if invalidImport.Code != http.StatusBadRequest {
 		t.Fatalf("expected invalid import to return 400, got %d body=%s", invalidImport.Code, invalidImport.Body.String())
 	}
 
-	importResp := performMultipartRequest(t, handler, "/v1/backups/import", "file", "backup.zip", rawArchive)
+	importResp := performMultipartRequest(
+		t,
+		handler,
+		"/v1/backups/import",
+		"file",
+		"backup.zip",
+		rawArchive,
+		map[string]string{"password": apiBackupPassword},
+	)
 	if importResp.Code != http.StatusOK {
 		t.Fatalf("unexpected import status: %d body=%s", importResp.Code, importResp.Body.String())
 	}
@@ -152,9 +176,125 @@ func TestBackupsImportAndValidation(t *testing.T) {
 		t.Fatalf("source = %q, want %q", importPayload.Backup.Source, backup.SourceImported)
 	}
 
-	missingIDRestore := performJSONRequest(t, handler, http.MethodPost, "/v1/backups/restore", `{}`)
+	wrongPassword := performMultipartRequest(
+		t,
+		handler,
+		"/v1/backups/import",
+		"file",
+		"backup.zip",
+		rawArchive,
+		map[string]string{"password": "wrong-password-456"},
+	)
+	if wrongPassword.Code != http.StatusBadRequest {
+		t.Fatalf("wrong password import status = %d body=%s", wrongPassword.Code, wrongPassword.Body.String())
+	}
+	if code := errorCodeFromBody(t, wrongPassword); code != "invalid_backup_password" {
+		t.Fatalf("wrong password import error code = %q, want invalid_backup_password", code)
+	}
+
+	missingPasswordCreate := performJSONRequest(t, handler, http.MethodPost, "/v1/backups/create", `{}`)
+	if missingPasswordCreate.Code != http.StatusBadRequest {
+		t.Fatalf("expected missing password create to return 400, got %d body=%s", missingPasswordCreate.Code, missingPasswordCreate.Body.String())
+	}
+	if code := errorCodeFromBody(t, missingPasswordCreate); code != "password_required" {
+		t.Fatalf("missing password create error code = %q, want password_required", code)
+	}
+
+	missingPasswordImport := performMultipartRequest(t, handler, "/v1/backups/import", "file", "backup.zip", rawArchive, nil)
+	if missingPasswordImport.Code != http.StatusBadRequest {
+		t.Fatalf("expected missing password import to return 400, got %d body=%s", missingPasswordImport.Code, missingPasswordImport.Body.String())
+	}
+	if code := errorCodeFromBody(t, missingPasswordImport); code != "password_required" {
+		t.Fatalf("missing password import error code = %q, want password_required", code)
+	}
+
+	missingIDRestore := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/v1/backups/restore",
+		`{"password":"`+apiBackupPassword+`"}`,
+	)
 	if missingIDRestore.Code != http.StatusBadRequest {
 		t.Fatalf("expected restore missing id to return 400, got %d body=%s", missingIDRestore.Code, missingIDRestore.Body.String())
+	}
+
+	missingPasswordRestore := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/v1/backups/restore",
+		`{"id":"`+createPayload.Backup.BackupID+`"}`,
+	)
+	if missingPasswordRestore.Code != http.StatusBadRequest {
+		t.Fatalf("expected missing password restore to return 400, got %d body=%s", missingPasswordRestore.Code, missingPasswordRestore.Body.String())
+	}
+	if code := errorCodeFromBody(t, missingPasswordRestore); code != "password_required" {
+		t.Fatalf("missing password restore error code = %q, want password_required", code)
+	}
+}
+
+func TestBackupsLegacyArchivesRemainListableButCannotBeImportedOrRestored(t *testing.T) {
+	svc, root := newBackupTestService(t)
+	seedBackupAPIState(t, root, svc)
+	handler := NewServer(svc).Handler()
+
+	entry, err := svc.CreateBackup(apiBackupPassword)
+	if err != nil {
+		t.Fatalf("CreateBackup failed: %v", err)
+	}
+	archivePath := filepath.Join(root, "backups", entry.FileName)
+	rewriteBackupArchiveAsLegacy(t, archivePath, apiBackupPassword)
+
+	listResp := performJSONRequest(t, handler, http.MethodGet, "/v1/backups", "")
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("unexpected list status: %d body=%s", listResp.Code, listResp.Body.String())
+	}
+	var listPayload struct {
+		Backups []backup.Entry `json:"backups"`
+	}
+	if err := json.Unmarshal(listResp.Body.Bytes(), &listPayload); err != nil {
+		t.Fatalf("decode list response: %v", err)
+	}
+	if len(listPayload.Backups) != 1 {
+		t.Fatalf("expected 1 backup, got %d", len(listPayload.Backups))
+	}
+	if listPayload.Backups[0].Encryption != backup.EncryptionNone {
+		t.Fatalf("legacy encryption = %q, want %q", listPayload.Backups[0].Encryption, backup.EncryptionNone)
+	}
+
+	rawArchive, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatalf("read legacy archive: %v", err)
+	}
+	importResp := performMultipartRequest(
+		t,
+		handler,
+		"/v1/backups/import",
+		"file",
+		"legacy.zip",
+		rawArchive,
+		map[string]string{"password": apiBackupPassword},
+	)
+	if importResp.Code != http.StatusConflict {
+		t.Fatalf("expected legacy import to return 409, got %d body=%s", importResp.Code, importResp.Body.String())
+	}
+	if code := errorCodeFromBody(t, importResp); code != "unsupported_legacy_backup" {
+		t.Fatalf("legacy import error code = %q, want unsupported_legacy_backup", code)
+	}
+
+	restoreResp := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/v1/backups/restore",
+		`{"id":"`+entry.BackupID+`","password":"`+apiBackupPassword+`"}`,
+	)
+	if restoreResp.Code != http.StatusConflict {
+		t.Fatalf("expected legacy restore to return 409, got %d body=%s", restoreResp.Code, restoreResp.Body.String())
+	}
+	if code := errorCodeFromBody(t, restoreResp); code != "unsupported_legacy_backup" {
+		t.Fatalf("legacy restore error code = %q, want unsupported_legacy_backup", code)
 	}
 }
 
@@ -163,7 +303,7 @@ func TestBackupsImportRequiresOriginOrTrustedUIHeaderWhenSecurityEnabled(t *test
 	seedBackupAPIState(t, root, svc)
 	svc.SetSecurityConfig(core.DefaultSecurityConfig())
 
-	entry, err := svc.CreateBackup()
+	entry, err := svc.CreateBackup(apiBackupPassword)
 	if err != nil {
 		t.Fatalf("CreateBackup failed: %v", err)
 	}
@@ -204,6 +344,7 @@ func TestBackupsImportRequiresOriginOrTrustedUIHeaderWhenSecurityEnabled(t *test
 		"file",
 		"backup.zip",
 		rawArchive,
+		map[string]string{"password": apiBackupPassword},
 		nil,
 		[]*http.Cookie{sessionCookie},
 	)
@@ -221,6 +362,7 @@ func TestBackupsImportRequiresOriginOrTrustedUIHeaderWhenSecurityEnabled(t *test
 		"file",
 		"backup.zip",
 		rawArchive,
+		map[string]string{"password": apiBackupPassword},
 		map[string]string{trustedBrowserUIHeader: trustedBrowserUIHeaderValue},
 		[]*http.Cookie{sessionCookie},
 	)
@@ -286,8 +428,9 @@ func performMultipartRequest(
 	fieldName string,
 	fileName string,
 	data []byte,
+	formFields map[string]string,
 ) *httptest.ResponseRecorder {
-	return performMultipartRequestWithOptions(t, handler, path, fieldName, fileName, data, nil, nil)
+	return performMultipartRequestWithOptions(t, handler, path, fieldName, fileName, data, formFields, nil, nil)
 }
 
 func performMultipartRequestWithOptions(
@@ -297,12 +440,18 @@ func performMultipartRequestWithOptions(
 	fieldName string,
 	fileName string,
 	data []byte,
+	formFields map[string]string,
 	headers map[string]string,
 	cookies []*http.Cookie,
 ) *httptest.ResponseRecorder {
 	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
+	for key, value := range formFields {
+		if err := writer.WriteField(key, value); err != nil {
+			t.Fatalf("WriteField(%s) failed: %v", key, err)
+		}
+	}
 	part, err := writer.CreateFormFile(fieldName, fileName)
 	if err != nil {
 		t.Fatalf("CreateFormFile failed: %v", err)
@@ -325,4 +474,123 @@ func performMultipartRequestWithOptions(
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	return rr
+}
+
+func rewriteBackupArchiveAsLegacy(t *testing.T, archivePath string, password string) {
+	t.Helper()
+	root := t.TempDir()
+	extractEncryptedArchive(t, archivePath, root, password)
+
+	manifestPath := filepath.Join(root, "manifest.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("ReadFile(manifest): %v", err)
+	}
+	var manifest backup.Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("Unmarshal manifest: %v", err)
+	}
+	manifest.Version = backup.ManifestVersionLegacy
+	manifest.Encryption = backup.EncryptionNone
+	updated, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatalf("Marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(manifestPath, updated, 0o644); err != nil {
+		t.Fatalf("WriteFile(manifest): %v", err)
+	}
+
+	writePlainArchive(t, root, archivePath)
+}
+
+func extractEncryptedArchive(t *testing.T, archivePath string, dst string, password string) {
+	t.Helper()
+	reader, err := yzip.OpenReader(archivePath)
+	if err != nil {
+		t.Fatalf("OpenReader(%s): %v", archivePath, err)
+	}
+	defer reader.Close()
+
+	for _, file := range reader.File {
+		target := filepath.Join(dst, filepath.FromSlash(file.Name))
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				t.Fatalf("MkdirAll(%s): %v", target, err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", filepath.Dir(target), err)
+		}
+		if file.IsEncrypted() {
+			file.SetPassword(password)
+		}
+		rc, err := file.Open()
+		if err != nil {
+			t.Fatalf("Open(%s): %v", file.Name, err)
+		}
+		f, err := os.Create(target)
+		if err != nil {
+			rc.Close()
+			t.Fatalf("Create(%s): %v", target, err)
+		}
+		if _, err := io.Copy(f, rc); err != nil {
+			f.Close()
+			rc.Close()
+			t.Fatalf("Copy(%s): %v", file.Name, err)
+		}
+		if err := f.Close(); err != nil {
+			rc.Close()
+			t.Fatalf("Close(%s): %v", target, err)
+		}
+		if err := rc.Close(); err != nil {
+			t.Fatalf("Close archive reader(%s): %v", file.Name, err)
+		}
+	}
+}
+
+func writePlainArchive(t *testing.T, srcRoot string, archivePath string) {
+	t.Helper()
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("Create(%s): %v", archivePath, err)
+	}
+	defer f.Close()
+
+	writer := zip.NewWriter(f)
+	defer writer.Close()
+
+	if err := filepath.Walk(srcRoot, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(srcRoot, path)
+		if err != nil {
+			return err
+		}
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+		header.Name = filepath.ToSlash(rel)
+		header.Method = zip.Deflate
+		entryWriter, err := writer.CreateHeader(header)
+		if err != nil {
+			return err
+		}
+		source, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(entryWriter, source)
+		if closeErr := source.Close(); err == nil {
+			err = closeErr
+		}
+		return err
+	}); err != nil {
+		t.Fatalf("Walk(%s): %v", srcRoot, err)
+	}
 }

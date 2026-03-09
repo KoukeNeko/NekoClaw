@@ -530,14 +530,20 @@ export async function listBackups(): Promise<BackupEntry[]> {
   return resp.backups ?? [];
 }
 
-export async function createBackup(): Promise<BackupEntry> {
-  const resp = await post<{ backup: BackupEntry }>("/v1/backups/create", {});
+export async function createBackup(password: string): Promise<BackupEntry> {
+  const resp = await post<{ backup: BackupEntry }>("/v1/backups/create", {
+    password,
+  });
   return resp.backup;
 }
 
-export async function importBackupArchive(file: File): Promise<BackupEntry> {
+export async function importBackupArchive(
+  file: File,
+  password: string,
+): Promise<BackupEntry> {
   const form = new FormData();
   form.append("file", file);
+  form.append("password", password);
   const resp = await fetchJSON<{ backup: BackupEntry }>("/v1/backups/import", {
     method: "POST",
     body: form,
@@ -549,8 +555,11 @@ export function deleteBackup(id: string): Promise<void> {
   return post("/v1/backups/delete", { id });
 }
 
-export async function restoreBackup(id: string): Promise<BackupRestoreResponse> {
-  return post("/v1/backups/restore", { id });
+export async function restoreBackup(
+  id: string,
+  password: string,
+): Promise<BackupRestoreResponse> {
+  return post("/v1/backups/restore", { id, password });
 }
 
 export async function downloadBackupArchive(id: string): Promise<void> {

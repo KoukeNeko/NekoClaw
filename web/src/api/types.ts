@@ -598,6 +598,7 @@ export interface PersonaInfo {
 
 export type BackupSource = "created" | "imported";
 export type BackupRestoreMode = "replace";
+export type BackupEncryption = "none" | "zip-aes-256";
 
 export interface BackupComponentSummary {
   key: string;
@@ -610,6 +611,7 @@ export interface BackupManifest {
   backup_id: string;
   created_at: string;
   source: BackupSource;
+  encryption: BackupEncryption;
   contains_secrets: boolean;
   restore_mode: BackupRestoreMode;
   restart_required: boolean;

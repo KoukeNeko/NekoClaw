@@ -1,8 +1,8 @@
 package backup
 
 import (
-	"archive/zip"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,7 +11,10 @@ import (
 	"testing"
 
 	"github.com/doeshing/nekoclaw/internal/auth"
+	yzip "github.com/yeka/zip"
 )
+
+const testBackupPassword = "backup-password-123"
 
 type memoryKeyring struct {
 	mu   sync.Mutex
@@ -60,23 +63,18 @@ func TestManagerCreateListAndRestoreRoundTrip(t *testing.T) {
 	env := newTestEnv(t)
 	profile := seedState(t, env, "backup-secret", "Asia/Taipei")
 
-	entry, err := env.manager.Create()
+	entry, err := env.manager.Create(testBackupPassword)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 	if entry.Source != SourceCreated {
 		t.Fatalf("source = %q, want %q", entry.Source, SourceCreated)
 	}
-
-	archiveEntries := zipEntryNames(t, filepath.Join(env.root, "backups", entry.FileName))
-	for _, name := range archiveEntries {
-		if strings.Contains(name, "search.db") {
-			t.Fatalf("archive unexpectedly included search.db: %q", name)
-		}
-		if strings.Contains(name, "security-state.json") {
-			t.Fatalf("archive unexpectedly included security-state.json: %q", name)
-		}
+	if entry.Encryption != EncryptionZipAES256 {
+		t.Fatalf("encryption = %q, want %q", entry.Encryption, EncryptionZipAES256)
 	}
+
+	assertArchiveSecurity(t, filepath.Join(env.root, "backups", entry.FileName))
 
 	backups, err := env.manager.List()
 	if err != nil {
@@ -84,6 +82,9 @@ func TestManagerCreateListAndRestoreRoundTrip(t *testing.T) {
 	}
 	if len(backups) != 1 {
 		t.Fatalf("expected 1 backup, got %d", len(backups))
+	}
+	if backups[0].Encryption != EncryptionZipAES256 {
+		t.Fatalf("listed encryption = %q, want %q", backups[0].Encryption, EncryptionZipAES256)
 	}
 
 	writeFile(t, filepath.Join(env.root, "config.json"), `{"general":{"timezone":"Mutated/Timezone"}}`)
@@ -98,7 +99,7 @@ func TestManagerCreateListAndRestoreRoundTrip(t *testing.T) {
 	writeFile(t, filepath.Join(env.root, "auth", "security-state.json"), `{"password_hash":"current-hash"}`)
 	writeFile(t, filepath.Join(env.root, "memory", "orphan.md"), "orphan")
 
-	restoreResult, err := env.manager.Restore(entry.BackupID)
+	restoreResult, err := env.manager.Restore(entry.BackupID, testBackupPassword)
 	if err != nil {
 		t.Fatalf("Restore failed: %v", err)
 	}
@@ -130,17 +131,17 @@ func TestManagerCreateListAndRestoreRoundTrip(t *testing.T) {
 	}
 }
 
-func TestManagerImportDeleteAndRejectInvalidArchive(t *testing.T) {
+func TestManagerImportDeleteAndRejectInvalidPassword(t *testing.T) {
 	env := newTestEnv(t)
 	seedState(t, env, "backup-secret", "Asia/Taipei")
 
-	created, err := env.manager.Create()
+	created, err := env.manager.Create(testBackupPassword)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 	raw := readBytes(t, filepath.Join(env.root, "backups", created.FileName))
 
-	imported, err := env.manager.Import(bytes.NewReader(raw))
+	imported, err := env.manager.Import(bytes.NewReader(raw), testBackupPassword)
 	if err != nil {
 		t.Fatalf("Import failed: %v", err)
 	}
@@ -156,6 +157,16 @@ func TestManagerImportDeleteAndRejectInvalidArchive(t *testing.T) {
 		t.Fatalf("expected 2 backups after import, got %d", len(backups))
 	}
 
+	if _, err := env.manager.Import(bytes.NewReader(raw), "wrong-password-456"); !errors.Is(err, ErrInvalidPassword) {
+		t.Fatalf("expected invalid password error, got %v", err)
+	}
+	if _, err := env.manager.Import(bytes.NewBufferString("not-a-zip"), testBackupPassword); !errors.Is(err, ErrInvalidManifest) {
+		t.Fatalf("expected invalid manifest error, got %v", err)
+	}
+	if _, err := env.manager.Import(bytes.NewReader(raw), ""); !errors.Is(err, ErrPasswordRequired) {
+		t.Fatalf("expected password required error, got %v", err)
+	}
+
 	if err := env.manager.Delete(imported.BackupID); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
@@ -166,17 +177,13 @@ func TestManagerImportDeleteAndRejectInvalidArchive(t *testing.T) {
 	if len(backups) != 1 {
 		t.Fatalf("expected 1 backup after delete, got %d", len(backups))
 	}
-
-	if _, err := env.manager.Import(bytes.NewBufferString("not-a-zip")); !errors.Is(err, ErrInvalidArchive) {
-		t.Fatalf("expected invalid archive error, got %v", err)
-	}
 }
 
 func TestManagerRestoreRollsBackOnFailure(t *testing.T) {
 	env := newTestEnv(t)
 	profile := seedState(t, env, "backup-secret", "Asia/Taipei")
 
-	entry, err := env.manager.Create()
+	entry, err := env.manager.Create(testBackupPassword)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -198,7 +205,7 @@ func TestManagerRestoreRollsBackOnFailure(t *testing.T) {
 		AuthStore:   env.authStore,
 	})
 
-	if _, err := badManager.Restore(entry.BackupID); err == nil {
+	if _, err := badManager.Restore(entry.BackupID, testBackupPassword); err == nil {
 		t.Fatal("expected restore to fail")
 	}
 
@@ -214,45 +221,34 @@ func TestManagerRestoreRollsBackOnFailure(t *testing.T) {
 	}
 }
 
-func TestManagerRestoreLegacyArchiveKeepsCurrentSecurityState(t *testing.T) {
+func TestManagerLegacyArchiveIsListedButCannotBeImportedOrRestored(t *testing.T) {
 	env := newTestEnv(t)
 	seedState(t, env, "backup-secret", "Asia/Taipei")
 
-	entry, err := env.manager.Create()
+	entry, err := env.manager.Create(testBackupPassword)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
-
 	archivePath := filepath.Join(env.root, "backups", entry.FileName)
-	legacyRoot := t.TempDir()
-	if err := extractZipToDir(archivePath, legacyRoot); err != nil {
-		t.Fatalf("extractZipToDir failed: %v", err)
-	}
-	writeFile(t, filepath.Join(legacyRoot, "payload", "security", "security-state.json"), `{"password_hash":"legacy-hash"}`)
-	manifest, err := readManifest(filepath.Join(legacyRoot, "manifest.json"))
+	rewriteArchiveAsLegacy(t, archivePath, testBackupPassword)
+
+	backups, err := env.manager.List()
 	if err != nil {
-		t.Fatalf("readManifest failed: %v", err)
+		t.Fatalf("List failed: %v", err)
 	}
-	manifest.Components = append(manifest.Components, ComponentSummary{
-		Key:       ComponentSecurity,
-		Label:     "Security",
-		ItemCount: 1,
-	})
-	if err := writeManifest(filepath.Join(legacyRoot, "manifest.json"), manifest); err != nil {
-		t.Fatalf("writeManifest failed: %v", err)
+	if len(backups) != 1 {
+		t.Fatalf("expected 1 listed backup, got %d", len(backups))
 	}
-	if err := zipSnapshot(legacyRoot, archivePath); err != nil {
-		t.Fatalf("zipSnapshot failed: %v", err)
+	if backups[0].Encryption != EncryptionNone {
+		t.Fatalf("legacy encryption = %q, want %q", backups[0].Encryption, EncryptionNone)
 	}
 
-	writeFile(t, filepath.Join(env.root, "auth", "security-state.json"), `{"password_hash":"current-hash"}`)
-
-	if _, err := env.manager.Restore(entry.BackupID); err != nil {
-		t.Fatalf("Restore failed: %v", err)
+	raw := readBytes(t, archivePath)
+	if _, err := env.manager.Import(bytes.NewReader(raw), testBackupPassword); !errors.Is(err, ErrLegacyBackupUnsupported) {
+		t.Fatalf("expected legacy import to be rejected, got %v", err)
 	}
-
-	if got := strings.TrimSpace(readFile(t, filepath.Join(env.root, "auth", "security-state.json"))); !strings.Contains(got, "current-hash") {
-		t.Fatalf("legacy restore should keep current security-state.json, got %s", got)
+	if _, err := env.manager.Restore(entry.BackupID, testBackupPassword); !errors.Is(err, ErrLegacyBackupUnsupported) {
+		t.Fatalf("expected legacy restore to be rejected, got %v", err)
 	}
 }
 
@@ -315,19 +311,77 @@ func seedState(t *testing.T, env testEnv, token string, timezone string) auth.Pr
 	return profile
 }
 
-func zipEntryNames(t *testing.T, archivePath string) []string {
+func assertArchiveSecurity(t *testing.T, archivePath string) {
 	t.Helper()
-	reader, err := zip.OpenReader(archivePath)
+	reader, err := yzip.OpenReader(archivePath)
 	if err != nil {
 		t.Fatalf("OpenReader failed: %v", err)
 	}
 	defer reader.Close()
 
-	names := make([]string, 0, len(reader.File))
+	foundManifest := false
+	foundEncryptedPayload := false
 	for _, file := range reader.File {
-		names = append(names, file.Name)
+		if strings.Contains(file.Name, "search.db") {
+			t.Fatalf("archive unexpectedly included search.db: %q", file.Name)
+		}
+		if strings.Contains(file.Name, "security-state.json") {
+			t.Fatalf("archive unexpectedly included security-state.json: %q", file.Name)
+		}
+		if file.Name == "manifest.json" {
+			foundManifest = true
+			if file.IsEncrypted() {
+				t.Fatal("manifest.json should remain plaintext")
+			}
+			rc, err := file.Open()
+			if err != nil {
+				t.Fatalf("Open manifest.json failed: %v", err)
+			}
+			var manifest Manifest
+			if err := json.NewDecoder(rc).Decode(&manifest); err != nil {
+				rc.Close()
+				t.Fatalf("decode manifest.json failed: %v", err)
+			}
+			if err := rc.Close(); err != nil {
+				t.Fatalf("close manifest.json failed: %v", err)
+			}
+			if manifest.Encryption != EncryptionZipAES256 {
+				t.Fatalf("manifest encryption = %q, want %q", manifest.Encryption, EncryptionZipAES256)
+			}
+		}
+		if strings.HasPrefix(file.Name, "payload/") && !file.FileInfo().IsDir() {
+			if !file.IsEncrypted() {
+				t.Fatalf("payload entry should be encrypted: %q", file.Name)
+			}
+			foundEncryptedPayload = true
+		}
 	}
-	return names
+	if !foundManifest {
+		t.Fatal("manifest.json missing from archive")
+	}
+	if !foundEncryptedPayload {
+		t.Fatal("expected at least one encrypted payload entry")
+	}
+}
+
+func rewriteArchiveAsLegacy(t *testing.T, archivePath string, password string) {
+	t.Helper()
+	legacyRoot := t.TempDir()
+	if err := extractZipToDir(archivePath, legacyRoot, password); err != nil {
+		t.Fatalf("extractZipToDir failed: %v", err)
+	}
+	manifest, err := readManifest(filepath.Join(legacyRoot, "manifest.json"))
+	if err != nil {
+		t.Fatalf("readManifest failed: %v", err)
+	}
+	manifest.Version = ManifestVersionLegacy
+	manifest.Encryption = EncryptionNone
+	if err := writeManifest(filepath.Join(legacyRoot, "manifest.json"), manifest); err != nil {
+		t.Fatalf("writeManifest failed: %v", err)
+	}
+	if err := zipSnapshot(legacyRoot, archivePath, ""); err != nil {
+		t.Fatalf("zipSnapshot failed: %v", err)
+	}
 }
 
 func writeFile(t *testing.T, path string, contents string) {
