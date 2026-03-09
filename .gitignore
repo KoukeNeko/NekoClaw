@@ -9,3 +9,7 @@
 # Web UI build artifacts
 web/node_modules/
 web/dist/
+web/tsconfig.tsbuildinfo
+
+# Local build outputs
+nekoclaw
