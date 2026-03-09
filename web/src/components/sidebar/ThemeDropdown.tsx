@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { sidebarActionClass } from "./sidebarItemStyles";
 
 /**
  * All daisyUI 5 built-in themes.
@@ -68,10 +69,10 @@ export function ThemeDropdown() {
 
   return (
     <div className="dropdown dropdown-top w-full">
-      <div
+      <button
+        type="button"
         tabIndex={0}
-        role="button"
-        className="btn btn-ghost w-full justify-start gap-2 h-auto py-2.5 is-drawer-close:btn-square is-drawer-close:tooltip is-drawer-close:tooltip-right"
+        className={`${sidebarActionClass} is-drawer-close:tooltip is-drawer-close:tooltip-right`}
         data-tip="主題"
       >
         <svg
@@ -89,7 +90,7 @@ export function ThemeDropdown() {
           />
         </svg>
         <span className="is-drawer-close:hidden capitalize">{theme}</span>
-      </div>
+      </button>
       <ul
         tabIndex={0}
         className="dropdown-content bg-base-300 rounded-box z-50 w-52 p-2 shadow-2xl max-h-80 overflow-y-auto [scrollbar-width:thin]"

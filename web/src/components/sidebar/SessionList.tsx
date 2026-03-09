@@ -3,6 +3,12 @@ import { useAppStore } from "@/store/appStore";
 import { listSessions } from "@/api/client";
 import { formatRelativeTime } from "@/utils/format";
 import { openSessionConversation } from "@/utils/sessionNavigation";
+import {
+  sidebarItemActiveClass,
+  sidebarListItemClass,
+  sidebarSectionClass,
+  sidebarSectionLabelClass,
+} from "./sidebarItemStyles";
 
 /**
  * Scrollable session list showing all persisted sessions.
@@ -39,28 +45,30 @@ export function SessionList() {
   }
 
   return (
-    <div className="p-2">
-      <div className="text-xs font-semibold text-base-content/50 uppercase tracking-wider px-2 py-1">
+    <div className={sidebarSectionClass}>
+      <div className={sidebarSectionLabelClass}>
         對話紀錄
       </div>
       {sessions.length === 0 && (
-        <div className="text-sm text-base-content/40 px-2 py-4 text-center">
+        <div className="px-3 py-4 text-center text-sm text-base-content/40">
           尚無對話
         </div>
       )}
-      <ul className="menu menu-sm p-0 gap-0.5">
+      <ul className="space-y-1">
         {sessions.map((s) => (
           <li key={s.session_id}>
             <button
-              className={`grid grid-cols-[1fr_auto] gap-2 items-start w-full text-left h-auto py-2 ${s.session_id === sessionID ? "active" : ""
-                }`}
+              type="button"
+              className={`${sidebarListItemClass} ${s.session_id === sessionID ? sidebarItemActiveClass : ""}`}
               onClick={() => handleSelect(s.session_id)}
             >
-              <span className="truncate min-w-0 font-medium">
-                {s.title || s.session_id}
-              </span>
-              <span className="text-[10px] text-base-content/40 whitespace-nowrap mt-0.5">
-                {formatRelativeTime(s.updated_at)}
+              <span className="flex min-w-0 flex-1 items-start justify-between gap-2">
+                <span className="truncate min-w-0 font-medium">
+                  {s.title || s.session_id}
+                </span>
+                <span className="mt-0.5 shrink-0 whitespace-nowrap text-[10px] text-base-content/40">
+                  {formatRelativeTime(s.updated_at)}
+                </span>
               </span>
             </button>
           </li>
