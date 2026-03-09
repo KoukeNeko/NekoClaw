@@ -17,6 +17,8 @@ import { formatDateTime, formatRelativeTime } from "@/utils/format";
 
 const MIN_BACKUP_PASSWORD_LENGTH = 12;
 const GENERATED_PASSWORD_LENGTH = 24;
+const PASSWORD_INPUT_CLASS =
+  "input input-bordered focus:border-base-300 focus:outline-none focus:ring-0 focus-visible:border-base-300 focus-visible:outline-none focus-visible:ring-0";
 
 type StatusTone = "success" | "error" | "info";
 type StatusState = { tone: StatusTone; message: string } | null;
@@ -35,10 +37,16 @@ type ImportErrorState = {
   message: string;
 };
 type ImportStepStatus = "pending" | "active" | "done" | "error";
+type ImportSubstep = {
+  title: string;
+  detail: string;
+  status: ImportStepStatus;
+};
 type ImportStep = {
   title: string;
   detail: string;
   status: ImportStepStatus;
+  substeps?: ImportSubstep[];
 };
 type CreateDialogState = {
   mode: "manual" | "generated";
@@ -212,6 +220,58 @@ function importStageIndex(progress: number): number {
   return 0;
 }
 
+function importLibraryStageIndex(progress: number): number {
+  if (progress >= 91) return 4;
+  if (progress >= 88) return 3;
+  if (progress >= 86) return 2;
+  if (progress >= 84) return 1;
+  return 0;
+}
+
+function buildLibraryWriteSubsteps(
+  parentStatus: ImportStepStatus,
+  phase: ImportPhase,
+  progress: number,
+): ImportSubstep[] {
+  const substeps = [
+    {
+      title: "重寫 manifest",
+      detail: "更新 manifest.json 與 size_bytes 等 metadata，準備新的備份庫條目。",
+    },
+    {
+      title: "重新封裝 payload",
+      detail: "用這次輸入的密碼把 payload 重新壓成 ZIP AES-256 archive。",
+    },
+    {
+      title: "寫入暫存 archive",
+      detail: "先輸出到 backups/*.tmp，避免留下半套或中斷的正式檔案。",
+    },
+    {
+      title: "切換正式檔案",
+      detail: "暫存檔寫完後 rename 成正式 archive 檔名。",
+    },
+    {
+      title: "回傳 backup entry",
+      detail: "整理 file_name、backup_id、created_at、size 與 component 摘要後回傳給 UI。",
+    },
+  ];
+
+  if (parentStatus === "pending") {
+    return substeps.map((substep) => ({ ...substep, status: "pending" as const }));
+  }
+  if (phase === "success" || parentStatus === "done") {
+    return substeps.map((substep) => ({ ...substep, status: "done" as const }));
+  }
+
+  const activeIndex = importLibraryStageIndex(progress);
+  return substeps.map((substep, index) => {
+    let status: ImportStepStatus = "pending";
+    if (index < activeIndex) status = "done";
+    if (index === activeIndex) status = parentStatus === "error" ? "error" : "active";
+    return { ...substep, status };
+  });
+}
+
 function buildImportSteps(
   phase: ImportPhase,
   progress: number,
@@ -232,7 +292,9 @@ function buildImportSteps(
     },
     {
       title: "寫入備份庫",
-      detail: "驗證成功後重封裝成備份庫條目，然後回傳新的 backup entry。",
+      detail:
+        "驗證成功後會重新寫入 manifest、用這次提供的密碼重新封裝 payload、先落到 backups/*.tmp，再 rename 成正式 archive，最後回傳新的 backup entry。",
+      substeps: [],
     },
   ];
 
@@ -246,7 +308,14 @@ function buildImportSteps(
     if (index < activeIndex) status = "done";
     if (index === activeIndex) status = phase === "error" ? "error" : "active";
     if (phase === "ready" && index === 0) status = "active";
-    return { ...step, status };
+    return {
+      ...step,
+      status,
+      substeps:
+        step.title === "寫入備份庫"
+          ? buildLibraryWriteSubsteps(status, phase, progress)
+          : step.substeps,
+    };
   });
 }
 
@@ -537,6 +606,10 @@ export function BackupPanel() {
   const activeImportStep =
     importSteps.find(
       (step) => step.status === "active" || step.status === "error",
+    ) ?? null;
+  const activeImportSubstep =
+    activeImportStep?.substeps?.find(
+      (substep) => substep.status === "active" || substep.status === "error",
     ) ?? null;
 
   function openCreateDialog() {
@@ -1276,7 +1349,7 @@ export function BackupPanel() {
                     </div>
                     <input
                       type="password"
-                      className="input input-bordered"
+                      className={PASSWORD_INPUT_CLASS}
                       value={createDialog.password}
                       onChange={(event) =>
                         setCreateDialog((current) =>
@@ -1298,7 +1371,7 @@ export function BackupPanel() {
                     </div>
                     <input
                       type="password"
-                      className="input input-bordered"
+                      className={PASSWORD_INPUT_CLASS}
                       value={createDialog.confirmPassword}
                       onChange={(event) =>
                         setCreateDialog((current) =>
@@ -1449,7 +1522,7 @@ export function BackupPanel() {
                 </div>
                 <input
                   type="password"
-                  className="input input-bordered"
+                  className={PASSWORD_INPUT_CLASS}
                   value={importPasswordDialog.password}
                   onChange={(event) =>
                     setImportPasswordDialog((current) =>
@@ -1540,8 +1613,10 @@ export function BackupPanel() {
                   <div className="text-sm font-medium">{importProgress}%</div>
                 </div>
                 <p className="mt-3 text-sm text-base-content/70">
-                  {activeImportStep
-                    ? `${activeImportStep.title}：${activeImportStep.detail}`
+                  {activeImportSubstep && activeImportStep
+                    ? `${activeImportStep.title} / ${activeImportSubstep.title}：${activeImportSubstep.detail}`
+                    : activeImportStep
+                      ? `${activeImportStep.title}：${activeImportStep.detail}`
                     : importPhaseDescription(importDialog.phase)}
                 </p>
                 <progress
@@ -1562,6 +1637,26 @@ export function BackupPanel() {
                         </div>
                       </div>
                       <p className="mt-2 text-sm text-base-content/60">{step.detail}</p>
+                      {step.substeps && step.substeps.length > 0 ? (
+                        <div className="mt-3 space-y-2 rounded-box border border-base-300/70 bg-base-100/70 p-3">
+                          {step.substeps.map((substep) => (
+                            <div
+                              key={`${step.title}-${substep.title}`}
+                              className="flex items-start justify-between gap-3 rounded-box border border-base-300/60 bg-base-100 px-3 py-2"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="text-sm font-medium">{substep.title}</div>
+                                <p className="mt-1 text-xs text-base-content/60">
+                                  {substep.detail}
+                                </p>
+                              </div>
+                              <div className={`badge badge-xs ${importStepBadgeClass(substep.status)}`}>
+                                {importStepLabel(substep.status)}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
                   ))}
                 </div>
@@ -1691,7 +1786,7 @@ export function BackupPanel() {
                 </div>
                 <input
                   type="password"
-                  className="input input-bordered"
+                  className={PASSWORD_INPUT_CLASS}
                   value={restoreDialog.password}
                   onChange={(event) =>
                     setRestoreDialog((current) =>
