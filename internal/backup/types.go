@@ -14,6 +14,29 @@ const (
 )
 
 const (
+	ImportJobStatusRunning   = "running"
+	ImportJobStatusCompleted = "completed"
+	ImportJobStatusFailed    = "failed"
+)
+
+const (
+	ImportStageArchiveValidation = "archive_validation"
+	ImportStageLibraryWrite      = "library_write"
+	ImportStageCompleted         = "completed"
+	ImportStageFailed            = "failed"
+)
+
+const (
+	ImportSubstageManifestRead      = "manifest_read"
+	ImportSubstagePayloadDecrypting = "payload_decrypting"
+	ImportSubstagePayloadValidating = "payload_validating"
+	ImportSubstageManifestRewriting = "manifest_rewriting"
+	ImportSubstagePayloadRepacking  = "payload_repacking"
+	ImportSubstageTempArchiveWrite  = "temp_archive_writing"
+	ImportSubstageArchiveRenaming   = "archive_renaming"
+)
+
+const (
 	ComponentConfig   = "config"
 	ComponentAuth     = "auth"
 	ComponentSessions = "sessions"
@@ -49,4 +72,27 @@ type Entry struct {
 
 type RestoreResult struct {
 	RestartRequired bool `json:"restart_required"`
+}
+
+type ImportJobEvent struct {
+	At      time.Time `json:"at"`
+	Message string    `json:"message"`
+}
+
+type ImportJobSnapshot struct {
+	JobID           string           `json:"job_id"`
+	Status          string           `json:"status"`
+	Stage           string           `json:"stage"`
+	Substage        string           `json:"substage,omitempty"`
+	ProgressPercent int              `json:"progress_percent"`
+	Message         string           `json:"message,omitempty"`
+	ErrorCode       string           `json:"error_code,omitempty"`
+	ErrorMessage    string           `json:"error_message,omitempty"`
+	Events          []ImportJobEvent `json:"events,omitempty"`
+	CreatedAt       time.Time        `json:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at"`
+	ExpiresAt       time.Time        `json:"expires_at"`
+	FileName        string           `json:"file_name"`
+	FileSizeBytes   int64            `json:"file_size_bytes"`
+	Backup          *Entry           `json:"backup,omitempty"`
 }

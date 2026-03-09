@@ -599,6 +599,20 @@ export interface PersonaInfo {
 export type BackupSource = "created" | "imported";
 export type BackupRestoreMode = "replace";
 export type BackupEncryption = "zip-aes-256";
+export type BackupImportJobStatus = "running" | "completed" | "failed";
+export type BackupImportStage =
+  | "archive_validation"
+  | "library_write"
+  | "completed"
+  | "failed";
+export type BackupImportSubstage =
+  | "manifest_read"
+  | "payload_decrypting"
+  | "payload_validating"
+  | "manifest_rewriting"
+  | "payload_repacking"
+  | "temp_archive_writing"
+  | "archive_renaming";
 
 export interface BackupComponentSummary {
   key: string;
@@ -621,6 +635,29 @@ export interface BackupManifest {
 
 export interface BackupEntry extends BackupManifest {
   file_name: string;
+}
+
+export interface BackupImportJobEvent {
+  at: string;
+  message: string;
+}
+
+export interface BackupImportJob {
+  job_id: string;
+  status: BackupImportJobStatus;
+  stage: BackupImportStage;
+  substage?: BackupImportSubstage;
+  progress_percent: number;
+  message?: string;
+  error_code?: string;
+  error_message?: string;
+  events?: BackupImportJobEvent[];
+  created_at: string;
+  updated_at: string;
+  expires_at: string;
+  file_name: string;
+  file_size_bytes: number;
+  backup?: BackupEntry;
 }
 
 export interface BackupRestoreResponse {

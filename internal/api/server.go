@@ -123,6 +123,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/backups", s.handleBackups)
 	mux.HandleFunc("/v1/backups/create", s.handleBackupsCreate)
 	mux.HandleFunc("/v1/backups/import", s.handleBackupsImport)
+	mux.HandleFunc("/v1/backups/import/jobs/", s.handleBackupsImportJob)
 	mux.HandleFunc("/v1/backups/download", s.handleBackupsDownload)
 	mux.HandleFunc("/v1/backups/delete", s.handleBackupsDelete)
 	mux.HandleFunc("/v1/backups/restore", s.handleBackupsRestore)
@@ -1869,7 +1870,10 @@ func (s *Server) handleBackupsImport(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid multipart form")
 		return
 	}
-	file, _, err := r.FormFile("file")
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	file, header, err := r.FormFile("file")
 	if err != nil {
 		respondError(w, http.StatusBadRequest, "file is required")
 		return
@@ -1877,12 +1881,36 @@ func (s *Server) handleBackupsImport(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 	password := r.FormValue("password")
 
-	entry, err := s.svc.ImportBackup(file, password)
+	job, err := s.svc.StartBackupImport(file, header.Filename, header.Size, password)
 	if err != nil {
 		respondBackupError(w, err)
 		return
 	}
-	respondJSON(w, http.StatusOK, map[string]any{"backup": entry})
+	respondJSON(w, http.StatusAccepted, map[string]any{"job": job})
+}
+
+func (s *Server) handleBackupsImportJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	path := strings.TrimSpace(r.URL.Path)
+	prefix := "/v1/backups/import/jobs/"
+	if !strings.HasPrefix(path, prefix) {
+		respondError(w, http.StatusNotFound, "not found")
+		return
+	}
+	jobID := strings.TrimSpace(strings.TrimPrefix(path, prefix))
+	if jobID == "" {
+		respondError(w, http.StatusBadRequest, "job_id is required")
+		return
+	}
+	job, err := s.svc.GetBackupImportJob(jobID)
+	if err != nil {
+		respondBackupError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"job": job})
 }
 
 func (s *Server) handleBackupsDownload(w http.ResponseWriter, r *http.Request) {
@@ -1966,6 +1994,8 @@ func respondBackupError(w http.ResponseWriter, err error) {
 	case errors.Is(err, backup.ErrInvalidPassword):
 		respondErrorDetail(w, http.StatusBadRequest, "invalid_backup_password", err.Error())
 	case errors.Is(err, backup.ErrBackupNotFound):
+		respondError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, backup.ErrImportJobNotFound):
 		respondError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, backup.ErrNotConfigured):
 		respondError(w, http.StatusServiceUnavailable, err.Error())

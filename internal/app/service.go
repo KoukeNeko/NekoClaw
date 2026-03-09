@@ -287,6 +287,26 @@ func (s *Service) ImportBackup(reader io.Reader, password string) (backup.Entry,
 	return manager.Import(reader, password)
 }
 
+func (s *Service) StartBackupImport(reader io.Reader, fileName string, fileSize int64, password string) (backup.ImportJobSnapshot, error) {
+	s.mu.RLock()
+	manager := s.backupManager
+	s.mu.RUnlock()
+	if manager == nil {
+		return backup.ImportJobSnapshot{}, backup.ErrNotConfigured
+	}
+	return manager.StartImport(reader, fileName, fileSize, password)
+}
+
+func (s *Service) GetBackupImportJob(id string) (backup.ImportJobSnapshot, error) {
+	s.mu.RLock()
+	manager := s.backupManager
+	s.mu.RUnlock()
+	if manager == nil {
+		return backup.ImportJobSnapshot{}, backup.ErrNotConfigured
+	}
+	return manager.GetImportJob(id)
+}
+
 func (s *Service) DeleteBackup(id string) error {
 	s.mu.RLock()
 	manager := s.backupManager

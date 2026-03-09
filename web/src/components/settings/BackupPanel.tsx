@@ -4,11 +4,18 @@ import {
   createBackup,
   deleteBackup,
   downloadBackupArchive,
-  importBackupArchive,
+  getBackupImportJob,
   listBackups,
   restoreBackup,
+  startBackupImport,
+  type UploadProgress,
 } from "@/api/client";
-import type { BackupEntry } from "@/api/types";
+import type {
+  BackupEntry,
+  BackupImportJob,
+  BackupImportStage,
+  BackupImportSubstage,
+} from "@/api/types";
 import {
   SelectionList,
   SelectionListItem,
@@ -30,7 +37,7 @@ type BusyAction =
   | "download"
   | "delete"
   | "restore";
-type ImportPhase = "ready" | "running" | "success" | "error";
+type ImportDialogPhase = "uploading" | "processing" | "success" | "error";
 type ImportErrorState = {
   statusCode: number;
   code: string;
@@ -65,7 +72,9 @@ type ImportPasswordDialogState = {
 type ImportDialogState = {
   file: File;
   password: string;
-  phase: ImportPhase;
+  phase: ImportDialogPhase;
+  upload: UploadProgress;
+  job: BackupImportJob | null;
   imported: BackupEntry | null;
   error: ImportErrorState | null;
 };
@@ -165,12 +174,23 @@ function toImportErrorState(error: unknown, fallback: string): ImportErrorState 
   };
 }
 
-function importPhaseLabel(phase: ImportPhase): string {
+function toImportJobErrorState(
+  job: BackupImportJob,
+  fallback: string,
+): ImportErrorState {
+  return {
+    statusCode: 0,
+    code: job.error_code ?? "",
+    message: job.error_message?.trim() || job.message?.trim() || fallback,
+  };
+}
+
+function importPhaseLabel(phase: ImportDialogPhase): string {
   switch (phase) {
-    case "ready":
-      return "準備匯入";
-    case "running":
-      return "匯入中";
+    case "uploading":
+      return "上傳中";
+    case "processing":
+      return "處理中";
     case "success":
       return "匯入成功";
     case "error":
@@ -178,7 +198,7 @@ function importPhaseLabel(phase: ImportPhase): string {
   }
 }
 
-function importPhaseBadgeClass(phase: ImportPhase): string {
+function importPhaseBadgeClass(phase: ImportDialogPhase): string {
   switch (phase) {
     case "success":
       return "badge-success";
@@ -189,7 +209,7 @@ function importPhaseBadgeClass(phase: ImportPhase): string {
   }
 }
 
-function importPhaseProgressClass(phase: ImportPhase): string {
+function importPhaseProgressClass(phase: ImportDialogPhase): string {
   switch (phase) {
     case "success":
       return "progress-success";
@@ -200,123 +220,184 @@ function importPhaseProgressClass(phase: ImportPhase): string {
   }
 }
 
-function importPhaseDescription(phase: ImportPhase): string {
-  switch (phase) {
-    case "ready":
-      return "已接收檔案與密碼，準備送出匯入請求。";
-    case "running":
-      return "正在上傳、驗證 archive，並寫入目前備份庫。";
-    case "success":
-      return "備份檔已通過驗證並寫入備份庫。";
-    case "error":
-      return "匯入在驗證或寫入階段失敗。";
+function importPhaseDescription(
+  importDialog: ImportDialogState,
+  activeImportStep: ImportStep | null,
+  activeImportSubstep: ImportSubstep | null,
+): string {
+  if (activeImportSubstep && activeImportStep) {
+    return `${activeImportStep.title} / ${activeImportSubstep.title}：${activeImportSubstep.detail}`;
   }
+  if (activeImportStep) {
+    return `${activeImportStep.title}：${activeImportStep.detail}`;
+  }
+  if (importDialog.phase === "uploading") {
+    return "正在把 archive 與備份密碼送到 /v1/backups/import，完成後會建立背景匯入工作。";
+  }
+  if (importDialog.phase === "processing") {
+    return importDialog.job?.message?.trim() || "Server 正在驗證 archive 並寫入備份庫。";
+  }
+  if (importDialog.phase === "success") {
+    return "備份檔已通過驗證並寫入備份庫。";
+  }
+  return importDialog.error?.message || "匯入在上傳、驗證或寫入階段失敗。";
 }
 
-function importStageIndex(progress: number): number {
-  if (progress >= 82) return 3;
-  if (progress >= 56) return 2;
-  if (progress >= 28) return 1;
-  return 0;
+function importProgressValue(importDialog: ImportDialogState): number {
+  if (importDialog.phase === "uploading") {
+    return importDialog.upload.percent;
+  }
+  if (importDialog.phase === "processing") {
+    return importDialog.job?.progress_percent ?? 100;
+  }
+  if (importDialog.phase === "success") {
+    return 100;
+  }
+  return importDialog.job?.progress_percent ?? importDialog.upload.percent;
 }
 
-function importLibraryStageIndex(progress: number): number {
-  if (progress >= 91) return 4;
-  if (progress >= 88) return 3;
-  if (progress >= 86) return 2;
-  if (progress >= 84) return 1;
-  return 0;
+function stageMatches(job: BackupImportJob | null, stage: BackupImportStage): boolean {
+  return job?.stage === stage;
 }
 
-function buildLibraryWriteSubsteps(
-  parentStatus: ImportStepStatus,
-  phase: ImportPhase,
-  progress: number,
-): ImportSubstep[] {
+function substageMatches(
+  job: BackupImportJob | null,
+  ...substage: BackupImportSubstage[]
+): boolean {
+  return !!job?.substage && substage.includes(job.substage);
+}
+
+function buildLibraryWriteSubsteps(importDialog: ImportDialogState): ImportSubstep[] {
   const substeps = [
     {
+      key: "manifest_rewriting",
       title: "重寫 manifest",
       detail: "更新 manifest.json 與 size_bytes 等 metadata，準備新的備份庫條目。",
     },
     {
+      key: "payload_repacking",
       title: "重新封裝 payload",
-      detail: "用這次輸入的密碼把 payload 重新壓成 ZIP AES-256 archive。",
+      detail: "用這次輸入的密碼把 payload 重新封裝成 ZIP AES-256 archive。",
     },
     {
+      key: "temp_archive_writing",
       title: "寫入暫存 archive",
       detail: "先輸出到 backups/*.tmp，避免留下半套或中斷的正式檔案。",
     },
     {
+      key: "archive_renaming",
       title: "切換正式檔案",
       detail: "暫存檔寫完後 rename 成正式 archive 檔名。",
     },
-    {
-      title: "回傳 backup entry",
-      detail: "整理 file_name、backup_id、created_at、size 與 component 摘要後回傳給 UI。",
-    },
-  ];
+  ] as const;
 
-  if (parentStatus === "pending") {
-    return substeps.map((substep) => ({ ...substep, status: "pending" as const }));
-  }
-  if (phase === "success" || parentStatus === "done") {
-    return substeps.map((substep) => ({ ...substep, status: "done" as const }));
-  }
+  const activeKey = importDialog.job?.substage ?? "";
+  const activeIndex = substeps.findIndex((substep) => substep.key === activeKey);
 
-  const activeIndex = importLibraryStageIndex(progress);
   return substeps.map((substep, index) => {
     let status: ImportStepStatus = "pending";
-    if (index < activeIndex) status = "done";
-    if (index === activeIndex) status = parentStatus === "error" ? "error" : "active";
-    return { ...substep, status };
+    if (importDialog.phase === "success") {
+      status = "done";
+    } else if (importDialog.phase === "processing") {
+      if (stageMatches(importDialog.job, "library_write")) {
+        if (activeIndex === -1) {
+          status = "pending";
+        } else if (index < activeIndex) {
+          status = "done";
+        } else if (index === activeIndex) {
+          status = "active";
+        }
+      } else if (
+        stageMatches(importDialog.job, "completed") ||
+        stageMatches(importDialog.job, "failed")
+      ) {
+        status = "pending";
+      }
+    } else if (importDialog.phase === "error") {
+      if (substageMatches(importDialog.job, "manifest_rewriting", "payload_repacking", "temp_archive_writing", "archive_renaming")) {
+        if (activeIndex === -1) {
+          status = "pending";
+        } else if (index < activeIndex) {
+          status = "done";
+        } else if (index === activeIndex) {
+          status = "error";
+        }
+      }
+    }
+    return { title: substep.title, detail: substep.detail, status };
   });
 }
 
-function buildImportSteps(
-  phase: ImportPhase,
-  progress: number,
-  hasImportedEntry: boolean,
-): ImportStep[] {
-  const steps = [
-    {
-      title: "建立匯入請求",
-      detail: "鎖定目前視窗並組裝 multipart request，附帶 archive 與備份密碼。",
-    },
+function buildImportSteps(importDialog: ImportDialogState): ImportStep[] {
+  const uploadStatus: ImportStepStatus =
+    importDialog.phase === "uploading"
+      ? "active"
+      : importDialog.phase === "error" && !importDialog.job
+        ? "error"
+        : "done";
+
+  const validationStatus = (() => {
+    if (!importDialog.job) return "pending" as const;
+    if (importDialog.phase === "success") return "done" as const;
+    if (stageMatches(importDialog.job, "archive_validation")) {
+      return importDialog.phase === "error" ? "error" : "active";
+    }
+    if (
+      stageMatches(importDialog.job, "library_write") ||
+      stageMatches(importDialog.job, "completed") ||
+      substageMatches(importDialog.job, "manifest_rewriting", "payload_repacking", "temp_archive_writing", "archive_renaming")
+    ) {
+      return "done" as const;
+    }
+    if (importDialog.phase === "error") {
+      return "error" as const;
+    }
+    return "pending" as const;
+  })();
+
+  const libraryStatus = (() => {
+    if (!importDialog.job) return "pending" as const;
+    if (importDialog.phase === "success") return "done" as const;
+    if (stageMatches(importDialog.job, "library_write")) {
+      return importDialog.phase === "error" ? "error" : "active";
+    }
+    if (
+      stageMatches(importDialog.job, "failed") &&
+      substageMatches(importDialog.job, "manifest_rewriting", "payload_repacking", "temp_archive_writing", "archive_renaming")
+    ) {
+      return "error" as const;
+    }
+    return "pending" as const;
+  })();
+
+  return [
     {
       title: "上傳備份檔",
-      detail: "把 zip 與密碼送到 /v1/backups/import，等待 upload 完成。",
+      detail:
+        uploadStatus === "active"
+          ? `已上傳 ${formatBytes(importDialog.upload.loaded)} / ${formatBytes(importDialog.upload.total)} 到 /v1/backups/import。`
+          : "archive 已成功送達 server，準備建立背景匯入工作。",
+      status: uploadStatus,
     },
     {
       title: "驗證 archive",
-      detail: "Server 會讀取 manifest.json，並用提供的密碼解密驗證 payload。",
+      detail:
+        importDialog.job?.stage === "archive_validation"
+          ? importDialog.job.message?.trim() || "Server 會讀取 manifest.json，並用提供的密碼解密驗證 payload。"
+          : "Server 會讀取 manifest.json，並用提供的密碼解密驗證 payload。",
+      status: validationStatus,
     },
     {
       title: "寫入備份庫",
       detail:
-        "驗證成功後會重新寫入 manifest、用這次提供的密碼重新封裝 payload、先落到 backups/*.tmp，再 rename 成正式 archive，最後回傳新的 backup entry。",
-      substeps: [],
+        importDialog.job?.stage === "library_write"
+          ? importDialog.job.message?.trim() ||
+            "驗證成功後會重新寫入 manifest、重新封裝 payload、寫入暫存 archive，再切換成正式檔案。"
+          : "驗證成功後會重新寫入 manifest、重新封裝 payload、寫入暫存 archive，再切換成正式檔案。",
+      status: libraryStatus,
+      substeps: buildLibraryWriteSubsteps(importDialog),
     },
   ];
-
-  if (phase === "success" && hasImportedEntry) {
-    return steps.map((step) => ({ ...step, status: "done" as const }));
-  }
-
-  const activeIndex = importStageIndex(progress);
-  return steps.map((step, index) => {
-    let status: ImportStepStatus = "pending";
-    if (index < activeIndex) status = "done";
-    if (index === activeIndex) status = phase === "error" ? "error" : "active";
-    if (phase === "ready" && index === 0) status = "active";
-    return {
-      ...step,
-      status,
-      substeps:
-        step.title === "寫入備份庫"
-          ? buildLibraryWriteSubsteps(status, phase, progress)
-          : step.substeps,
-    };
-  });
 }
 
 function importStepBadgeClass(status: ImportStepStatus): string {
@@ -388,6 +469,9 @@ function importErrorHint(error: ImportErrorState | null): string | null {
   if (error.code === "invalid_backup_password") {
     return "提供的備份密碼無法解密 payload，請確認這是建立該備份時使用的密碼。";
   }
+  if (error.code === "invalid_backup_manifest" || error.code === "invalid_backup_archive") {
+    return "這份備份檔的 manifest 或 payload 不符合目前支援的格式，匯入已中止。";
+  }
   return null;
 }
 
@@ -409,6 +493,14 @@ function newCreateDialogState(): CreateDialogState {
     copiedGeneratedPassword: false,
     acknowledgedGeneratedPassword: false,
     error: null,
+  };
+}
+
+function newUploadProgress(file: File): UploadProgress {
+  return {
+    loaded: 0,
+    total: file.size,
+    percent: 0,
   };
 }
 
@@ -437,7 +529,6 @@ export function BackupPanel() {
   const [restoreDialog, setRestoreDialog] = useState<RestoreDialogState | null>(
     null,
   );
-  const [importProgress, setImportProgress] = useState(0);
 
   async function syncBackups(showLoading = false, preferredID = "") {
     if (showLoading) setLoading(true);
@@ -496,96 +587,99 @@ export function BackupPanel() {
   }, [restoreDialog]);
 
   useEffect(() => {
-    if (!importDialog) {
-      setImportProgress(0);
+    if (
+      !importDialog ||
+      importDialog.phase !== "processing" ||
+      !importDialog.job ||
+      importDialog.job.status !== "running"
+    ) {
       return undefined;
     }
-
-    if (importDialog.phase === "ready") {
-      setImportProgress(12);
-      return undefined;
-    }
-
-    if (importDialog.phase === "running") {
-      setImportProgress((current) => Math.max(current, 18));
-      const timer = window.setInterval(() => {
-        setImportProgress((current) => {
-          if (current >= 92) return current;
-          if (current < 48) return Math.min(92, current + 8);
-          if (current < 76) return Math.min(92, current + 4);
-          return Math.min(92, current + 2);
-        });
-      }, 240);
-      return () => window.clearInterval(timer);
-    }
-
-    setImportProgress(100);
-    return undefined;
-  }, [importDialog]);
-
-  useEffect(() => {
-    if (!importDialog || importDialog.phase !== "ready") return undefined;
+    const jobID = importDialog.job.job_id;
 
     let cancelled = false;
-    void (async () => {
-      setBusyAction("import");
-      setImportDialog((current) =>
-        current && current.phase === "ready"
-          ? { ...current, phase: "running" }
-          : current,
-      );
+    let timer = 0;
 
+    const poll = async () => {
       try {
-        const imported = await importBackupArchive(
-          importDialog.file,
-          importDialog.password,
-        );
+        const snapshot = await getBackupImportJob(jobID);
         if (cancelled) return;
 
-        setQuery("");
-        const ok = await syncBackups(false, imported.backup_id);
-        if (!ok) {
-          setBackups((current) =>
-            sortBackups([
-              imported,
-              ...current.filter(
-                (backup) => backup.backup_id !== imported.backup_id,
-              ),
-            ]),
-          );
-          setSelectedBackupID(imported.backup_id);
-        }
-        setImportDialog((current) =>
-          current
-            ? {
+        if (snapshot.status === "completed" && snapshot.backup) {
+          setQuery("");
+          const ok = await syncBackups(false, snapshot.backup.backup_id);
+          if (!ok) {
+            setBackups((current) =>
+              sortBackups([
+                snapshot.backup!,
+                ...current.filter(
+                  (backup) => backup.backup_id !== snapshot.backup!.backup_id,
+                ),
+              ]),
+            );
+            setSelectedBackupID(snapshot.backup.backup_id);
+          }
+          if (cancelled) return;
+          setImportDialog((current) =>
+            current
+              ? {
                 ...current,
                 phase: "success",
-                imported,
+                job: snapshot,
+                imported: snapshot.backup ?? null,
                 error: null,
               }
-            : current,
-        );
-      } catch (error) {
-        if (cancelled) return;
+              : current,
+          );
+          setBusyAction("");
+          return;
+        }
+
+        if (snapshot.status === "failed") {
+          setImportDialog((current) =>
+            current
+              ? {
+                ...current,
+                phase: "error",
+                job: snapshot,
+                imported: null,
+                error: toImportJobErrorState(snapshot, "匯入備份檔失敗"),
+              }
+              : current,
+          );
+          setBusyAction("");
+          return;
+        }
+
         setImportDialog((current) =>
           current
             ? {
-                ...current,
-                phase: "error",
-                imported: null,
-                error: toImportErrorState(error, "匯入備份檔失敗"),
-              }
+              ...current,
+              job: snapshot,
+              error: null,
+            }
             : current,
         );
-      } finally {
-        if (!cancelled) setBusyAction("");
+        timer = window.setTimeout(() => {
+          void poll();
+        }, 1000);
+      } catch {
+        if (cancelled) return;
+        timer = window.setTimeout(() => {
+          void poll();
+        }, 2000);
       }
-    })();
+    };
+
+    timer = window.setTimeout(() => {
+      void poll();
+    }, 1000);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [importDialog]);
+  }, [importDialog?.job?.job_id, importDialog?.job?.status, importDialog?.phase]);
 
   useEffect(() => {
     if (backups.length === 0) {
@@ -609,13 +703,7 @@ export function BackupPanel() {
     filteredBackups[0] ??
     null;
   const latestBackup = backups[0] ?? null;
-  const importSteps = importDialog
-    ? buildImportSteps(
-        importDialog.phase,
-        importProgress,
-        !!importDialog.imported,
-      )
-    : [];
+  const importSteps = importDialog ? buildImportSteps(importDialog) : [];
   const activeImportStep =
     importSteps.find(
       (step) => step.status === "active" || step.status === "error",
@@ -641,19 +729,19 @@ export function BackupPanel() {
       setCreateDialog((current) =>
         current
           ? {
-              ...current,
-              copiedGeneratedPassword: true,
-              error: null,
-            }
+            ...current,
+            copiedGeneratedPassword: true,
+            error: null,
+          }
           : current,
       );
     } catch {
       setCreateDialog((current) =>
         current
           ? {
-              ...current,
-              error: "無法複製到剪貼簿，請手動保存這組密碼。",
-            }
+            ...current,
+            error: "無法複製到剪貼簿，請手動保存這組密碼。",
+          }
           : current,
       );
     }
@@ -708,9 +796,9 @@ export function BackupPanel() {
       setCreateDialog((current) =>
         current
           ? {
-              ...current,
-              error: toErrorMessage(error, "建立備份失敗"),
-            }
+            ...current,
+            error: toErrorMessage(error, "建立備份失敗"),
+          }
           : current,
       );
     } finally {
@@ -732,6 +820,58 @@ export function BackupPanel() {
     setImportPasswordDialog(null);
   }
 
+  async function beginBackupImport(file: File, password: string) {
+    setBusyAction("import");
+    setImportDialog({
+      file,
+      password,
+      phase: "uploading",
+      upload: newUploadProgress(file),
+      job: null,
+      imported: null,
+      error: null,
+    });
+
+    try {
+      const job = await startBackupImport(file, password, (progress) => {
+        setImportDialog((current) =>
+          current
+            ? {
+              ...current,
+              upload: progress,
+            }
+            : current,
+        );
+      });
+      setImportDialog((current) =>
+        current
+          ? {
+            ...current,
+            phase: "processing",
+            upload: {
+              loaded: current.file.size,
+              total: current.file.size,
+              percent: 100,
+            },
+            job,
+            error: null,
+          }
+          : current,
+      );
+    } catch (error) {
+      setImportDialog((current) =>
+        current
+          ? {
+            ...current,
+            phase: "error",
+            error: toImportErrorState(error, "匯入備份檔失敗"),
+          }
+          : current,
+      );
+      setBusyAction("");
+    }
+  }
+
   function submitImportPasswordDialog() {
     if (!importPasswordDialog) return;
     const validationError = validatePassword(importPasswordDialog.password);
@@ -741,13 +881,10 @@ export function BackupPanel() {
       );
       return;
     }
-    setImportDialog({
-      file: importPasswordDialog.file,
-      password: importPasswordDialog.password,
-      phase: "ready",
-      imported: null,
-      error: null,
-    });
+    void beginBackupImport(
+      importPasswordDialog.file,
+      importPasswordDialog.password,
+    );
     setImportPasswordDialog(null);
   }
 
@@ -856,9 +993,9 @@ export function BackupPanel() {
       setRestoreDialog((current) =>
         current
           ? {
-              ...current,
-              error: toErrorMessage(error, "還原備份失敗"),
-            }
+            ...current,
+            error: toErrorMessage(error, "還原備份失敗"),
+          }
           : current,
       );
     } finally {
@@ -1323,10 +1460,10 @@ export function BackupPanel() {
                     setCreateDialog((current) =>
                       current
                         ? {
-                            ...current,
-                            mode: "manual",
-                            error: null,
-                          }
+                          ...current,
+                          mode: "manual",
+                          error: null,
+                        }
                         : current,
                     )
                   }
@@ -1340,12 +1477,12 @@ export function BackupPanel() {
                     setCreateDialog((current) =>
                       current
                         ? {
-                            ...current,
-                            mode: "generated",
-                            generatedPassword:
-                              current.generatedPassword || generateBackupPassword(),
-                            error: null,
-                          }
+                          ...current,
+                          mode: "generated",
+                          generatedPassword:
+                            current.generatedPassword || generateBackupPassword(),
+                          error: null,
+                        }
                         : current,
                     )
                   }
@@ -1368,10 +1505,10 @@ export function BackupPanel() {
                         setCreateDialog((current) =>
                           current
                             ? {
-                                ...current,
-                                password: event.target.value,
-                                error: null,
-                              }
+                              ...current,
+                              password: event.target.value,
+                              error: null,
+                            }
                             : current,
                         )
                       }
@@ -1390,10 +1527,10 @@ export function BackupPanel() {
                         setCreateDialog((current) =>
                           current
                             ? {
-                                ...current,
-                                confirmPassword: event.target.value,
-                                error: null,
-                              }
+                              ...current,
+                              confirmPassword: event.target.value,
+                              error: null,
+                            }
                             : current,
                         )
                       }
@@ -1424,12 +1561,12 @@ export function BackupPanel() {
                           setCreateDialog((current) =>
                             current
                               ? {
-                                  ...current,
-                                  generatedPassword: generateBackupPassword(),
-                                  copiedGeneratedPassword: false,
-                                  acknowledgedGeneratedPassword: false,
-                                  error: null,
-                                }
+                                ...current,
+                                generatedPassword: generateBackupPassword(),
+                                copiedGeneratedPassword: false,
+                                acknowledgedGeneratedPassword: false,
+                                error: null,
+                              }
                               : current,
                           )
                         }
@@ -1456,10 +1593,10 @@ export function BackupPanel() {
                         setCreateDialog((current) =>
                           current
                             ? {
-                                ...current,
-                                acknowledgedGeneratedPassword: event.target.checked,
-                                error: null,
-                              }
+                              ...current,
+                              acknowledgedGeneratedPassword: event.target.checked,
+                              error: null,
+                            }
                             : current,
                         )
                       }
@@ -1572,19 +1709,16 @@ export function BackupPanel() {
                         setImportPasswordDialog((current) =>
                           current
                             ? {
-                                ...current,
-                                password: event.target.value,
-                                error: null,
-                              }
+                              ...current,
+                              password: event.target.value,
+                              error: null,
+                            }
                             : current,
                         )
                       }
                       placeholder="輸入建立這份備份時使用的密碼"
                     />
                   </label>
-                  <div className="rounded-box border border-base-300 bg-base-200 px-4 py-4 text-sm text-base-content/65">
-                    之後會顯示詳細進度，包括上傳、驗證 archive，以及寫入備份庫的子狀態。
-                  </div>
                 </div>
               </div>
 
@@ -1602,7 +1736,7 @@ export function BackupPanel() {
             </div>
             <div className="flex gap-3">
               <button className="btn" onClick={closeImportPasswordDialog} disabled={busyAction === "import"}>
-              取消
+                取消
               </button>
               <button
                 className="btn btn-primary"
@@ -1659,25 +1793,47 @@ export function BackupPanel() {
                     <div className="mt-1 font-medium">{fileMimeType(importDialog.file)}</div>
                   </div>
                 </div>
+                {importDialog.job ? (
+                  <div className="mt-4 border-t border-base-300 pt-4">
+                    <div className="text-xs uppercase tracking-wide text-base-content/50">Job ID</div>
+                    <div className="mt-1 font-mono text-sm">{importDialog.job.job_id}</div>
+                  </div>
+                ) : null}
               </div>
 
               <div className="rounded-box border border-base-300 bg-base-100 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <h4 className="text-lg font-semibold">目前狀態</h4>
-                  <div className="text-sm font-medium">{importProgress}%</div>
+                  <div className="text-sm font-medium">{importProgressValue(importDialog)}%</div>
                 </div>
                 <p className="mt-3 text-sm text-base-content/70">
-                  {activeImportSubstep && activeImportStep
-                    ? `${activeImportStep.title} / ${activeImportSubstep.title}：${activeImportSubstep.detail}`
-                    : activeImportStep
-                      ? `${activeImportStep.title}：${activeImportStep.detail}`
-                    : importPhaseDescription(importDialog.phase)}
+                  {importPhaseDescription(
+                    importDialog,
+                    activeImportStep,
+                    activeImportSubstep,
+                  )}
                 </p>
                 <progress
                   className={`progress mt-4 h-3 w-full ${importPhaseProgressClass(importDialog.phase)}`}
-                  value={importProgress}
+                  value={importProgressValue(importDialog)}
                   max={100}
                 />
+                {importDialog.phase === "processing" && importDialog.job ? (
+                  <div className="mt-3 grid gap-3 text-xs text-base-content/55 md:grid-cols-3">
+                    <div>
+                      <span className="font-medium text-base-content/70">Stage</span>
+                      <div className="mt-1 font-mono">{importDialog.job.stage}</div>
+                    </div>
+                    <div>
+                      <span className="font-medium text-base-content/70">Substage</span>
+                      <div className="mt-1 font-mono">{importDialog.job.substage || "-"}</div>
+                    </div>
+                    <div>
+                      <span className="font-medium text-base-content/70">Updated</span>
+                      <div className="mt-1">{formatDateTime(importDialog.job.updated_at)}</div>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="mt-4 space-y-3">
                   {importSteps.map((step) => (
                     <div key={step.title} className="rounded-box border border-base-300 bg-base-200 px-4 py-3">
@@ -1691,7 +1847,6 @@ export function BackupPanel() {
                       {step.substeps && step.substeps.length > 0 ? (
                         <div className="mt-3 rounded-box border border-base-300/70 bg-base-100/70 p-3">
                           <div className="flex items-center justify-between gap-3 text-xs text-base-content/55">
-                            <span>子任務</span>
                             <span>
                               {step.substeps.filter((substep) => substep.status === "done").length} /{" "}
                               {step.substeps.length}
@@ -1729,6 +1884,26 @@ export function BackupPanel() {
                     </div>
                   ))}
                 </div>
+                {importDialog.job?.events && importDialog.job.events.length > 0 ? (
+                  <div className="mt-4 rounded-box border border-base-300/70 bg-base-100/70 p-3">
+                    <div className="text-xs font-medium uppercase tracking-wide text-base-content/50">
+                      最近事件
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {importDialog.job.events.slice(-5).map((event) => (
+                        <div
+                          key={`${event.at}-${event.message}`}
+                          className="flex items-start justify-between gap-3 text-sm"
+                        >
+                          <span className="text-base-content/70">{event.message}</span>
+                          <span className="shrink-0 text-xs text-base-content/50">
+                            {formatDateTime(event.at)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
 
               {importDialog.imported ? (
@@ -1861,10 +2036,10 @@ export function BackupPanel() {
                     setRestoreDialog((current) =>
                       current
                         ? {
-                            ...current,
-                            password: event.target.value,
-                            error: null,
-                          }
+                          ...current,
+                          password: event.target.value,
+                          error: null,
+                        }
                         : current,
                     )
                   }

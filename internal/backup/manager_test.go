@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/doeshing/nekoclaw/internal/auth"
 	yzip "github.com/yeka/zip"
@@ -176,6 +177,87 @@ func TestManagerImportDeleteAndRejectInvalidPassword(t *testing.T) {
 	}
 	if len(backups) != 1 {
 		t.Fatalf("expected 1 backup after delete, got %d", len(backups))
+	}
+}
+
+func TestManagerStartImportJobCompletesAndCleansTempUpload(t *testing.T) {
+	env := newTestEnv(t)
+	seedState(t, env, "backup-secret", "Asia/Taipei")
+
+	created, err := env.manager.Create(testBackupPassword)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	raw := readBytes(t, filepath.Join(env.root, "backups", created.FileName))
+
+	started, err := env.manager.StartImport(bytes.NewReader(raw), "backup.zip", int64(len(raw)), testBackupPassword)
+	if err != nil {
+		t.Fatalf("StartImport failed: %v", err)
+	}
+	if started.Status != ImportJobStatusRunning {
+		t.Fatalf("start status = %q, want running", started.Status)
+	}
+
+	final := waitForManagerImportJob(t, env.manager, started.JobID)
+	if final.Status != ImportJobStatusCompleted {
+		t.Fatalf("final status = %q, want completed", final.Status)
+	}
+	if final.Backup == nil || final.Backup.Source != SourceImported {
+		t.Fatalf("expected imported backup entry, got %#v", final.Backup)
+	}
+
+	tempUploads, err := filepath.Glob(filepath.Join(env.root, "backup-upload-*.zip"))
+	if err != nil {
+		t.Fatalf("glob temp uploads failed: %v", err)
+	}
+	if len(tempUploads) != 0 {
+		t.Fatalf("expected temp uploads to be cleaned, found %v", tempUploads)
+	}
+}
+
+func TestManagerImportJobTTLExpiresCompletedJob(t *testing.T) {
+	current := time.Date(2026, 3, 9, 7, 0, 0, 0, time.UTC)
+	root := t.TempDir()
+	store, err := auth.NewStore(auth.StoreOptions{
+		BaseDir: filepath.Join(root, "auth"),
+		Keyring: newMemoryKeyring(),
+	})
+	if err != nil {
+		t.Fatalf("NewStore failed: %v", err)
+	}
+	manager := NewManager(ManagerOptions{
+		ConfigRoot:   root,
+		SessionsDir:  filepath.Join(root, "sessions"),
+		MemoryDir:    filepath.Join(root, "memory"),
+		MCPDir:       filepath.Join(root, "mcp"),
+		PersonasDir:  filepath.Join(root, "personas"),
+		StateDir:     filepath.Join(root, "state"),
+		AuthStore:    store,
+		Now:          func() time.Time { return current },
+		JobTTL:       10 * time.Minute,
+		MaxJobEvents: 8,
+	})
+	env := testEnv{root: root, authStore: store, manager: manager}
+	seedState(t, env, "backup-secret", "Asia/Taipei")
+
+	created, err := env.manager.Create(testBackupPassword)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	raw := readBytes(t, filepath.Join(env.root, "backups", created.FileName))
+
+	started, err := env.manager.StartImport(bytes.NewReader(raw), "backup.zip", int64(len(raw)), testBackupPassword)
+	if err != nil {
+		t.Fatalf("StartImport failed: %v", err)
+	}
+	final := waitForManagerImportJob(t, env.manager, started.JobID)
+	if final.Status != ImportJobStatusCompleted {
+		t.Fatalf("final status = %q, want completed", final.Status)
+	}
+
+	current = current.Add(11 * time.Minute)
+	if _, err := env.manager.GetImportJob(started.JobID); !errors.Is(err, ErrImportJobNotFound) {
+		t.Fatalf("expected import job to expire, got %v", err)
 	}
 }
 
@@ -366,4 +448,21 @@ func removePathForTest(t *testing.T, path string) {
 	if err := os.RemoveAll(path); err != nil {
 		t.Fatalf("RemoveAll(%s): %v", path, err)
 	}
+}
+
+func waitForManagerImportJob(t *testing.T, manager *Manager, jobID string) ImportJobSnapshot {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		snapshot, err := manager.GetImportJob(jobID)
+		if err != nil {
+			t.Fatalf("GetImportJob failed: %v", err)
+		}
+		if snapshot.Status == ImportJobStatusCompleted || snapshot.Status == ImportJobStatusFailed {
+			return snapshot
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("import job %s did not reach a terminal state", jobID)
+	return ImportJobSnapshot{}
 }

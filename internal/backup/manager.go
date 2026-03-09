@@ -2,6 +2,7 @@ package backup
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doeshing/nekoclaw/internal/auth"
@@ -19,30 +21,37 @@ import (
 )
 
 var (
-	ErrNotConfigured    = errors.New("backup manager not configured")
-	ErrBackupNotFound   = errors.New("backup not found")
-	ErrInvalidArchive   = errors.New("invalid backup archive")
-	ErrInvalidManifest  = errors.New("invalid backup manifest")
-	ErrPasswordRequired = errors.New("backup password is required")
-	ErrInvalidPassword  = errors.New("invalid backup password")
+	ErrNotConfigured     = errors.New("backup manager not configured")
+	ErrBackupNotFound    = errors.New("backup not found")
+	ErrImportJobNotFound = errors.New("backup import job not found")
+	ErrInvalidArchive    = errors.New("invalid backup archive")
+	ErrInvalidManifest   = errors.New("invalid backup manifest")
+	ErrPasswordRequired  = errors.New("backup password is required")
+	ErrInvalidPassword   = errors.New("invalid backup password")
 )
 
 const (
 	minBackupPasswordLength = 12
 	maxBackupPasswordLength = 128
+	defaultImportJobTTL     = 10 * time.Minute
+	defaultMaxImportEvents  = 24
 )
 
 type ManagerOptions struct {
-	ConfigRoot  string
-	SessionsDir string
-	MemoryDir   string
-	MCPDir      string
-	PersonasDir string
-	StateDir    string
-	AuthStore   *auth.Store
+	ConfigRoot   string
+	SessionsDir  string
+	MemoryDir    string
+	MCPDir       string
+	PersonasDir  string
+	StateDir     string
+	AuthStore    *auth.Store
+	JobTTL       time.Duration
+	Now          func() time.Time
+	MaxJobEvents int
 }
 
 type Manager struct {
+	mu                  sync.Mutex
 	configRoot          string
 	backupsDir          string
 	configPath          string
@@ -54,7 +63,19 @@ type Manager struct {
 	personasDir         string
 	personaStatePath    string
 	stateDir            string
+	importJobs          map[string]*importJob
+	jobTTL              time.Duration
+	now                 func() time.Time
+	maxJobEvents        int
 }
+
+type importJob struct {
+	snapshot   ImportJobSnapshot
+	password   string
+	uploadPath string
+}
+
+type importProgressReporter func(stage, substage string, progress int, message string)
 
 type authExport struct {
 	Profiles []authExportProfile `json:"profiles"`
@@ -69,17 +90,33 @@ func NewManager(opts ManagerOptions) *Manager {
 	configRoot := strings.TrimSpace(opts.ConfigRoot)
 	mcpDir := strings.TrimSpace(opts.MCPDir)
 	personasDir := strings.TrimSpace(opts.PersonasDir)
+	jobTTL := opts.JobTTL
+	if jobTTL <= 0 {
+		jobTTL = defaultImportJobTTL
+	}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
+	maxJobEvents := opts.MaxJobEvents
+	if maxJobEvents <= 0 {
+		maxJobEvents = defaultMaxImportEvents
+	}
 
 	manager := &Manager{
-		configRoot:  configRoot,
-		backupsDir:  filepath.Join(configRoot, "backups"),
-		configPath:  filepath.Join(configRoot, "config.json"),
-		authStore:   opts.AuthStore,
-		sessionsDir: strings.TrimSpace(opts.SessionsDir),
-		memoryDir:   strings.TrimSpace(opts.MemoryDir),
-		mcpDir:      mcpDir,
-		personasDir: personasDir,
-		stateDir:    strings.TrimSpace(opts.StateDir),
+		configRoot:   configRoot,
+		backupsDir:   filepath.Join(configRoot, "backups"),
+		configPath:   filepath.Join(configRoot, "config.json"),
+		authStore:    opts.AuthStore,
+		sessionsDir:  strings.TrimSpace(opts.SessionsDir),
+		memoryDir:    strings.TrimSpace(opts.MemoryDir),
+		mcpDir:       mcpDir,
+		personasDir:  personasDir,
+		stateDir:     strings.TrimSpace(opts.StateDir),
+		importJobs:   map[string]*importJob{},
+		jobTTL:       jobTTL,
+		now:          now,
+		maxJobEvents: maxJobEvents,
 	}
 	if mcpDir != "" {
 		manager.mcpBuiltinStatePath = filepath.Join(filepath.Dir(mcpDir), "mcp-builtin.json")
@@ -112,6 +149,57 @@ func (m *Manager) Create(password string) (Entry, error) {
 	return m.writeSnapshotToLibrary(tempRoot, manifest, password)
 }
 
+func (m *Manager) StartImport(reader io.Reader, fileName string, fileSize int64, password string) (ImportJobSnapshot, error) {
+	if err := m.ensureConfigured(); err != nil {
+		return ImportJobSnapshot{}, err
+	}
+	if err := validateBackupPassword(password); err != nil {
+		return ImportJobSnapshot{}, err
+	}
+
+	uploadPath, written, err := m.writeUploadToTempFile(reader)
+	if err != nil {
+		return ImportJobSnapshot{}, err
+	}
+	if fileSize <= 0 {
+		fileSize = written
+	}
+
+	now := m.now().UTC()
+	job := &importJob{
+		snapshot: ImportJobSnapshot{
+			JobID:           generateImportJobID(),
+			Status:          ImportJobStatusRunning,
+			Stage:           ImportStageArchiveValidation,
+			Substage:        ImportSubstageManifestRead,
+			ProgressPercent: 18,
+			Message:         "已收到 archive，正在讀取 manifest.json。",
+			Events: []ImportJobEvent{{
+				At:      now,
+				Message: "已收到 archive，準備開始驗證備份內容。",
+			}},
+			CreatedAt:     now,
+			UpdatedAt:     now,
+			ExpiresAt:     now.Add(m.jobTTL),
+			FileName:      sanitizeImportFileName(fileName),
+			FileSizeBytes: fileSize,
+		},
+		password:   password,
+		uploadPath: uploadPath,
+	}
+	if job.snapshot.FileName == "" {
+		job.snapshot.FileName = filepath.Base(uploadPath)
+	}
+
+	m.mu.Lock()
+	m.clearExpiredImportJobsLocked(now)
+	m.importJobs[job.snapshot.JobID] = job
+	m.mu.Unlock()
+
+	go m.runImportJob(job.snapshot.JobID)
+	return m.snapshotImportJob(job), nil
+}
+
 func (m *Manager) Import(reader io.Reader, password string) (Entry, error) {
 	if err := m.ensureConfigured(); err != nil {
 		return Entry{}, err
@@ -120,57 +208,23 @@ func (m *Manager) Import(reader io.Reader, password string) (Entry, error) {
 		return Entry{}, err
 	}
 
-	uploadFile, err := os.CreateTemp(m.configRoot, "backup-upload-*.zip")
+	uploadPath, _, err := m.writeUploadToTempFile(reader)
 	if err != nil {
-		return Entry{}, err
-	}
-	uploadPath := uploadFile.Name()
-	if _, err := io.Copy(uploadFile, reader); err != nil {
-		_ = uploadFile.Close()
-		_ = os.Remove(uploadPath)
-		return Entry{}, err
-	}
-	if err := uploadFile.Close(); err != nil {
-		_ = os.Remove(uploadPath)
 		return Entry{}, err
 	}
 	defer os.Remove(uploadPath)
+	return m.importUploadPath(uploadPath, password, nil)
+}
 
-	tempRoot, err := os.MkdirTemp(m.configRoot, "backup-import-*")
-	if err != nil {
-		return Entry{}, err
+func (m *Manager) GetImportJob(id string) (ImportJobSnapshot, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.clearExpiredImportJobsLocked(m.now().UTC())
+	job, ok := m.importJobs[strings.TrimSpace(id)]
+	if !ok {
+		return ImportJobSnapshot{}, ErrImportJobNotFound
 	}
-	defer os.RemoveAll(tempRoot)
-
-	uploadedManifest, err := readManifestFromArchive(uploadPath)
-	if err != nil {
-		return Entry{}, fmt.Errorf("%w: %v", ErrInvalidManifest, err)
-	}
-	if err := validateManifest(uploadedManifest); err != nil {
-		return Entry{}, fmt.Errorf("%w: %v", ErrInvalidManifest, err)
-	}
-
-	extractedRoot := filepath.Join(tempRoot, "extracted")
-	if err := extractZipToDir(uploadPath, extractedRoot, password); err != nil {
-		return Entry{}, err
-	}
-
-	createdAt := uploadedManifest.CreatedAt.UTC()
-	if createdAt.IsZero() {
-		createdAt = time.Now().UTC()
-	}
-	manifest := newManifest(SourceImported, createdAt)
-	if _, err := copyDirectory(filepath.Join(extractedRoot, "payload"), filepath.Join(tempRoot, "payload"), nil); err != nil {
-		return Entry{}, fmt.Errorf("%w: %v", ErrInvalidArchive, err)
-	}
-	manifest.Components, err = buildComponentSummaries(filepath.Join(tempRoot, "payload"))
-	if err != nil {
-		return Entry{}, err
-	}
-	if err := writeManifest(filepath.Join(tempRoot, "manifest.json"), manifest); err != nil {
-		return Entry{}, err
-	}
-	return m.writeSnapshotToLibrary(tempRoot, manifest, password)
+	return m.snapshotImportJob(job), nil
 }
 
 func (m *Manager) List() ([]Entry, error) {
@@ -290,6 +344,262 @@ func (m *Manager) ensureConfigured() error {
 	return nil
 }
 
+func (m *Manager) runImportJob(jobID string) {
+	m.updateImportJob(jobID, ImportStageArchiveValidation, ImportSubstageManifestRead, 18, "正在讀取 manifest.json。")
+
+	password, uploadPath, ok := m.importJobSecrets(jobID)
+	if !ok {
+		return
+	}
+
+	entry, err := m.importUploadPath(uploadPath, password, m.updateImportJobCallback(jobID))
+	if err != nil {
+		m.failImportJob(jobID, err)
+		return
+	}
+	m.completeImportJob(jobID, entry)
+}
+
+func (m *Manager) importJobSecrets(jobID string) (string, string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job, ok := m.importJobs[jobID]
+	if !ok {
+		return "", "", false
+	}
+	return job.password, job.uploadPath, true
+}
+
+func (m *Manager) updateImportJobCallback(jobID string) importProgressReporter {
+	return func(stage, substage string, progress int, message string) {
+		m.updateImportJob(jobID, stage, substage, progress, message)
+	}
+}
+
+func (m *Manager) updateImportJob(jobID string, stage string, substage string, progress int, message string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job, ok := m.importJobs[jobID]
+	if !ok {
+		return
+	}
+	now := m.now().UTC()
+	job.snapshot.Status = ImportJobStatusRunning
+	job.snapshot.Stage = stage
+	job.snapshot.Substage = substage
+	job.snapshot.ProgressPercent = progress
+	job.snapshot.Message = strings.TrimSpace(message)
+	job.snapshot.UpdatedAt = now
+	job.snapshot.ExpiresAt = now.Add(m.jobTTL)
+	m.appendImportEventLocked(job, message)
+}
+
+func (m *Manager) completeImportJob(jobID string, entry Entry) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job, ok := m.importJobs[jobID]
+	if !ok {
+		return
+	}
+	now := m.now().UTC()
+	job.snapshot.Status = ImportJobStatusCompleted
+	job.snapshot.Stage = ImportStageCompleted
+	job.snapshot.Substage = ""
+	job.snapshot.ProgressPercent = 100
+	job.snapshot.Message = "備份檔已寫入備份庫。"
+	job.snapshot.ErrorCode = ""
+	job.snapshot.ErrorMessage = ""
+	copyEntry := entry
+	job.snapshot.Backup = &copyEntry
+	job.snapshot.UpdatedAt = now
+	job.snapshot.ExpiresAt = now.Add(m.jobTTL)
+	m.appendImportEventLocked(job, "備份檔已寫入備份庫。")
+	m.releaseImportJobResourcesLocked(job)
+}
+
+func (m *Manager) failImportJob(jobID string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job, ok := m.importJobs[jobID]
+	if !ok {
+		return
+	}
+	now := m.now().UTC()
+	job.snapshot.Status = ImportJobStatusFailed
+	job.snapshot.Stage = ImportStageFailed
+	if job.snapshot.ProgressPercent < 1 {
+		job.snapshot.ProgressPercent = 1
+	}
+	job.snapshot.Message = importFailureMessage(err)
+	job.snapshot.ErrorCode = importErrorCode(err)
+	job.snapshot.ErrorMessage = err.Error()
+	job.snapshot.UpdatedAt = now
+	job.snapshot.ExpiresAt = now.Add(m.jobTTL)
+	m.appendImportEventLocked(job, importFailureMessage(err))
+	m.releaseImportJobResourcesLocked(job)
+}
+
+func (m *Manager) snapshotImportJob(job *importJob) ImportJobSnapshot {
+	if job == nil {
+		return ImportJobSnapshot{}
+	}
+	snapshot := job.snapshot
+	if len(job.snapshot.Events) > 0 {
+		snapshot.Events = make([]ImportJobEvent, len(job.snapshot.Events))
+		copy(snapshot.Events, job.snapshot.Events)
+	}
+	if job.snapshot.Backup != nil {
+		entry := *job.snapshot.Backup
+		snapshot.Backup = &entry
+	}
+	return snapshot
+}
+
+func (m *Manager) appendImportEventLocked(job *importJob, message string) {
+	if job == nil {
+		return
+	}
+	msg := strings.TrimSpace(message)
+	if msg == "" {
+		return
+	}
+	if n := len(job.snapshot.Events); n > 0 && job.snapshot.Events[n-1].Message == msg {
+		return
+	}
+	job.snapshot.Events = append(job.snapshot.Events, ImportJobEvent{
+		At:      m.now().UTC(),
+		Message: msg,
+	})
+	if len(job.snapshot.Events) > m.maxJobEvents {
+		job.snapshot.Events = job.snapshot.Events[len(job.snapshot.Events)-m.maxJobEvents:]
+	}
+}
+
+func (m *Manager) clearExpiredImportJobsLocked(now time.Time) {
+	for id, job := range m.importJobs {
+		if job == nil {
+			delete(m.importJobs, id)
+			continue
+		}
+		if now.After(job.snapshot.ExpiresAt) {
+			m.releaseImportJobResourcesLocked(job)
+			delete(m.importJobs, id)
+		}
+	}
+}
+
+func (m *Manager) releaseImportJobResourcesLocked(job *importJob) {
+	if job == nil {
+		return
+	}
+	job.password = ""
+	if job.uploadPath != "" {
+		_ = os.Remove(job.uploadPath)
+		job.uploadPath = ""
+	}
+}
+
+func (m *Manager) writeUploadToTempFile(reader io.Reader) (string, int64, error) {
+	uploadFile, err := os.CreateTemp(m.configRoot, "backup-upload-*.zip")
+	if err != nil {
+		return "", 0, err
+	}
+	uploadPath := uploadFile.Name()
+	written, err := io.Copy(uploadFile, reader)
+	if err != nil {
+		_ = uploadFile.Close()
+		_ = os.Remove(uploadPath)
+		return "", 0, err
+	}
+	if err := uploadFile.Close(); err != nil {
+		_ = os.Remove(uploadPath)
+		return "", 0, err
+	}
+	return uploadPath, written, nil
+}
+
+func (m *Manager) importUploadPath(uploadPath string, password string, report importProgressReporter) (Entry, error) {
+	tempRoot, err := os.MkdirTemp(m.configRoot, "backup-import-*")
+	if err != nil {
+		return Entry{}, err
+	}
+	defer os.RemoveAll(tempRoot)
+
+	if report != nil {
+		report(ImportStageArchiveValidation, ImportSubstageManifestRead, 18, "正在讀取 manifest.json。")
+	}
+	uploadedManifest, err := readManifestFromArchive(uploadPath)
+	if err != nil {
+		return Entry{}, fmt.Errorf("%w: %v", ErrInvalidManifest, err)
+	}
+	if err := validateManifest(uploadedManifest); err != nil {
+		return Entry{}, fmt.Errorf("%w: %v", ErrInvalidManifest, err)
+	}
+
+	extractedRoot := filepath.Join(tempRoot, "extracted")
+	if report != nil {
+		report(ImportStageArchiveValidation, ImportSubstagePayloadDecrypting, 36, "正在用提供的密碼解密 payload。")
+	}
+	if err := extractZipToDir(uploadPath, extractedRoot, password); err != nil {
+		return Entry{}, err
+	}
+
+	payloadSrc := filepath.Join(extractedRoot, "payload")
+	if !dirExists(payloadSrc) {
+		return Entry{}, fmt.Errorf("%w: payload directory missing", ErrInvalidArchive)
+	}
+
+	if report != nil {
+		report(ImportStageArchiveValidation, ImportSubstagePayloadValidating, 54, "正在驗證 payload 與 component 摘要。")
+	}
+	createdAt := uploadedManifest.CreatedAt.UTC()
+	if createdAt.IsZero() {
+		createdAt = m.now().UTC()
+	}
+	manifest := newManifest(SourceImported, createdAt)
+	if _, err := copyDirectory(payloadSrc, filepath.Join(tempRoot, "payload"), nil); err != nil {
+		return Entry{}, fmt.Errorf("%w: %v", ErrInvalidArchive, err)
+	}
+	manifest.Components, err = buildComponentSummaries(filepath.Join(tempRoot, "payload"))
+	if err != nil {
+		return Entry{}, err
+	}
+	if err := writeManifest(filepath.Join(tempRoot, "manifest.json"), manifest); err != nil {
+		return Entry{}, err
+	}
+	return m.writeSnapshotToLibraryWithProgress(tempRoot, manifest, password, report)
+}
+
+func importErrorCode(err error) string {
+	switch {
+	case errors.Is(err, ErrPasswordRequired):
+		return "password_required"
+	case errors.Is(err, ErrInvalidPassword):
+		return "invalid_backup_password"
+	case errors.Is(err, ErrInvalidManifest):
+		return "invalid_backup_manifest"
+	case errors.Is(err, ErrInvalidArchive):
+		return "invalid_backup_archive"
+	case errors.Is(err, ErrNotConfigured):
+		return "backup_not_configured"
+	default:
+		return "backup_import_failed"
+	}
+}
+
+func importFailureMessage(err error) string {
+	switch {
+	case errors.Is(err, ErrInvalidPassword):
+		return "備份密碼無法解密這份 archive。"
+	case errors.Is(err, ErrInvalidManifest):
+		return "manifest.json 無效，無法匯入這份備份。"
+	case errors.Is(err, ErrInvalidArchive):
+		return "archive 內容驗證失敗，匯入已中止。"
+	default:
+		return "匯入備份檔失敗。"
+	}
+}
+
 func (m *Manager) snapshotCurrentState(snapshotRoot string, manifest Manifest) (Manifest, error) {
 	payloadRoot := filepath.Join(snapshotRoot, "payload")
 	if err := os.MkdirAll(payloadRoot, 0o700); err != nil {
@@ -345,6 +655,10 @@ func (m *Manager) snapshotCurrentState(snapshotRoot string, manifest Manifest) (
 }
 
 func (m *Manager) writeSnapshotToLibrary(snapshotRoot string, manifest Manifest, password string) (Entry, error) {
+	return m.writeSnapshotToLibraryWithProgress(snapshotRoot, manifest, password, nil)
+}
+
+func (m *Manager) writeSnapshotToLibraryWithProgress(snapshotRoot string, manifest Manifest, password string, report importProgressReporter) (Entry, error) {
 	if err := os.MkdirAll(m.backupsDir, 0o700); err != nil {
 		return Entry{}, err
 	}
@@ -355,8 +669,15 @@ func (m *Manager) writeSnapshotToLibrary(snapshotRoot string, manifest Manifest,
 
 	var finalSize int64
 	for attempt := 0; attempt < 5; attempt++ {
+		if report != nil {
+			report(ImportStageLibraryWrite, ImportSubstageManifestRewriting, 68, "正在重寫 manifest.json 與 size metadata。")
+		}
 		if err := writeManifest(filepath.Join(snapshotRoot, "manifest.json"), manifest); err != nil {
 			return Entry{}, err
+		}
+		if report != nil {
+			report(ImportStageLibraryWrite, ImportSubstagePayloadRepacking, 78, "正在用這次提供的密碼重新封裝 payload。")
+			report(ImportStageLibraryWrite, ImportSubstageTempArchiveWrite, 90, "正在寫入暫存 archive。")
 		}
 		if err := zipSnapshot(snapshotRoot, tempPath, password); err != nil {
 			return Entry{}, err
@@ -373,6 +694,9 @@ func (m *Manager) writeSnapshotToLibrary(snapshotRoot string, manifest Manifest,
 	}
 	manifest.SizeBytes = finalSize
 
+	if report != nil {
+		report(ImportStageLibraryWrite, ImportSubstageArchiveRenaming, 97, "暫存 archive 已完成，正在切換正式檔案。")
+	}
 	if err := os.Rename(tempPath, finalPath); err != nil {
 		return Entry{}, err
 	}
@@ -678,6 +1002,20 @@ func generateBackupID() string {
 	random := make([]byte, 4)
 	_, _ = rand.Read(random)
 	return strings.ToLower(time.Now().UTC().Format("20060102t150405z") + "-" + hex.EncodeToString(random))
+}
+
+func generateImportJobID() string {
+	random := make([]byte, 12)
+	_, _ = rand.Read(random)
+	return strings.ToLower(base64.RawURLEncoding.EncodeToString(random))
+}
+
+func sanitizeImportFileName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	return filepath.Base(name)
 }
 
 func writeManifest(path string, manifest Manifest) error {

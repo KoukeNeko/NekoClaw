@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/doeshing/nekoclaw/internal/app"
 	"github.com/doeshing/nekoclaw/internal/auth"
@@ -147,8 +148,16 @@ func TestBackupsImportAndValidation(t *testing.T) {
 		[]byte("not-a-zip"),
 		map[string]string{"password": apiBackupPassword},
 	)
-	if invalidImport.Code != http.StatusBadRequest {
-		t.Fatalf("expected invalid import to return 400, got %d body=%s", invalidImport.Code, invalidImport.Body.String())
+	if invalidImport.Code != http.StatusAccepted {
+		t.Fatalf("expected invalid import to return 202, got %d body=%s", invalidImport.Code, invalidImport.Body.String())
+	}
+	invalidJob := decodeBackupImportJob(t, invalidImport)
+	invalidFinal := waitForBackupImportJob(t, handler, invalidJob.JobID, nil)
+	if invalidFinal.Status != backup.ImportJobStatusFailed {
+		t.Fatalf("invalid import job status = %q, want failed", invalidFinal.Status)
+	}
+	if invalidFinal.ErrorCode != "invalid_backup_manifest" {
+		t.Fatalf("invalid import error code = %q, want invalid_backup_manifest", invalidFinal.ErrorCode)
 	}
 
 	importResp := performMultipartRequest(
@@ -160,17 +169,19 @@ func TestBackupsImportAndValidation(t *testing.T) {
 		rawArchive,
 		map[string]string{"password": apiBackupPassword},
 	)
-	if importResp.Code != http.StatusOK {
+	if importResp.Code != http.StatusAccepted {
 		t.Fatalf("unexpected import status: %d body=%s", importResp.Code, importResp.Body.String())
 	}
-	var importPayload struct {
-		Backup backup.Entry `json:"backup"`
+	startedJob := decodeBackupImportJob(t, importResp)
+	importedJob := waitForBackupImportJob(t, handler, startedJob.JobID, nil)
+	if importedJob.Status != backup.ImportJobStatusCompleted {
+		t.Fatalf("import job status = %q, want completed", importedJob.Status)
 	}
-	if err := json.Unmarshal(importResp.Body.Bytes(), &importPayload); err != nil {
-		t.Fatalf("decode import response: %v", err)
+	if importedJob.Backup == nil {
+		t.Fatal("expected completed import job to include backup entry")
 	}
-	if importPayload.Backup.Source != backup.SourceImported {
-		t.Fatalf("source = %q, want %q", importPayload.Backup.Source, backup.SourceImported)
+	if importedJob.Backup.Source != backup.SourceImported {
+		t.Fatalf("source = %q, want %q", importedJob.Backup.Source, backup.SourceImported)
 	}
 
 	wrongPassword := performMultipartRequest(
@@ -182,11 +193,16 @@ func TestBackupsImportAndValidation(t *testing.T) {
 		rawArchive,
 		map[string]string{"password": "wrong-password-456"},
 	)
-	if wrongPassword.Code != http.StatusBadRequest {
+	if wrongPassword.Code != http.StatusAccepted {
 		t.Fatalf("wrong password import status = %d body=%s", wrongPassword.Code, wrongPassword.Body.String())
 	}
-	if code := errorCodeFromBody(t, wrongPassword); code != "invalid_backup_password" {
-		t.Fatalf("wrong password import error code = %q, want invalid_backup_password", code)
+	wrongPasswordJob := decodeBackupImportJob(t, wrongPassword)
+	wrongPasswordFinal := waitForBackupImportJob(t, handler, wrongPasswordJob.JobID, nil)
+	if wrongPasswordFinal.Status != backup.ImportJobStatusFailed {
+		t.Fatalf("wrong password job status = %q, want failed", wrongPasswordFinal.Status)
+	}
+	if wrongPasswordFinal.ErrorCode != "invalid_backup_password" {
+		t.Fatalf("wrong password import error code = %q, want invalid_backup_password", wrongPasswordFinal.ErrorCode)
 	}
 
 	missingPasswordCreate := performJSONRequest(t, handler, http.MethodPost, "/v1/backups/create", `{}`)
@@ -299,8 +315,13 @@ func TestBackupsImportRequiresOriginOrTrustedUIHeaderWhenSecurityEnabled(t *test
 		map[string]string{trustedBrowserUIHeader: trustedBrowserUIHeaderValue},
 		[]*http.Cookie{sessionCookie},
 	)
-	if allowed.Code != http.StatusOK {
-		t.Fatalf("expected trusted UI import to return 200, got %d body=%s", allowed.Code, allowed.Body.String())
+	if allowed.Code != http.StatusAccepted {
+		t.Fatalf("expected trusted UI import to return 202, got %d body=%s", allowed.Code, allowed.Body.String())
+	}
+	allowedJob := decodeBackupImportJob(t, allowed)
+	finalJob := waitForBackupImportJob(t, handler, allowedJob.JobID, []*http.Cookie{sessionCookie})
+	if finalJob.Status != backup.ImportJobStatusCompleted {
+		t.Fatalf("trusted UI import job status = %q, want completed", finalJob.Status)
 	}
 }
 
@@ -407,4 +428,46 @@ func performMultipartRequestWithOptions(
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	return rr
+}
+
+func decodeBackupImportJob(t *testing.T, rr *httptest.ResponseRecorder) backup.ImportJobSnapshot {
+	t.Helper()
+	var payload struct {
+		Job backup.ImportJobSnapshot `json:"job"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode backup import job response: %v", err)
+	}
+	if strings.TrimSpace(payload.Job.JobID) == "" {
+		t.Fatal("expected import job id")
+	}
+	return payload.Job
+}
+
+func waitForBackupImportJob(
+	t *testing.T,
+	handler http.Handler,
+	jobID string,
+	cookies []*http.Cookie,
+) backup.ImportJobSnapshot {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/backups/import/jobs/"+jobID, nil)
+		for _, cookie := range cookies {
+			req.AddCookie(cookie)
+		}
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("unexpected import job status: %d body=%s", rr.Code, rr.Body.String())
+		}
+		job := decodeBackupImportJob(t, rr)
+		if job.Status == backup.ImportJobStatusCompleted || job.Status == backup.ImportJobStatusFailed {
+			return job
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("backup import job %s did not reach a terminal state", jobID)
+	return backup.ImportJobSnapshot{}
 }

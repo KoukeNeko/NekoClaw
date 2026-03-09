@@ -45,6 +45,7 @@ import type {
   SaveMCPConfigRequest,
   PersonaInfo,
   BackupEntry,
+  BackupImportJob,
   BackupRestoreResponse,
   UsageSummary,
   MemorySearchRequest,
@@ -87,6 +88,12 @@ const BASE = ""; // same-origin; Vite proxy handles /v1 in dev
 const TRUSTED_UI_HEADER = "X-NekoClaw-Request";
 const TRUSTED_UI_HEADER_VALUE = "browser-ui";
 
+export type UploadProgress = {
+  loaded: number;
+  total: number;
+  percent: number;
+};
+
 async function parseErrorBody(resp: Response): Promise<ApiError> {
   let code = "";
   let message = `HTTP ${resp.status}`;
@@ -102,6 +109,25 @@ async function parseErrorBody(resp: Response): Promise<ApiError> {
     /* non-JSON body */
   }
   return new ApiError(resp.status, code, message);
+}
+
+function parseErrorJSON(statusCode: number, raw: string): ApiError {
+  let code = "";
+  let message = `HTTP ${statusCode}`;
+  try {
+    const body = JSON.parse(raw);
+    if (typeof body.error === "string") {
+      message = body.error;
+    } else if (body.error?.message) {
+      code = body.error.code ?? "";
+      message = body.error.message;
+    }
+  } catch {
+    if (raw.trim()) {
+      message = raw.trim();
+    }
+  }
+  return new ApiError(statusCode, code, message);
 }
 
 async function fetchJSON<T>(
@@ -537,18 +563,80 @@ export async function createBackup(password: string): Promise<BackupEntry> {
   return resp.backup;
 }
 
-export async function importBackupArchive(
+export function startBackupImport(
   file: File,
   password: string,
-): Promise<BackupEntry> {
-  const form = new FormData();
-  form.append("file", file);
-  form.append("password", password);
-  const resp = await fetchJSON<{ backup: BackupEntry }>("/v1/backups/import", {
-    method: "POST",
-    body: form,
+  onUploadProgress?: (progress: UploadProgress) => void,
+): Promise<BackupImportJob> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${BASE}/v1/backups/import`);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader(TRUSTED_UI_HEADER, TRUSTED_UI_HEADER_VALUE);
+
+    xhr.upload.onprogress = (event) => {
+      if (!onUploadProgress) return;
+      const total = event.lengthComputable && event.total > 0 ? event.total : file.size;
+      const percent = total > 0 ? Math.min(100, Math.round((event.loaded / total) * 100)) : 0;
+      onUploadProgress({
+        loaded: event.loaded,
+        total,
+        percent,
+      });
+    };
+
+    xhr.onload = () => {
+      const raw = xhr.responseText ?? "";
+      if (xhr.status < 200 || xhr.status >= 300) {
+        const error = parseErrorJSON(xhr.status, raw);
+        if (
+          error.statusCode === 401 &&
+          (error.code === "setup_required" ||
+            error.code === "auth_required" ||
+            error.code === "session_expired")
+        ) {
+          dispatchBrowserAuthEvent(error.code);
+        }
+        reject(error);
+        return;
+      }
+      try {
+        const payload = JSON.parse(raw) as { job?: BackupImportJob };
+        if (!payload.job) {
+          reject(new ApiError(xhr.status, "", "Missing backup import job"));
+          return;
+        }
+        onUploadProgress?.({
+          loaded: file.size,
+          total: file.size,
+          percent: 100,
+        });
+        resolve(payload.job);
+      } catch {
+        reject(new ApiError(xhr.status, "", "Invalid backup import response"));
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new ApiError(0, "", "Network error while uploading backup archive"));
+    };
+
+    xhr.onabort = () => {
+      reject(new ApiError(0, "", "Backup archive upload aborted"));
+    };
+
+    const form = new FormData();
+    form.append("file", file);
+    form.append("password", password);
+    xhr.send(form);
   });
-  return resp.backup;
+}
+
+export async function getBackupImportJob(jobID: string): Promise<BackupImportJob> {
+  const resp = await get<{ job: BackupImportJob }>(
+    `/v1/backups/import/jobs/${encodeURIComponent(jobID)}`,
+  );
+  return resp.job;
 }
 
 export function deleteBackup(id: string): Promise<void> {
