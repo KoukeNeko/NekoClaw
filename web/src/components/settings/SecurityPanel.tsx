@@ -510,15 +510,18 @@ export function SecurityPanel() {
                   </div>
                 </div>
 
-                <div className="rounded-box border border-warning/35 bg-warning/12 p-4 text-base-content shadow-sm">
-                  <div className="space-y-2 text-sm leading-relaxed">
-                    <div className="font-semibold">忘記密碼時如何重設</div>
+                <div className="rounded-box border border-base-300 bg-base-100 p-4 shadow-sm">
+                  <div className="mb-2 flex items-center gap-2">
+                    <div className="badge badge-warning badge-sm">Recovery</div>
+                    <div className="font-semibold text-base-content">忘記密碼時如何重設</div>
+                  </div>
+                  <div className="space-y-2 text-sm leading-relaxed text-base-content/85">
                     <div>
                       目前沒有線上 recovery flow。請到服務主機刪除{" "}
                       <span className="font-mono">security-state.json</span>，再重啟{" "}
                       <span className="font-mono">web</span> mode，server 會重新輸出 setup URL。
                     </div>
-                    <div className="text-base-content/80">
+                    <div className="text-base-content/70">
                       預設路徑：
                       <span className="font-mono"> ~/.nekoclaw/auth/security-state.json</span>。
                       若有設定 <span className="font-mono">--auth-dir</span> 或{" "}
