@@ -545,7 +545,7 @@ export function BackupPanel() {
             </div>
           </div>
         </div>
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(340px,0.9fr)]">
+        <div className="grid gap-6 lg:grid-cols-[minmax(320px,0.78fr)_minmax(420px,1.22fr)]">
           {Array.from({ length: 2 }).map((_, index) => (
             <div
               key={index}
@@ -697,7 +697,7 @@ export function BackupPanel() {
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(340px,0.9fr)]">
+      <div className="grid gap-6 lg:grid-cols-[minmax(320px,0.78fr)_minmax(420px,1.22fr)]">
         <div className="card min-h-[28rem] border border-base-300 bg-base-200 shadow-sm">
           <div className="card-body gap-4 p-4">
             <div className="flex items-center justify-between gap-3">
