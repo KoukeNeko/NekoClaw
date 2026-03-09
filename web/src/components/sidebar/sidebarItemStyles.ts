@@ -1,7 +1,7 @@
 export const sidebarActionClass = [
-  "btn w-full gap-2 font-medium normal-case",
+  "btn inline-flex w-full items-center justify-center gap-2 font-medium normal-case",
   "is-drawer-open:justify-start is-drawer-open:px-3",
-  "is-drawer-close:btn-square",
+  "is-drawer-close:inline-flex is-drawer-close:btn-square is-drawer-close:items-center is-drawer-close:justify-center",
 ].join(" ");
 
 export const sidebarListItemClass = [
