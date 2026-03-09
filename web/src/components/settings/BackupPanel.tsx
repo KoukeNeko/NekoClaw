@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  ApiError,
   createBackup,
   deleteBackup,
   downloadBackupArchive,
@@ -20,6 +21,18 @@ type BusyAction =
   | "download"
   | "delete"
   | "restore";
+type ImportPhase = "ready" | "running" | "success" | "error";
+type ImportErrorState = {
+  statusCode: number;
+  code: string;
+  message: string;
+};
+type ImportDialogState = {
+  file: File;
+  phase: ImportPhase;
+  imported: BackupEntry | null;
+  error: ImportErrorState | null;
+};
 
 function sortBackups(backups: BackupEntry[]): BackupEntry[] {
   return [...backups].sort((left, right) => {
@@ -80,6 +93,56 @@ function toErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+function toImportErrorState(error: unknown, fallback: string): ImportErrorState {
+  if (error instanceof ApiError) {
+    return {
+      statusCode: error.statusCode,
+      code: error.code,
+      message: error.message.trim() || fallback,
+    };
+  }
+  if (error instanceof Error) {
+    return {
+      statusCode: 0,
+      code: "",
+      message: error.message.trim() || fallback,
+    };
+  }
+  return {
+    statusCode: 0,
+    code: "",
+    message: fallback,
+  };
+}
+
+function importPhaseLabel(phase: ImportPhase): string {
+  switch (phase) {
+    case "ready":
+      return "準備匯入";
+    case "running":
+      return "匯入中";
+    case "success":
+      return "匯入成功";
+    case "error":
+      return "匯入失敗";
+  }
+}
+
+function importPhaseBadgeClass(phase: ImportPhase): string {
+  switch (phase) {
+    case "success":
+      return "badge-success";
+    case "error":
+      return "badge-error";
+    default:
+      return "badge-warning";
+  }
+}
+
+function fileMimeType(file: File): string {
+  return file.type.trim() || "application/octet-stream";
+}
+
 export function BackupPanel() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -91,6 +154,7 @@ export function BackupPanel() {
   const [status, setStatus] = useState<StatusState>(null);
   const [restorePrompt, setRestorePrompt] = useState<BackupEntry | null>(null);
   const [restoreNotice, setRestoreNotice] = useState<string | null>(null);
+  const [importDialog, setImportDialog] = useState<ImportDialogState | null>(null);
 
   async function syncBackups(showLoading = false, preferredID = "") {
     if (showLoading) setLoading(true);
@@ -128,6 +192,62 @@ export function BackupPanel() {
     const timer = window.setTimeout(() => setStatus(null), 2200);
     return () => window.clearTimeout(timer);
   }, [status]);
+
+  useEffect(() => {
+    if (!importDialog || importDialog.phase !== "ready") return undefined;
+
+    let cancelled = false;
+    void (async () => {
+      setBusyAction("import");
+      setImportDialog((current) =>
+        current && current.phase === "ready"
+          ? { ...current, phase: "running" }
+          : current,
+      );
+      try {
+        const imported = await importBackupArchive(importDialog.file);
+        if (cancelled) return;
+        setQuery("");
+        setBackups((current) =>
+          sortBackups([
+            imported,
+            ...current.filter((backup) => backup.backup_id !== imported.backup_id),
+          ]),
+        );
+        setSelectedBackupID(imported.backup_id);
+        setImportDialog((current) =>
+          current
+            ? {
+                ...current,
+                phase: "success",
+                imported,
+                error: null,
+              }
+            : current,
+        );
+      } catch (error) {
+        if (cancelled) return;
+        setImportDialog((current) =>
+          current
+            ? {
+                ...current,
+                phase: "error",
+                imported: null,
+                error: toImportErrorState(error, "匯入備份檔失敗"),
+              }
+            : current,
+        );
+      } finally {
+        if (!cancelled) {
+          setBusyAction("");
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [importDialog]);
 
   useEffect(() => {
     if (backups.length === 0) {
@@ -182,26 +302,19 @@ export function BackupPanel() {
     }
   }
 
-  async function handleImport(file: File | null) {
+  function handleImport(file: File | null) {
     if (!file) return;
-    setBusyAction("import");
-    try {
-      const imported = await importBackupArchive(file);
-      const ok = await syncBackups(false, imported.backup_id);
-      if (ok) {
-        setStatus({
-          tone: "success",
-          message: `已匯入 ${imported.file_name}`,
-        });
-      }
-    } catch (error) {
-      setStatus({
-        tone: "error",
-        message: toErrorMessage(error, "匯入備份檔失敗"),
-      });
-    } finally {
-      setBusyAction("");
-    }
+    setImportDialog({
+      file,
+      phase: "ready",
+      imported: null,
+      error: null,
+    });
+  }
+
+  function closeImportDialog() {
+    if (busyAction === "import") return;
+    setImportDialog(null);
   }
 
   async function handleDownload() {
@@ -323,7 +436,7 @@ export function BackupPanel() {
         onChange={(event) => {
           const file = event.target.files?.[0] ?? null;
           event.currentTarget.value = "";
-          void handleImport(file);
+          handleImport(file);
         }}
       />
 
@@ -712,6 +825,215 @@ export function BackupPanel() {
           <form method="dialog" className="modal-backdrop">
             <button onClick={() => setRestorePrompt(null)}>close</button>
           </form>
+        </dialog>
+      ) : null}
+
+      {importDialog ? (
+        <dialog className="modal modal-open">
+          <div className="modal-box max-w-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-semibold">匯入備份檔</h3>
+                <p className="mt-1 text-sm text-base-content/65">
+                  上傳完成後會先驗證 archive，再寫入目前備份庫。
+                </p>
+              </div>
+              <div className={`badge badge-sm ${importPhaseBadgeClass(importDialog.phase)}`}>
+                {importPhaseLabel(importDialog.phase)}
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-4">
+              <div className="card border border-base-300 bg-base-100 shadow-sm">
+                <div className="card-body gap-3">
+                  <h4 className="text-sm font-semibold uppercase tracking-wide text-base-content/55">
+                    檔案資訊
+                  </h4>
+                  <ul className="list rounded-box border border-base-300 bg-base-100">
+                    <li className="list-row">
+                      <div>
+                        <div className="text-xs uppercase tracking-wide text-base-content/50">
+                          File
+                        </div>
+                        <div className="font-medium">{importDialog.file.name}</div>
+                      </div>
+                    </li>
+                    <li className="list-row">
+                      <div>
+                        <div className="text-xs uppercase tracking-wide text-base-content/50">
+                          Size
+                        </div>
+                        <div className="font-mono text-sm">
+                          {formatBytes(importDialog.file.size)}
+                        </div>
+                      </div>
+                    </li>
+                    <li className="list-row">
+                      <div>
+                        <div className="text-xs uppercase tracking-wide text-base-content/50">
+                          MIME Type
+                        </div>
+                        <div className="font-mono text-sm">
+                          {fileMimeType(importDialog.file)}
+                        </div>
+                      </div>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <div className="card border border-base-300 bg-base-100 shadow-sm">
+                <div className="card-body gap-3">
+                  <h4 className="text-sm font-semibold uppercase tracking-wide text-base-content/55">
+                    目前狀態
+                  </h4>
+                  {importDialog.phase === "running" || importDialog.phase === "ready" ? (
+                    <div className="alert alert-warning">
+                      <span className="loading loading-spinner loading-sm" />
+                      <span>正在上傳與驗證備份檔，請勿關閉此視窗。</span>
+                    </div>
+                  ) : null}
+                  {importDialog.phase === "success" ? (
+                    <div className="alert alert-success">
+                      <span>備份檔已通過驗證並寫入備份庫，左側清單已切到這份新匯入的 archive。</span>
+                    </div>
+                  ) : null}
+                  {importDialog.phase === "error" ? (
+                    <div className="alert alert-error">
+                      <span>匯入未完成，備份庫沒有套用這次上傳結果。</span>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              {importDialog.imported ? (
+                <div className="card border border-base-300 bg-base-100 shadow-sm">
+                  <div className="card-body gap-3">
+                    <h4 className="text-sm font-semibold uppercase tracking-wide text-base-content/55">
+                      成功結果
+                    </h4>
+                    <ul className="list rounded-box border border-base-300 bg-base-100">
+                      <li className="list-row">
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">
+                            File
+                          </div>
+                          <div className="font-medium">{importDialog.imported.file_name}</div>
+                        </div>
+                      </li>
+                      <li className="list-row">
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">
+                            Backup ID
+                          </div>
+                          <div className="font-mono text-sm">{importDialog.imported.backup_id}</div>
+                        </div>
+                      </li>
+                      <li className="list-row">
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">
+                            Source
+                          </div>
+                          <div className="text-sm">{sourceLabel(importDialog.imported.source)}</div>
+                        </div>
+                      </li>
+                      <li className="list-row">
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">
+                            Created
+                          </div>
+                          <div className="text-sm">
+                            {formatDateTime(importDialog.imported.created_at)}
+                          </div>
+                        </div>
+                      </li>
+                      <li className="list-row">
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">
+                            Size
+                          </div>
+                          <div className="font-mono text-sm">
+                            {formatBytes(importDialog.imported.size_bytes)}
+                          </div>
+                        </div>
+                      </li>
+                    </ul>
+
+                    <div className="flex flex-wrap gap-2">
+                      {importDialog.imported.components.map((component) => (
+                        <div key={component.key} className="badge badge-outline gap-1 px-3 py-3">
+                          <span>{component.label}</span>
+                          <span className="font-mono text-[11px] opacity-70">
+                            {component.item_count}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {importDialog.error ? (
+                <div className="card border border-error/40 bg-base-100 shadow-sm">
+                  <div className="card-body gap-3">
+                    <h4 className="text-sm font-semibold uppercase tracking-wide text-base-content/55">
+                      失敗細節
+                    </h4>
+                    <ul className="list rounded-box border border-base-300 bg-base-100">
+                      <li className="list-row">
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">
+                            HTTP Status
+                          </div>
+                          <div className="font-mono text-sm">
+                            {importDialog.error.statusCode || "n/a"}
+                          </div>
+                        </div>
+                      </li>
+                      <li className="list-row">
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">
+                            Error Code
+                          </div>
+                          <div className="font-mono text-sm">
+                            {importDialog.error.code || "n/a"}
+                          </div>
+                        </div>
+                      </li>
+                      <li className="list-row">
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">
+                            Message
+                          </div>
+                          <div className="text-sm">{importDialog.error.message}</div>
+                        </div>
+                      </li>
+                    </ul>
+
+                    {importDialog.error.statusCode === 403 &&
+                    importDialog.error.code === "origin_mismatch" ? (
+                      <div className="alert alert-warning">
+                        <span>Browser security 的 same-origin 檢查擋下了這次 request。</span>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="modal-action">
+              <button
+                className="btn"
+                onClick={closeImportDialog}
+                disabled={busyAction === "import"}
+              >
+                {importDialog.phase === "success" || importDialog.phase === "error"
+                  ? "關閉"
+                  : "處理中"}
+              </button>
+            </div>
+          </div>
+          <div className="modal-backdrop bg-black/40" />
         </dialog>
       ) : null}
 

@@ -137,6 +137,64 @@ func TestBrowserSecurityRejectsCrossSiteMutations(t *testing.T) {
 	if sameOrigin.Code != http.StatusOK {
 		t.Fatalf("same-origin status = %d body=%s", sameOrigin.Code, sameOrigin.Body.String())
 	}
+
+	trustedUI := performSecurityRequest(t, handler, http.MethodPut, "/v1/general/config", `{"timezone":"Asia/Taipei"}`, map[string]string{
+		trustedBrowserUIHeader: trustedBrowserUIHeaderValue,
+	}, []*http.Cookie{sessionCookie})
+	if trustedUI.Code != http.StatusOK {
+		t.Fatalf("trusted UI status = %d body=%s", trustedUI.Code, trustedUI.Body.String())
+	}
+}
+
+func TestBrowserSecurityAcceptsHTTPSOriginBehindTLSProxy(t *testing.T) {
+	handler, _, setupToken := newBrowserSecurityTestHandler(t)
+
+	setup := performSecurityRequest(t, handler, http.MethodPost, "/v1/security/setup", `{
+		"token":"`+setupToken+`",
+		"password":"correct horse battery"
+	}`, nil, nil)
+	sessionCookie := requireSessionCookie(t, setup)
+
+	proxiedHTTPS := performSecurityRequest(
+		t,
+		handler,
+		http.MethodPut,
+		"http://nekoclaw.koukeneko.cafe/v1/general/config",
+		`{"timezone":"Asia/Taipei"}`,
+		map[string]string{
+			"Origin": "https://nekoclaw.koukeneko.cafe",
+		},
+		[]*http.Cookie{sessionCookie},
+	)
+	if proxiedHTTPS.Code != http.StatusOK {
+		t.Fatalf("proxied https status = %d body=%s", proxiedHTTPS.Code, proxiedHTTPS.Body.String())
+	}
+}
+
+func TestBrowserSecurityAcceptsStandardForwardedHeader(t *testing.T) {
+	handler, _, setupToken := newBrowserSecurityTestHandler(t)
+
+	setup := performSecurityRequest(t, handler, http.MethodPost, "/v1/security/setup", `{
+		"token":"`+setupToken+`",
+		"password":"correct horse battery"
+	}`, nil, nil)
+	sessionCookie := requireSessionCookie(t, setup)
+
+	forwarded := performSecurityRequest(
+		t,
+		handler,
+		http.MethodPut,
+		"http://internal-service/v1/general/config",
+		`{"timezone":"Asia/Taipei"}`,
+		map[string]string{
+			"Origin":    "https://nekoclaw.koukeneko.cafe",
+			"Forwarded": `for=203.0.113.8;proto=https;host="nekoclaw.koukeneko.cafe"`,
+		},
+		[]*http.Cookie{sessionCookie},
+	)
+	if forwarded.Code != http.StatusOK {
+		t.Fatalf("forwarded status = %d body=%s", forwarded.Code, forwarded.Body.String())
+	}
 }
 
 func TestBrowserSecurityDisableAndReEnableFlow(t *testing.T) {

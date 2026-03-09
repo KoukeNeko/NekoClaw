@@ -14,6 +14,8 @@ import (
 	"github.com/doeshing/nekoclaw/internal/app"
 	"github.com/doeshing/nekoclaw/internal/auth"
 	"github.com/doeshing/nekoclaw/internal/backup"
+	"github.com/doeshing/nekoclaw/internal/core"
+	"github.com/doeshing/nekoclaw/internal/security"
 )
 
 func TestBackupsEndpointsCreateListDownloadRestoreAndDelete(t *testing.T) {
@@ -156,6 +158,77 @@ func TestBackupsImportAndValidation(t *testing.T) {
 	}
 }
 
+func TestBackupsImportRequiresOriginOrTrustedUIHeaderWhenSecurityEnabled(t *testing.T) {
+	svc, root := newBackupTestService(t)
+	seedBackupAPIState(t, root, svc)
+	svc.SetSecurityConfig(core.DefaultSecurityConfig())
+
+	entry, err := svc.CreateBackup()
+	if err != nil {
+		t.Fatalf("CreateBackup failed: %v", err)
+	}
+	rawArchive, err := os.ReadFile(filepath.Join(root, "backups", entry.FileName))
+	if err != nil {
+		t.Fatalf("read archive: %v", err)
+	}
+
+	runtime, err := security.NewRuntime(security.RuntimeOptions{
+		BaseDir: t.TempDir(),
+		Config:  svc.GetSecurityConfig(),
+	})
+	if err != nil {
+		t.Fatalf("NewRuntime failed: %v", err)
+	}
+	setupToken, err := runtime.EnsureSetupToken()
+	if err != nil {
+		t.Fatalf("EnsureSetupToken failed: %v", err)
+	}
+
+	server := NewServer(svc)
+	server.SetSecurityRuntime(runtime)
+	handler := server.Handler()
+
+	setup := performSecurityRequest(t, handler, http.MethodPost, "/v1/security/setup", `{
+		"token":"`+setupToken+`",
+		"password":"correct horse battery"
+	}`, nil, nil)
+	if setup.Code != http.StatusOK {
+		t.Fatalf("setup status = %d body=%s", setup.Code, setup.Body.String())
+	}
+	sessionCookie := requireSessionCookie(t, setup)
+
+	blocked := performMultipartRequestWithOptions(
+		t,
+		handler,
+		"/v1/backups/import",
+		"file",
+		"backup.zip",
+		rawArchive,
+		nil,
+		[]*http.Cookie{sessionCookie},
+	)
+	if blocked.Code != http.StatusForbidden {
+		t.Fatalf("expected blocked import to return 403, got %d body=%s", blocked.Code, blocked.Body.String())
+	}
+	if code := errorCodeFromBody(t, blocked); code != "origin_mismatch" {
+		t.Fatalf("blocked import error code = %q, want origin_mismatch", code)
+	}
+
+	allowed := performMultipartRequestWithOptions(
+		t,
+		handler,
+		"/v1/backups/import",
+		"file",
+		"backup.zip",
+		rawArchive,
+		map[string]string{trustedBrowserUIHeader: trustedBrowserUIHeaderValue},
+		[]*http.Cookie{sessionCookie},
+	)
+	if allowed.Code != http.StatusOK {
+		t.Fatalf("expected trusted UI import to return 200, got %d body=%s", allowed.Code, allowed.Body.String())
+	}
+}
+
 func newBackupTestService(t *testing.T) (*app.Service, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -214,6 +287,19 @@ func performMultipartRequest(
 	fileName string,
 	data []byte,
 ) *httptest.ResponseRecorder {
+	return performMultipartRequestWithOptions(t, handler, path, fieldName, fileName, data, nil, nil)
+}
+
+func performMultipartRequestWithOptions(
+	t *testing.T,
+	handler http.Handler,
+	path string,
+	fieldName string,
+	fileName string,
+	data []byte,
+	headers map[string]string,
+	cookies []*http.Cookie,
+) *httptest.ResponseRecorder {
 	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -230,6 +316,12 @@ func performMultipartRequest(
 
 	req := httptest.NewRequest(http.MethodPost, path, &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	for _, cookie := range cookies {
+		req.AddCookie(cookie)
+	}
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	return rr

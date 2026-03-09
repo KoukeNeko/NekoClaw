@@ -34,6 +34,11 @@ type securitySessionContext struct {
 	ID string
 }
 
+const (
+	trustedBrowserUIHeader      = "X-NekoClaw-Request"
+	trustedBrowserUIHeaderValue = "browser-ui"
+)
+
 func (s *Server) wrapSecurity(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setSecurityHeaders(w)
@@ -76,7 +81,7 @@ func (s *Server) wrapSecurity(next http.Handler) http.Handler {
 			}
 			return
 		}
-		if isMutatingMethod(r.Method) && !sameOriginMatches(r) {
+		if isMutatingMethod(r.Method) && !sameOriginMatches(r) && !trustedBrowserUIRequest(r) {
 			respondErrorDetail(w, http.StatusForbidden, "origin_mismatch", "request origin does not match current host")
 			return
 		}
@@ -325,10 +330,7 @@ func clearSecuritySessionCookie(w http.ResponseWriter, r *http.Request) {
 }
 
 func cookieShouldBeSecure(r *http.Request) bool {
-	if r.TLS != nil {
-		return true
-	}
-	return strings.EqualFold(strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]), "https")
+	return strings.EqualFold(requestScheme(r), "https")
 }
 
 func isMutatingMethod(method string) bool {
@@ -340,44 +342,110 @@ func isMutatingMethod(method string) bool {
 	}
 }
 
+func trustedBrowserUIRequest(r *http.Request) bool {
+	return strings.EqualFold(
+		strings.TrimSpace(r.Header.Get(trustedBrowserUIHeader)),
+		trustedBrowserUIHeaderValue,
+	)
+}
+
 func sameOriginMatches(r *http.Request) bool {
-	expectedScheme, expectedHost := requestOrigin(r)
-	if expectedScheme == "" || expectedHost == "" {
+	expectedHost := requestHost(r)
+	if expectedHost == "" {
 		return false
+	}
+	expectedScheme := requestScheme(r)
+	if expectedScheme == "" {
+		expectedScheme = inferSameOriginScheme(r, expectedHost)
+	}
+	if expectedScheme == "" {
+		expectedScheme = "http"
 	}
 
 	originHeader := strings.TrimSpace(r.Header.Get("Origin"))
 	if originHeader != "" {
-		parsed, err := url.Parse(originHeader)
-		if err != nil {
-			return false
-		}
-		return strings.EqualFold(parsed.Scheme, expectedScheme) && equalHosts(parsed.Host, expectedHost)
+		return urlMatchesOrigin(originHeader, expectedScheme, expectedHost)
 	}
 
 	refererHeader := strings.TrimSpace(r.Header.Get("Referer"))
 	if refererHeader != "" {
-		parsed, err := url.Parse(refererHeader)
-		if err != nil {
-			return false
-		}
-		return strings.EqualFold(parsed.Scheme, expectedScheme) && equalHosts(parsed.Host, expectedHost)
+		return urlMatchesOrigin(refererHeader, expectedScheme, expectedHost)
 	}
 
 	return false
 }
 
-func requestOrigin(r *http.Request) (string, string) {
-	scheme := "http"
-	if cookieShouldBeSecure(r) {
-		scheme = "https"
+func requestScheme(r *http.Request) string {
+	if r.TLS != nil {
+		return "https"
 	}
+	if proto := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]); proto != "" {
+		return strings.ToLower(proto)
+	}
+	if proto := forwardedHeaderValue(r.Header.Get("Forwarded"), "proto"); proto != "" {
+		return strings.ToLower(proto)
+	}
+	return ""
+}
 
-	host := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Host"), ",")[0])
-	if host == "" {
-		host = strings.TrimSpace(r.Host)
+func requestHost(r *http.Request) string {
+	if host := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Host"), ",")[0]); host != "" {
+		return host
 	}
-	return scheme, host
+	if host := forwardedHeaderValue(r.Header.Get("Forwarded"), "host"); host != "" {
+		return host
+	}
+	return strings.TrimSpace(r.Host)
+}
+
+func inferSameOriginScheme(r *http.Request, expectedHost string) string {
+	for _, raw := range []string{r.Header.Get("Origin"), r.Header.Get("Referer")} {
+		parsed, ok := parseOriginURL(raw)
+		if !ok {
+			continue
+		}
+		if equalHosts(parsed.Host, expectedHost) {
+			return strings.ToLower(parsed.Scheme)
+		}
+	}
+	return ""
+}
+
+func urlMatchesOrigin(raw, expectedScheme, expectedHost string) bool {
+	parsed, ok := parseOriginURL(raw)
+	if !ok {
+		return false
+	}
+	return strings.EqualFold(parsed.Scheme, expectedScheme) && equalHosts(parsed.Host, expectedHost)
+}
+
+func parseOriginURL(raw string) (*url.URL, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed == nil {
+		return nil, false
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return nil, false
+	}
+	return parsed, true
+}
+
+func forwardedHeaderValue(raw, key string) string {
+	first := strings.TrimSpace(strings.Split(raw, ",")[0])
+	if first == "" {
+		return ""
+	}
+	for _, part := range strings.Split(first, ";") {
+		name, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(name), key) {
+			continue
+		}
+		return strings.Trim(strings.TrimSpace(value), `"`)
+	}
+	return ""
 }
 
 func equalHosts(left, right string) bool {

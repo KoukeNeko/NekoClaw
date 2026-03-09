@@ -84,6 +84,8 @@ export class ApiError extends Error {
 // ---------------------------------------------------------------------------
 
 const BASE = ""; // same-origin; Vite proxy handles /v1 in dev
+const TRUSTED_UI_HEADER = "X-NekoClaw-Request";
+const TRUSTED_UI_HEADER_VALUE = "browser-ui";
 
 async function parseErrorBody(resp: Response): Promise<ApiError> {
   let code = "";
@@ -107,10 +109,17 @@ async function fetchJSON<T>(
   init?: RequestInit,
 ): Promise<T> {
   const headers = new Headers(init?.headers);
+  const method = (init?.method ?? "GET").toUpperCase();
   const isFormData =
     typeof FormData !== "undefined" && init?.body instanceof FormData;
   if (!headers.has("Content-Type") && init?.body != null && !isFormData) {
     headers.set("Content-Type", "application/json");
+  }
+  if (
+    (method === "POST" || method === "PUT" || method === "DELETE") &&
+    !headers.has(TRUSTED_UI_HEADER)
+  ) {
+    headers.set(TRUSTED_UI_HEADER, TRUSTED_UI_HEADER_VALUE);
   }
   const resp = await fetch(`${BASE}${path}`, {
     ...init,

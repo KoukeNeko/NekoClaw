@@ -685,7 +685,7 @@ export function SecurityPanel() {
                     <div>
                       <div className="font-medium">Same-origin 檢查</div>
                       <div className="text-sm text-base-content/65">
-                        已登入時，POST / PUT / DELETE 需要 `Origin` 或 `Referer` 與目前 host 相符。
+                        已登入時，寫入 API 需要 `Origin` 或 `Referer` 與目前 host 相符，或由 NekoClaw Web UI 自帶受信任 request header。
                       </div>
                     </div>
                   </li>
