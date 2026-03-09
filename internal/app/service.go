@@ -3101,7 +3101,7 @@ func (s *Service) attemptSingleProvider(
 			// server-provided hint as base delay, or defaultInlineRetryBase
 			// when the server omits Retry-After.
 			retries := inlineRetried[account.ID]
-			if reason == core.FailureRateLimit && (retryHint <= inlineRetryThreshold) && retries < maxInlineRetries {
+			if shouldInlineRetryAccount(pool, account.ID, reason, retryHint, retries) {
 				inlineRetried[account.ID] = retries + 1
 				base := retryHint
 				if base <= 0 {
@@ -3332,7 +3332,7 @@ func (s *Service) attemptSingleProvider(
 
 		// Inline retry with exponential backoff (same logic as tool path above).
 		genRetries := inlineRetried[account.ID]
-		if reason == core.FailureRateLimit && (retryHint <= inlineRetryThreshold) && genRetries < maxInlineRetries {
+		if shouldInlineRetryAccount(pool, account.ID, reason, retryHint, genRetries) {
 			inlineRetried[account.ID] = genRetries + 1
 			genBase := retryHint
 			if genBase <= 0 {
@@ -3785,6 +3785,21 @@ const maxInlineRetries = 3
 // the server does not provide a Retry-After header (retryHint == 0).
 // Many providers (e.g. Gemini) return 429 without a standard header.
 const defaultInlineRetryBase = 5 * time.Second
+
+func shouldInlineRetryAccount(
+	pool *core.AccountPool,
+	accountID string,
+	reason core.FailureReason,
+	retryHint time.Duration,
+	retries int,
+) bool {
+	if reason != core.FailureRateLimit || retryHint > inlineRetryThreshold || retries >= maxInlineRetries {
+		return false
+	}
+	// If another account can take over immediately, rotate instead of waiting
+	// on the rate-limited account.
+	return pool == nil || !pool.HasAlternativeAvailable(accountID)
+}
 
 // exponentialBackoff computes a retry delay using base * 2^retry, capped
 // at 30 seconds, plus 0–500 ms of random jitter to decorrelate retries.

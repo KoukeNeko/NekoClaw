@@ -123,6 +123,29 @@ func (p *AccountPool) Acquire(preferredID string) (Account, bool) {
 	return Account{}, false
 }
 
+// HasAlternativeAvailable reports whether any account other than currentID is
+// immediately usable right now (not cooling down / disabled).
+func (p *AccountPool) HasAlternativeAvailable(currentID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	now := time.Now()
+	p.clearExpiredCooldownsLocked(now)
+	for _, id := range p.resolveOrderLocked("", now) {
+		if id == "" || id == currentID {
+			continue
+		}
+		if _, ok := p.accounts[id]; !ok {
+			continue
+		}
+		if p.isInCooldownLocked(id, now) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // AcquireOrWait tries Acquire first; if all accounts are cooling down it waits
 // up to maxWait for the soonest cooldown to expire, then retries once.
 // Returns (Account, true) on success, or (Account{}, false) if nothing becomes

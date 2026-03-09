@@ -139,6 +139,22 @@ func TestSetCredentialDoesNotForceExplicitOrderPath(t *testing.T) {
 	}
 }
 
+func TestHasAlternativeAvailableSkipsCurrentCooldownAccount(t *testing.T) {
+	pool := NewAccountPool("google-gemini-cli", []Account{
+		{ID: "a1", Provider: "google-gemini-cli", Type: AccountOAuth, Token: "t1"},
+		{ID: "a2", Provider: "google-gemini-cli", Type: AccountOAuth, Token: "t2"},
+	}, []string{"a1", "a2"}, DefaultCooldownConfig())
+
+	if !pool.HasAlternativeAvailable("a1") {
+		t.Fatalf("expected a2 to be available as alternative")
+	}
+
+	pool.MarkFailure("a2", FailureRateLimit)
+	if pool.HasAlternativeAvailable("a1") {
+		t.Fatalf("expected no alternative once a2 is cooling down")
+	}
+}
+
 func TestTimeoutDoesNotSetCooldown(t *testing.T) {
 	pool := NewAccountPool("google-gemini-cli", []Account{
 		{ID: "a1", Provider: "google-gemini-cli", Type: AccountOAuth, Token: "t1"},
