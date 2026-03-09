@@ -65,7 +65,7 @@ export function SetupPage() {
       <div className="mx-auto flex min-h-screen max-w-5xl items-center justify-center">
         <div className="grid w-full gap-6 lg:grid-cols-[minmax(0,0.95fr)_minmax(320px,1.05fr)]">
           <div className="card border border-base-300 bg-base-100 shadow-xl">
-            <div className="card-body gap-4">
+            <div className="card-body gap-6">
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
                   <div className="badge badge-outline badge-sm">Security</div>
@@ -79,19 +79,23 @@ export function SetupPage() {
                 </div>
               </div>
 
-              <form className="space-y-4" onSubmit={handleSubmit}>
-                <label className="form-control gap-2">
-                  <span className="label-text font-medium">Setup Token</span>
+              <form className="space-y-5" onSubmit={handleSubmit}>
+                <label className="fieldset">
+                  <legend className="fieldset-legend">Setup Token</legend>
                   <input
                     type="text"
                     className="input input-bordered w-full font-mono text-sm"
                     value={token}
                     readOnly
+                    spellCheck={false}
                   />
+                  <p className="label text-base-content/55">
+                    此 token 來自 console 輸出的 setup URL，初始化完成後會立即失效。
+                  </p>
                 </label>
 
-                <label className="form-control gap-2">
-                  <span className="label-text font-medium">管理員密碼</span>
+                <label className="fieldset">
+                  <legend className="fieldset-legend">管理員密碼</legend>
                   <input
                     type="password"
                     className="input input-bordered w-full"
@@ -100,10 +104,13 @@ export function SetupPage() {
                     autoComplete="new-password"
                     placeholder="至少 12 個字元"
                   />
+                  <p className="label text-base-content/55">
+                    只會儲存 bcrypt hash，不會寫進 config.json。
+                  </p>
                 </label>
 
-                <label className="form-control gap-2">
-                  <span className="label-text font-medium">再次輸入密碼</span>
+                <label className="fieldset">
+                  <legend className="fieldset-legend">再次輸入密碼</legend>
                   <input
                     type="password"
                     className="input input-bordered w-full"
@@ -112,6 +119,7 @@ export function SetupPage() {
                     autoComplete="new-password"
                     placeholder="再次輸入密碼"
                   />
+                  <p className="label text-base-content/55">再次確認，避免 setup 後立刻被鎖在外面。</p>
                 </label>
 
                 {error ? (
