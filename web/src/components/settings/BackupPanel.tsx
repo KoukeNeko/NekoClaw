@@ -1494,9 +1494,9 @@ export function BackupPanel() {
           if (busyAction === "import") event.preventDefault();
         }}
       >
-        <div className="modal-box max-w-2xl space-y-6">
-          <div className="flex items-start justify-between gap-4">
-            <div>
+        <div className="modal-box max-w-4xl space-y-6 p-8">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="space-y-2">
               <h3 className="text-2xl font-semibold">匯入備份檔</h3>
               <p className="mt-2 text-sm text-base-content/60">
                 先輸入 archive 密碼，再開始驗證與匯入。只支援新的密碼保護備份格式。
@@ -1507,37 +1507,73 @@ export function BackupPanel() {
 
           {importPasswordDialog ? (
             <>
-              <div className="rounded-box border border-base-300 bg-base-100 p-4">
-                <div className="text-xs uppercase tracking-wide text-base-content/50">File</div>
-                <div className="mt-1 font-semibold">{importPasswordDialog.file.name}</div>
-                <div className="mt-3 flex flex-wrap gap-4 text-sm text-base-content/60">
-                  <span>大小：{formatBytes(importPasswordDialog.file.size)}</span>
-                  <span>MIME：{fileMimeType(importPasswordDialog.file)}</span>
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+                <div className="rounded-box border border-base-300 bg-base-100 p-6">
+                  <div className="text-sm font-semibold">檔案資訊</div>
+                  <div className="mt-5 grid gap-5">
+                    <div>
+                      <div className="text-xs uppercase tracking-wide text-base-content/50">
+                        File
+                      </div>
+                      <div className="mt-2 break-all text-2xl font-semibold leading-tight">
+                        {importPasswordDialog.file.name}
+                      </div>
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="rounded-box border border-base-300 bg-base-200 px-4 py-4">
+                        <div className="text-xs uppercase tracking-wide text-base-content/50">
+                          大小
+                        </div>
+                        <div className="mt-2 text-lg font-semibold">
+                          {formatBytes(importPasswordDialog.file.size)}
+                        </div>
+                      </div>
+                      <div className="rounded-box border border-base-300 bg-base-200 px-4 py-4">
+                        <div className="text-xs uppercase tracking-wide text-base-content/50">
+                          MIME Type
+                        </div>
+                        <div className="mt-2 break-all text-lg font-semibold">
+                          {fileMimeType(importPasswordDialog.file)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4 rounded-box border border-base-300 bg-base-100 p-6">
+                  <div>
+                    <div className="text-sm font-semibold">備份密碼</div>
+                    <p className="mt-2 text-sm text-base-content/60">
+                      請輸入建立這份備份時使用的密碼。匯入時會先解密驗證，再重新寫入目前備份庫。
+                    </p>
+                  </div>
+                  <label className="form-control">
+                    <div className="label px-0 pt-0">
+                      <span className="label-text text-base">密碼</span>
+                    </div>
+                    <input
+                      type="password"
+                      className={PASSWORD_INPUT_CLASS}
+                      value={importPasswordDialog.password}
+                      onChange={(event) =>
+                        setImportPasswordDialog((current) =>
+                          current
+                            ? {
+                                ...current,
+                                password: event.target.value,
+                                error: null,
+                              }
+                            : current,
+                        )
+                      }
+                      placeholder="輸入建立這份備份時使用的密碼"
+                    />
+                  </label>
+                  <div className="rounded-box border border-base-300 bg-base-200 px-4 py-4 text-sm text-base-content/65">
+                    之後會顯示詳細進度，包括上傳、驗證 archive，以及寫入備份庫的子狀態。
+                  </div>
                 </div>
               </div>
-
-              <label className="form-control">
-                <div className="label">
-                  <span className="label-text">備份密碼</span>
-                </div>
-                <input
-                  type="password"
-                  className={PASSWORD_INPUT_CLASS}
-                  value={importPasswordDialog.password}
-                  onChange={(event) =>
-                    setImportPasswordDialog((current) =>
-                      current
-                        ? {
-                            ...current,
-                            password: event.target.value,
-                            error: null,
-                          }
-                        : current,
-                    )
-                  }
-                  placeholder="輸入建立這份備份時使用的密碼"
-                />
-              </label>
 
               {importPasswordDialog.error ? (
                 <div className="alert alert-error">
@@ -1547,17 +1583,22 @@ export function BackupPanel() {
             </>
           ) : null}
 
-          <div className="modal-action">
-            <button className="btn" onClick={closeImportPasswordDialog} disabled={busyAction === "import"}>
+          <div className="modal-action flex-col justify-between gap-3 border-t border-base-300 pt-4 sm:flex-row sm:items-center">
+            <div className="text-sm text-base-content/55">
+              匯入不會覆蓋目前後台密碼。
+            </div>
+            <div className="flex gap-3">
+              <button className="btn" onClick={closeImportPasswordDialog} disabled={busyAction === "import"}>
               取消
-            </button>
-            <button
-              className="btn btn-primary"
-              onClick={submitImportPasswordDialog}
-              disabled={busyAction === "import"}
-            >
-              開始匯入
-            </button>
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={submitImportPasswordDialog}
+                disabled={busyAction === "import"}
+              >
+                開始匯入
+              </button>
+            </div>
           </div>
         </div>
       </dialog>
