@@ -17,7 +17,7 @@ func TestResponseElapsedPrefersServerValue(t *testing.T) {
 		t.Fatalf("responseElapsed = %s, want 28.8s", got)
 	}
 
-	stats := formatUsageStats(core.UsageInfo{OutputTokens: 576}, got, "google-gemini-cli", "gemini-3-pro-preview")
+	stats := formatUsageStats(core.UsageInfo{OutputTokens: 576}, got, "google-gemini-cli", "gemini-3.1-pro-preview")
 	if !strings.Contains(stats, "⏱ 28.8s") {
 		t.Fatalf("usage stats should use server elapsed, got %q", stats)
 	}
@@ -37,12 +37,12 @@ func TestResponseElapsedFallsBackWhenMissing(t *testing.T) {
 
 func TestFormatFooterBlockquote(t *testing.T) {
 	got := formatFooterBlockquote([]string{
-		"⏱ 37.5s · ↑26.5K ↓334 (26.9K) · 9 tok/s · google-gemini-cli/gemini-3-pro-preview",
+		"⏱ 37.5s · ↑26.5K ↓334 (26.9K) · 9 tok/s · google-gemini-cli/gemini-3.1-pro-preview",
 		"🔧 使用的工具：\n1. memory_search\n2. bash",
 	})
 
 	want := strings.Join([]string{
-		"> ⏱ 37\\.5s · ↑26\\.5K ↓334 \\(26\\.9K\\) · 9 tok/s · google\\-gemini\\-cli/gemini\\-3\\-pro\\-preview",
+		"> ⏱ 37\\.5s · ↑26\\.5K ↓334 \\(26\\.9K\\) · 9 tok/s · google\\-gemini\\-cli/gemini\\-3\\.1\\-pro\\-preview",
 		"> 🔧 使用的工具：",
 		"> 1\\. memory\\_search",
 		"> 2\\. bash",

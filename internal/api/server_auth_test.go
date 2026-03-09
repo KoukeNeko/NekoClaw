@@ -296,7 +296,7 @@ func TestChatMissingProjectAutoDiscoversLikeOpenClaw(t *testing.T) {
 	server := NewServer(svc)
 	handler := server.Handler()
 
-	chatReq := `{"session_id":"s1","surface":"web","provider":"google-gemini-cli","model":"gemini-3-pro-preview","message":"hello"}`
+	chatReq := `{"session_id":"s1","surface":"web","provider":"google-gemini-cli","model":"gemini-3.1-pro-preview","message":"hello"}`
 	first := performJSONRequest(t, handler, http.MethodPost, "/v1/chat", chatReq)
 	if first.Code != http.StatusOK {
 		t.Fatalf("unexpected first chat status: %d body=%s", first.Code, first.Body.String())

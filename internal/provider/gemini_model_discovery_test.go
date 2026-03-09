@@ -12,7 +12,7 @@ func TestDiscoverPreferredModelFromFetchAvailable(t *testing.T) {
 	client := &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			if req.URL.Path == "/v1internal:fetchAvailableModels" {
-				return newHTTPResponse(http.StatusOK, `{"models":{"gemini-2.5-pro":{},"gemini-3-pro-preview":{},"gemini-2.5-flash":{}}}`), nil
+				return newHTTPResponse(http.StatusOK, `{"models":{"gemini-2.5-pro":{},"gemini-3-pro-preview":{},"gemini-3.1-pro-preview":{},"gemini-2.5-flash":{}}}`), nil
 			}
 			return newHTTPResponse(http.StatusNotFound, `{"error":"not found"}`), nil
 		}),
@@ -24,6 +24,36 @@ func TestDiscoverPreferredModelFromFetchAvailable(t *testing.T) {
 
 	modelID, source, err := p.DiscoverPreferredModel(context.Background(), core.Account{
 		ID:       "p1",
+		Provider: "google-gemini-cli",
+		Token:    "token-1",
+	})
+	if err != nil {
+		t.Fatalf("discover preferred model: %v", err)
+	}
+	if modelID != "gemini-3.1-pro-preview" {
+		t.Fatalf("unexpected model: %q", modelID)
+	}
+	if source != "fetchAvailableModels" {
+		t.Fatalf("unexpected source: %q", source)
+	}
+}
+
+func TestDiscoverPreferredModelFallsBackToLegacyGemini3ProWhen31Unavailable(t *testing.T) {
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path == "/v1internal:fetchAvailableModels" {
+				return newHTTPResponse(http.StatusOK, `{"models":{"gemini-2.5-pro":{},"gemini-3-pro-preview":{},"gemini-2.5-flash":{}}}`), nil
+			}
+			return newHTTPResponse(http.StatusNotFound, `{"error":"not found"}`), nil
+		}),
+	}
+	p := NewGeminiInternalProvider(GeminiInternalOptions{
+		Endpoints:  []string{"https://endpoint-a.test"},
+		HTTPClient: client,
+	})
+
+	modelID, source, err := p.DiscoverPreferredModel(context.Background(), core.Account{
+		ID:       "p1-legacy",
 		Provider: "google-gemini-cli",
 		Token:    "token-1",
 	})
@@ -98,7 +128,7 @@ func TestDiscoverPreferredModelFallsBackToDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discover preferred model: %v", err)
 	}
-	if modelID != "gemini-3-pro-preview" {
+	if modelID != "gemini-3.1-pro-preview" {
 		t.Fatalf("unexpected model: %q", modelID)
 	}
 	if source != "fallback" {
@@ -112,7 +142,7 @@ func TestDiscoverPreferredModelUsesCache(t *testing.T) {
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			if req.URL.Path == "/v1internal:fetchAvailableModels" {
 				fetchCalls++
-				return newHTTPResponse(http.StatusOK, `{"models":{"gemini-3-pro-preview":{}}}`), nil
+				return newHTTPResponse(http.StatusOK, `{"models":{"gemini-3.1-pro-preview":{}}}`), nil
 			}
 			return newHTTPResponse(http.StatusNotFound, `{"error":"not found"}`), nil
 		}),

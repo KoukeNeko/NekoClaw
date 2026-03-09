@@ -128,6 +128,34 @@ func TestDefaultProviderEndpoint_PersistsSelection(t *testing.T) {
 	}
 }
 
+func TestDefaultProviderEndpoint_UpgradesLegacyGeminiCLIModel(t *testing.T) {
+	svc := app.NewService(app.ServiceOptions{})
+	configDir := t.TempDir()
+	svc.SetConfigDir(configDir)
+
+	handler := NewServer(svc).Handler()
+	resp := performJSONRequest(
+		t,
+		handler,
+		http.MethodPut,
+		"/v1/default-provider",
+		`{"provider":"google-gemini-cli","model":"gemini-3-pro-preview"}`,
+	)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected PUT status: %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var saved struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &saved); err != nil {
+		t.Fatalf("decode saved default provider: %v", err)
+	}
+	if saved.Model != "gemini-3.1-pro-preview" {
+		t.Fatalf("saved model = %q, want %q", saved.Model, "gemini-3.1-pro-preview")
+	}
+}
+
 func TestFallbacksEndpoint_PersistsThinkingMode(t *testing.T) {
 	svc := app.NewService(app.ServiceOptions{})
 	configDir := t.TempDir()
@@ -173,5 +201,36 @@ func TestFallbacksEndpoint_PersistsThinkingMode(t *testing.T) {
 	}
 	if config.Fallbacks[1].ThinkingMode != core.ThinkingModeHigh {
 		t.Fatalf("config fallback[1].thinking_mode = %q, want %q", config.Fallbacks[1].ThinkingMode, core.ThinkingModeHigh)
+	}
+}
+
+func TestFallbacksEndpoint_UpgradesLegacyGeminiCLIModel(t *testing.T) {
+	svc := app.NewService(app.ServiceOptions{})
+	configDir := t.TempDir()
+	svc.SetConfigDir(configDir)
+
+	handler := NewServer(svc).Handler()
+	resp := performJSONRequest(
+		t,
+		handler,
+		http.MethodPut,
+		"/v1/fallbacks",
+		`{"fallbacks":[{"provider":"google-gemini-cli","model":"gemini-3-pro-preview"}]}`,
+	)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected PUT status: %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var saved struct {
+		Fallbacks []core.FallbackEntry `json:"fallbacks"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &saved); err != nil {
+		t.Fatalf("decode saved fallbacks: %v", err)
+	}
+	if len(saved.Fallbacks) != 1 {
+		t.Fatalf("fallbacks len = %d, want 1", len(saved.Fallbacks))
+	}
+	if saved.Fallbacks[0].Model != "gemini-3.1-pro-preview" {
+		t.Fatalf("fallback model = %q, want %q", saved.Fallbacks[0].Model, "gemini-3.1-pro-preview")
 	}
 }

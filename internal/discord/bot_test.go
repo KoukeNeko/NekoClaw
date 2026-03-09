@@ -175,7 +175,7 @@ func TestResponseElapsedPrefersServerValue(t *testing.T) {
 		t.Fatalf("responseElapsed = %s, want 27.5s", got)
 	}
 
-	stats := formatUsageStats(core.UsageInfo{OutputTokens: 550}, got, "google-gemini-cli", "gemini-3-pro-preview")
+	stats := formatUsageStats(core.UsageInfo{OutputTokens: 550}, got, "google-gemini-cli", "gemini-3.1-pro-preview")
 	if !strings.Contains(stats, "⏱ 27.5s") {
 		t.Fatalf("usage stats should use server elapsed, got %q", stats)
 	}

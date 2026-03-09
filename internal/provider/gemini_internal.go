@@ -146,7 +146,7 @@ func (p *GeminiInternalProvider) GenerateToolTurn(ctx context.Context, req ToolT
 
 	modelID := strings.TrimSpace(req.Model)
 	if modelID == "" || strings.EqualFold(modelID, "default") {
-		modelID = "gemini-3-pro-preview"
+		modelID = "gemini-3.1-pro-preview"
 	}
 
 	systemInstruction, contents := toGeminiToolContents(req.Messages)
@@ -270,7 +270,7 @@ func (p *GeminiInternalProvider) DiscoverPreferredModel(
 
 	model, source := p.discoverPreferredModelNoCache(ctx, account)
 	if model == "" {
-		model = "gemini-3-pro-preview"
+		model = "gemini-3.1-pro-preview"
 		source = "fallback"
 	}
 	if source == "" {
@@ -366,7 +366,7 @@ func (p *GeminiInternalProvider) fetchAllModels(ctx context.Context, account cor
 	// Always include well-known preview models that may not appear in the
 	// API response but are usable via the internal endpoint.
 	for _, knownModel := range []string{
-		"gemini-3-pro-preview",
+		"gemini-3.1-pro-preview",
 		"gemini-3-flash-preview",
 	} {
 		if _, exists := seen[knownModel]; !exists {
@@ -711,7 +711,7 @@ func (p *GeminiInternalProvider) discoverPreferredModelNoCache(
 			return model, "quota"
 		}
 	}
-	return "gemini-3-pro-preview", "fallback"
+	return "gemini-3.1-pro-preview", "fallback"
 }
 
 func (p *GeminiInternalProvider) loadModelCache(cacheKey string) (string, string, bool) {
@@ -1007,6 +1007,7 @@ func selectPreferredModelFromFetchAvailable(payload map[string]any) (string, boo
 
 func pickPreferredGeminiModel(modelIDs []string) (string, bool) {
 	priority := []string{
+		"gemini-3.1-pro-preview",
 		"gemini-3-pro-preview",
 		"gemini-2.5-pro",
 		"gemini-3-flash-preview",

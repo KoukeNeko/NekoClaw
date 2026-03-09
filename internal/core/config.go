@@ -131,15 +131,7 @@ func resolveConfigDir(configDir string) string {
 }
 
 func sanitizeDefaultSelection(provider string, model string) (string, string) {
-	provider = strings.TrimSpace(provider)
-	model = strings.TrimSpace(model)
-	if provider == "" {
-		return "", ""
-	}
-	if model == "" {
-		model = "default"
-	}
-	return provider, model
+	return NormalizeProviderModelSelection(provider, model)
 }
 
 // sanitizeFallbacks trims whitespace, removes entries with empty provider,
@@ -147,14 +139,13 @@ func sanitizeDefaultSelection(provider string, model string) (string, string) {
 func sanitizeFallbacks(entries []FallbackEntry) []FallbackEntry {
 	result := make([]FallbackEntry, 0, maxFallbackSlots)
 	for _, entry := range entries {
-		entry.Provider = strings.TrimSpace(entry.Provider)
-		entry.Model = strings.TrimSpace(entry.Model)
+		entry.Provider, entry.Model = NormalizeProviderModelSelection(
+			entry.Provider,
+			entry.Model,
+		)
 		entry.ThinkingMode = sanitizeThinkingMode(entry.ThinkingMode)
 		if entry.Provider == "" {
 			continue
-		}
-		if entry.Model == "" {
-			entry.Model = "default"
 		}
 		result = append(result, entry)
 		if len(result) >= maxFallbackSlots {
@@ -166,6 +157,21 @@ func sanitizeFallbacks(entries []FallbackEntry) []FallbackEntry {
 
 func sanitizeThinkingMode(mode ThinkingMode) ThinkingMode {
 	return NormalizeThinkingMode(string(mode))
+}
+
+func NormalizeProviderModelSelection(provider string, model string) (string, string) {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if provider == "" {
+		return "", ""
+	}
+	if model == "" {
+		model = "default"
+	}
+	if provider == "google-gemini-cli" && strings.EqualFold(model, "gemini-3-pro-preview") {
+		model = "gemini-3.1-pro-preview"
+	}
+	return provider, model
 }
 
 func sanitizeGeneralConfig(cfg GeneralConfig) GeneralConfig {

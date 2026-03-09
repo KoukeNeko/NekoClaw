@@ -711,14 +711,10 @@ func (s *Service) SaveDefaultProviderConfig(
 	modelID string,
 	thinkingMode core.ThinkingMode,
 ) error {
-	providerID = strings.TrimSpace(providerID)
-	modelID = strings.TrimSpace(modelID)
+	providerID, modelID = core.NormalizeProviderModelSelection(providerID, modelID)
 	thinkingMode = core.NormalizeThinkingMode(string(thinkingMode))
 	if providerID == "" {
-		modelID = ""
 		thinkingMode = core.ThinkingModeAuto
-	} else if modelID == "" {
-		modelID = "default"
 	}
 
 	s.mu.Lock()
@@ -1583,7 +1579,7 @@ func fallbackModels(providerID string) []string {
 	case "google-ai-studio":
 		return []string{"gemini-2.5-pro", "gemini-2.5-flash"}
 	case "google-gemini-cli":
-		return []string{"gemini-3.1-pro-preview", "gemini-3-pro-preview", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-2.5-flash"}
+		return []string{"gemini-3.1-pro-preview", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-2.5-flash"}
 	default:
 		return nil
 	}
@@ -3962,7 +3958,7 @@ func (s *Service) resolveDefaultModel(
 func fallbackDefaultModel(providerID string) string {
 	switch strings.TrimSpace(providerID) {
 	case "google-gemini-cli":
-		return "gemini-3-pro-preview"
+		return "gemini-3.1-pro-preview"
 	case "google-ai-studio":
 		return "gemini-2.5-pro"
 	case "anthropic":
@@ -4474,14 +4470,13 @@ func withThinkingMode(
 func normalizeFallbackEntries(entries []core.FallbackEntry) []core.FallbackEntry {
 	result := make([]core.FallbackEntry, 0, len(entries))
 	for _, entry := range entries {
-		entry.Provider = strings.TrimSpace(entry.Provider)
-		entry.Model = strings.TrimSpace(entry.Model)
+		entry.Provider, entry.Model = core.NormalizeProviderModelSelection(
+			entry.Provider,
+			entry.Model,
+		)
 		entry.ThinkingMode = core.NormalizeThinkingMode(string(entry.ThinkingMode))
 		if entry.Provider == "" {
 			continue
-		}
-		if entry.Model == "" {
-			entry.Model = "default"
 		}
 		result = append(result, entry)
 	}

@@ -235,7 +235,7 @@ func TestGenerateToolTurnMapsThinkingLevelForGemini3Pro(t *testing.T) {
 		Endpoints: []string{srv.URL},
 	})
 	resp, err := p.GenerateToolTurn(context.Background(), ToolTurnRequest{
-		Model: "gemini-3-pro-preview",
+		Model: "gemini-3.1-pro-preview",
 		Messages: []core.Message{
 			{Role: core.RoleUser, Content: "hi"},
 		},
@@ -382,7 +382,7 @@ func TestGenerateFallsBackFromServiceDisabledSandboxEndpoint(t *testing.T) {
 		Endpoints: []string{prod.URL, autopush.URL},
 	})
 	resp, err := p.Generate(context.Background(), GenerateRequest{
-		Model: "gemini-3-pro-preview",
+		Model: "gemini-3.1-pro-preview",
 		Messages: []core.Message{
 			{Role: core.RoleUser, Content: "hi"},
 		},
