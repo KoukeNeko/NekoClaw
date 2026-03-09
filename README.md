@@ -1,6 +1,13 @@
 # NekoClaw
 
-Go-based agent runtime with:
+[![Docker Publish](https://github.com/KoukeNeko/NekoClaw/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/KoukeNeko/NekoClaw/actions/workflows/docker-publish.yml)
+![Go 1.24+](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go)
+![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=000)
+![Docker](https://img.shields.io/badge/Docker-GHCR-2496ED?logo=docker&logoColor=fff)
+
+NekoClaw is a Go-based LLM agent runtime that combines a browser chat UI, HTTP API, Discord bot, Telegram bot, MCP tools, multimodal inputs, persistent memory, and provider failover in one deployable service.
+
+## Highlights
 
 - Browser-based chat UI
 - HTTP API and embedded Web UI
