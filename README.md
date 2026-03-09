@@ -5,9 +5,7 @@
 <p><strong>A self-hosted LLM agent runtime with Web UI, API, bots, MCP tools, memory, and provider failover.</strong></p>
 
 <p>
-  <a href="https://github.com/KoukeNeko/NekoClaw/actions/workflows/docker-publish.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/KoukeNeko/NekoClaw/docker-publish.yml?branch=main&style=for-the-badge&label=publish&labelColor=111827&color=22C55E" alt="Docker Publish">
-  </a>
+  <img src="https://img.shields.io/github/actions/workflow/status/KoukeNeko/NekoClaw/docker-publish.yml?branch=main&style=for-the-badge&label=publish&labelColor=111827&color=22C55E" alt="Docker Publish">
   <img src="https://img.shields.io/badge/GO-1.24%2B-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go 1.24+">
   <img src="https://img.shields.io/badge/REACT-19-61DAFB?style=for-the-badge&logo=react&logoColor=0B1220" alt="React 19">
   <img src="https://img.shields.io/badge/SQLITE-FTS5-0F172A?style=for-the-badge&logo=sqlite&logoColor=white" alt="SQLite FTS5">
@@ -23,7 +21,8 @@
   <a href="#web-ui--docker">Web UI / Docker</a> ·
   <a href="#api-endpoints">API</a> ·
   <a href="#discord-bot">Discord</a> ·
-  <a href="#telegram-bot">Telegram</a>
+  <a href="#telegram-bot">Telegram</a> ·
+  <a href="https://github.com/KoukeNeko/NekoClaw/actions/workflows/docker-publish.yml">Workflow</a>
 </p>
 
 </div>
