@@ -27,7 +27,6 @@ import (
 	"github.com/doeshing/nekoclaw/internal/memory"
 	"github.com/doeshing/nekoclaw/internal/provider"
 	"github.com/doeshing/nekoclaw/internal/telegram"
-	"github.com/doeshing/nekoclaw/internal/tui"
 	"github.com/doeshing/nekoclaw/web"
 )
 
@@ -41,12 +40,10 @@ func main() {
 	ensureGeminiOAuthEnvAliases()
 
 	var (
-		mode               = flag.String("mode", envOr("NEKOCLAW_MODE", "both"), "run mode: api | tui | both | web")
+		mode               = flag.String("mode", envOr("NEKOCLAW_MODE", "web"), "run mode: api | web")
 		addr               = flag.String("addr", envOr("NEKOCLAW_ADDR", "127.0.0.1:8085"), "api listen address")
-		apiBaseURL         = flag.String("api-base-url", envOr("NEKOCLAW_API_BASE_URL", "http://127.0.0.1:8085"), "api base url for tui")
 		defaultProvider    = flag.String("provider", envOr("NEKOCLAW_PROVIDER", "google-gemini-cli"), "default provider")
-		defaultModel       = flag.String("model", envOr("NEKOCLAW_MODEL", "default"), "default model for TUI")
-		sessionID          = flag.String("session", envOr("NEKOCLAW_SESSION", "main"), "default session id for TUI")
+		defaultModel       = flag.String("model", envOr("NEKOCLAW_MODEL", "default"), "default model")
 		accountsPath       = flag.String("accounts", envOr("NEKOCLAW_ACCOUNTS_FILE", "./accounts.json"), "account json path")
 		geminiEndpoints    = flag.String("gemini-endpoints", envOr("GEMINI_INTERNAL_ENDPOINTS", defaultGeminiEndpoints()), "comma-separated gemini internal endpoints")
 		geminiGeneratePath = flag.String("gemini-generate-path", envOr("GEMINI_INTERNAL_GENERATE_PATH", "/v1internal:streamGenerateContent?alt=sse"), "gemini internal generate path")
@@ -139,73 +136,6 @@ func main() {
 		cancel()
 		wg.Wait()
 		fatal(apiErr)
-	case "tui":
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		if discordBot != nil {
-			go func() {
-				if err := discordBot.Start(ctx); err != nil {
-					logSystem.Errorf("discord bot: %v", err)
-				}
-			}()
-		}
-		if telegramBot != nil {
-			go func() {
-				if err := telegramBot.Start(ctx); err != nil {
-					logSystem.Errorf("telegram bot: %v", err)
-				}
-			}()
-		}
-
-		tuiErr := tui.Run(*apiBaseURL, *defaultProvider, *defaultModel, *sessionID)
-		cancel()
-		fatal(tuiErr)
-	case "both":
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		var wg sync.WaitGroup
-
-		if discordBot != nil {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				if err := discordBot.Start(ctx); err != nil {
-					logSystem.Errorf("discord bot: %v", err)
-				}
-			}()
-		}
-		if telegramBot != nil {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				if err := telegramBot.Start(ctx); err != nil {
-					logSystem.Errorf("telegram bot: %v", err)
-				}
-			}()
-		}
-
-		server := api.NewServer(service)
-		var apiErr error
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			apiErr = server.Run(ctx, *addr)
-		}()
-
-		// Give the API listener a short head start before opening the TUI.
-		time.Sleep(250 * time.Millisecond)
-		tuiErr := tui.Run(*apiBaseURL, *defaultProvider, *defaultModel, *sessionID)
-		cancel()
-		wg.Wait()
-
-		if tuiErr != nil {
-			fatal(tuiErr)
-		}
-		if apiErr != nil && !errors.Is(apiErr, context.Canceled) {
-			fatal(apiErr)
-		}
 	case "web":
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -307,7 +237,7 @@ func configureRuntimeLogging(runMode string, authDir string) func() {
 		return func() {}
 	}
 	switch runMode {
-	case "tui", "both", "web":
+	case "web":
 		logPath := strings.TrimSpace(os.Getenv("NEKOCLAW_LOG_FILE"))
 		if logPath == "" {
 			logPath = resolveDefaultLogFilePath(authDir)

@@ -36,7 +36,6 @@ type Message struct {
 type Surface string
 
 const (
-	SurfaceTUI      Surface = "tui"
 	SurfaceDiscord  Surface = "discord"
 	SurfaceTelegram Surface = "telegram"
 	SurfaceWeb      Surface = "web"
@@ -189,7 +188,7 @@ type SessionMetadata struct {
 // ---------------------------------------------------------------------------
 
 type SessionLifecycleConfig struct {
-	IdleTimeout    time.Duration `json:"idle_timeout"`     // default 60min (TUI sessions)
+	IdleTimeout    time.Duration `json:"idle_timeout"`     // default 60min (interactive UI sessions)
 	BotIdleTimeout time.Duration `json:"bot_idle_timeout"` // default 24h (Discord/Telegram sessions)
 	RetentionDays  int           `json:"retention_days"`   // default 30
 	MaxEntries     int           `json:"max_entries"`      // default 500

@@ -53,7 +53,7 @@ func (l *SessionLifecycle) ShouldReset(sessionID string) bool {
 		return false
 	}
 
-	// Idle timeout: TUI sessions use the short timeout, bot sessions use
+	// Idle timeout: interactive UI sessions use the short timeout, bot sessions use
 	// BotIdleTimeout for automatic context freshness.
 	timeout := l.config.IdleTimeout
 	if isBotSession(sessionID) {

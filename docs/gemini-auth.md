@@ -34,7 +34,7 @@
 
 `remote` 模式可搭配 `redirect_uri` 指到公網 callback（例如反向代理後的 `/oauth2callback`）。
 
-## 4) TUI 指令
+## 4) Web UI 操作
 
 改為選單操作（方向鍵 + Enter）：
 
@@ -61,4 +61,4 @@
 
 - Gemini internal API 屬非官方穩定公開介面，可能隨時變更。
 - 若所有 profile 進入 cooldown/disabled，聊天會回傳不可用原因與可重試時間。
-- Discord ingress 不直接執行 OAuth；需先在 API 或 TUI 完成登入。
+- Discord ingress 不直接執行 OAuth；需先在 API 或 Web UI 完成登入。

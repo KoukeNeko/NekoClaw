@@ -2,7 +2,7 @@
 
 Go-based agent runtime with:
 
-- TUI chat client
+- Browser-based chat UI
 - HTTP API and embedded Web UI
 - Discord bot (emoji reactions, per-channel sessions, slash commands, image support)
 - Telegram bot (per-chat sessions, slash commands, image support)
@@ -13,7 +13,7 @@ Go-based agent runtime with:
 - Tool output head+tail truncation (preserves beginning and end of long outputs)
 - Persistent channel-session bindings (survive bot restarts)
 - Session lifecycle management (idle auto-expiry, retention cleanup, size rotation)
-- Streaming response support across all frontends (TUI, Web UI, Discord, Telegram)
+- Streaming response support across all frontends (Web UI, Discord, Telegram)
 - Persona system with template rendering and few-shot anchors
 - Memory system (long-term notes, daily logs, FTS5 search index)
 - MCP (Model Context Protocol) tool integration
@@ -22,24 +22,21 @@ Go-based agent runtime with:
 
 ## Quick Start
 
-For a zero-auth local smoke test, run with the mock provider:
+For a zero-auth local smoke test, run the Web UI with the mock provider:
 
 ```bash
-go run ./cmd/nekoclaw -mode both -provider mock
+go run ./cmd/nekoclaw -mode web -provider mock
 ```
 
 Run modes:
 
 - `api` — API only
-- `tui` — TUI only
-- `both` — API + TUI (default)
-- `web` — API + embedded Web UI
+- `web` — API + embedded Web UI (default)
 
 Defaults when flags are omitted:
 
 - API: `127.0.0.1:8085`
-- TUI -> API: `http://127.0.0.1:8085`
-- Mode: `both`
+- Mode: `web`
 - Provider: `google-gemini-cli`
 - Model: `default`
 - Session: `main`
@@ -88,9 +85,8 @@ Gemini OAuth flow supports:
 - project auto discovery via `loadCodeAssist/onboardUser` (tier needs may require `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID`)
 - token persistence: OS keychain + metadata JSON (no plaintext token in repo)
 
-TUI menu flow (arrow keys + Enter):
+Web UI flow (Settings -> Auth):
 
-- `Provider` -> select `google-gemini-cli`
 - `OAuth Auto` (auto detect local/remote), or:
   - `OAuth Local` force localhost callback mode
   - `OAuth Remote` force manual mode
@@ -123,8 +119,8 @@ Runtime OAuth env:
 - `OPENCLAW_GEMINI_OAUTH_CALLBACK_HOST` (default: `localhost`)
 - `OPENCLAW_GEMINI_OAUTH_CALLBACK_PORT` (default: `8085`)
 - `NEKOCLAW_AUTH_DIR` (default: `~/.nekoclaw/auth`)
-- `NEKOCLAW_LOG_FILE` (optional; in `tui/both` mode defaults to `~/.nekoclaw/logs/nekoclaw.log`)
-- `NEKOCLAW_LOG_STDERR=1` (optional; keep logs on terminal; may break TUI rendering)
+- `NEKOCLAW_LOG_FILE` (optional; in `web` mode defaults to `~/.nekoclaw/logs/nekoclaw.log`)
+- `NEKOCLAW_LOG_STDERR=1` (optional; keep logs on terminal instead of redirecting to the log file)
 
 ### Token from env (optional)
 
@@ -133,18 +129,18 @@ export GEMINI_INTERNAL_TOKEN="<oauth-access-token>"
 # or multiple:
 export GEMINI_INTERNAL_TOKENS="token1,token2"
 export GEMINI_INTERNAL_PROJECT_ID="my-gcp-project"
-go run ./cmd/nekoclaw -mode both -provider google-gemini-cli -model gemini-3-pro-preview
+go run ./cmd/nekoclaw -mode web -provider google-gemini-cli -model gemini-3-pro-preview
 ```
 
 ## Google AI Studio Provider
 
 The project includes a `google-ai-studio` provider that supports:
 
-- API key profile management in TUI and Web UI
+- API key profile management in the Web UI
 - model listing via `GET /v1/ai-studio/models`
 - default fallback target when no explicit fallback chain is configured
 
-TUI auth flow (Auth section):
+Web UI flow (Settings -> Auth):
 
 - `a` add AI Studio API key
 - `Enter` use selected profile
@@ -176,7 +172,7 @@ The project includes an `anthropic` provider that supports:
 - account pool rotation/cooldown/failover (`token` naturally preferred over `api_key`)
 - default model runtime fallback (`claude-sonnet-4-6`)
 
-TUI auth flow (Auth section):
+Web UI flow (Settings -> Auth):
 
 - `b` start Anthropic browser login
 - `t` add Anthropic setup-token (masked input)
@@ -222,7 +218,7 @@ OpenClaw-aligned runtime behavior:
 - `openai` and `openai-codex` credentials are not mixed.
 - if `provider=openai` has no API key but `openai-codex` OAuth exists, chat returns a clear guardrail error (use `openai-codex/...` or set `OPENAI_API_KEY`).
 
-TUI auth flow (Auth section):
+Web UI flow (Settings -> Auth):
 
 - `w` start OpenAI Codex browser login
 - `p` add OpenAI API key
@@ -298,15 +294,15 @@ Create `accounts.json` in repo root:
 
 ## Discord Bot
 
-NekoClaw includes a built-in Discord bot that runs alongside all modes (`api` / `tui` / `both` / `web`).
+NekoClaw includes a built-in Discord bot that runs alongside all modes (`api` / `web`).
 
 ### Configuration
 
-Set via environment variable or TUI Settings > Discord:
+Set via environment variable or Web UI Settings > Discord:
 
 - `DISCORD_BOT_TOKEN` — Bot token (env takes precedence over config.json)
 
-TUI settings also support:
+Web UI settings also support:
 
 - **Reply Mode** — Toggle whether the bot replies to the original message
 - **Console Channel** — Channel ID for bot log output (startup, errors, session resets, persona changes)
@@ -315,7 +311,7 @@ TUI settings also support:
 
 | Command | Description |
 |---------|-------------|
-| `/reset` | Start a new conversation (old session preserved, accessible from TUI Sessions) |
+| `/reset` | Start a new conversation (old session preserved, accessible from Web UI Sessions) |
 | `/persona` | List available personas |
 | `/persona <name>` | Switch to a persona (case-insensitive, supports substring match) |
 | `/persona off` | Deactivate current persona |
@@ -336,11 +332,11 @@ TUI settings also support:
 
 ## Telegram Bot
 
-NekoClaw includes a built-in Telegram bot using long polling and runs alongside all modes (`api` / `tui` / `both` / `web`).
+NekoClaw includes a built-in Telegram bot using long polling and runs alongside all modes (`api` / `web`).
 
 ### Configuration
 
-Set via environment variable or TUI Settings > Telegram:
+Set via environment variable or Web UI Settings > Telegram:
 
 - `TELEGRAM_BOT_TOKEN` — Bot token (env takes precedence over config.json)
 
@@ -387,7 +383,7 @@ Override path: `--memory-dir` flag or `NEKOCLAW_MEMORY_DIR` env.
 1. **Read** — On every LLM request, `MEMORY.md` and the last 2 days of daily logs are loaded and injected as a system message (or embedded into the Persona template via `{{.Memory}}`)
 2. **Write** — When context approaches the window limit, a silent LLM round extracts key information (decisions, preferences, code changes) and appends it to today's daily log
 3. **Index** — After each chat turn, user and assistant messages are chunked (400 tokens, 80 overlap) and inserted into the FTS5 search index
-4. **Search** — TUI `/memory <query>`, Settings > Memory tab, API `POST /v1/memory/search`, or the LLM `memory_search` tool
+4. **Search** — Web UI Settings > Memory tab, API `POST /v1/memory/search`, or the LLM `memory_search` tool
 
 ## API Endpoints
 

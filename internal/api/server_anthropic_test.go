@@ -48,7 +48,7 @@ func TestAnthropicCredentialCRUDAndChatFlow(t *testing.T) {
 		t.Fatalf("profiles response missing display name: %s", profilesResp.Body.String())
 	}
 
-	chatReq := `{"session_id":"a1","surface":"tui","provider":"anthropic","model":"default","message":"hello"}`
+	chatReq := `{"session_id":"a1","surface":"web","provider":"anthropic","model":"default","message":"hello"}`
 	chatResp := performJSONRequest(t, handler, http.MethodPost, "/v1/chat", chatReq)
 	if chatResp.Code != http.StatusOK {
 		t.Fatalf("unexpected chat status: %d body=%s", chatResp.Code, chatResp.Body.String())

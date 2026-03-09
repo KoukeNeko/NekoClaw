@@ -1,5 +1,5 @@
 /**
- * Model pricing table — mirrors internal/tui/settings_usage.go pricingTable.
+ * Model pricing table — mirrors internal/usage/pricing.go.
  */
 
 interface ModelPricing {

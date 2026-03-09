@@ -1,5 +1,5 @@
 /**
- * Typed fetch wrapper — mirrors internal/client/api_client.go.
+ * Typed fetch wrapper for the browser UI.
  *
  * All methods throw ApiError on non-2xx responses. Callers should
  * handle errors via try/catch and inspect code/message.

@@ -27,7 +27,7 @@ type ServerInfo struct {
 	Builtin   bool             `json:"builtin"`
 }
 
-// ToolInfo exposes MCP tool metadata for API/TUI display.
+// ToolInfo exposes MCP tool metadata for API/Web UI display.
 type ToolInfo struct {
 	Server      string `json:"server"`
 	Name        string `json:"name"`

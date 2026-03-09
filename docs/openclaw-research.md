@@ -25,7 +25,7 @@ OpenClaw 將 provider 分成兩層：
 
 - `internal/provider/provider.go`：Provider 介面
 - `internal/app/service.go`：provider 路由 + failover
-- `internal/api/server.go`：對外 API 供 TUI/Web/Discord 共用
+- `internal/api/server.go`：對外 API 供 Web/Discord/Telegram 共用
 
 ## 2) Gemini internal API（重點）
 
@@ -116,7 +116,7 @@ OpenClaw 在 compaction/context pruning 的做法是混合策略：
 - Provider 抽象
 - Gemini internal endpoint fallback + quota/project API
 - Account pool 冷卻與 failover
-- TUI + HTTP API + Discord ingress endpoint
+- Web UI + HTTP API + Discord ingress endpoint
 
 尚待你後續選擇是否擴充：
 

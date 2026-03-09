@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 
 export type MessageRole = "system" | "user" | "assistant" | "tool";
-export type Surface = "tui" | "discord" | "telegram" | "web";
+export type Surface = "discord" | "telegram" | "web";
 export type AccountType = "oauth" | "token" | "api_key";
 export type ChatStatus = "completed" | "approval_required";
 

@@ -157,7 +157,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			if !r.executor.IsCallMutating(call) {
 				continue
 			}
-			if req.Surface != core.SurfaceTUI {
+			if req.Surface != core.SurfaceWeb {
 				continue
 			}
 			if _, ok := decisions[call.ID]; !ok {
@@ -251,7 +251,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			events = append(events, reqEvt)
 			emitToolEvent(&req, reqEvt)
 
-			if mutating && req.Surface != core.SurfaceTUI {
+			if mutating && req.Surface != core.SurfaceWeb {
 				errMsg := "approval_not_supported_for_surface"
 				events = append(events, core.ToolEvent{
 					At:         time.Now(),

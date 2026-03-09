@@ -58,8 +58,8 @@ type Service struct {
 	discordConfig     core.DiscordConfig   // persisted Discord bot settings
 	telegramConfig    core.TelegramConfig  // persisted Telegram bot settings
 	toolsConfig       core.ToolsConfig     // persisted tool settings (web_search API key, etc.)
-	defaultProvider   string               // current default provider (synced from TUI)
-	defaultModel      string               // current default model (synced from TUI)
+	defaultProvider   string               // current default provider (synced from the Web UI)
+	defaultModel      string               // current default model (synced from the Web UI)
 	configDir         string               // directory for config.json persistence
 	toolRuntime       *tooling.Runtime
 	mcpManager        *mcp.Manager
@@ -1416,7 +1416,7 @@ func (s *Service) ListModels(ctx context.Context, providerID, profileID string) 
 	models, err := catalogProvider.ListModels(ctx, account)
 	if err != nil {
 		logService.Errorf("list models: provider=%s error=%v", providerID, err)
-		// Return fallback on error so the TUI still shows something.
+		// Return fallback on error so the UI still shows something.
 		return ModelsResult{
 			Provider:  providerID,
 			ProfileID: profileID,
@@ -2360,7 +2360,7 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 	}
 	surface := req.Surface
 	if surface == "" {
-		surface = core.SurfaceTUI
+		surface = core.SurfaceWeb
 	}
 	runID := strings.TrimSpace(req.RunID)
 	ephemeralMessages := cloneMessages(req.EphemeralMessages)
@@ -2490,7 +2490,7 @@ func (s *Service) HandleChatStream(ctx context.Context, req core.ChatRequest) <-
 		}
 		surface := req.Surface
 		if surface == "" {
-			surface = core.SurfaceTUI
+			surface = core.SurfaceWeb
 		}
 		runID := strings.TrimSpace(req.RunID)
 		ephemeralMessages := cloneMessages(req.EphemeralMessages)

@@ -66,7 +66,7 @@ func TestAIStudioKeyCRUDAndChatFlow(t *testing.T) {
 		t.Fatalf("models response missing expected model: %s", modelsResp.Body.String())
 	}
 
-	chatReq := `{"session_id":"s1","surface":"tui","provider":"google-ai-studio","model":"default","message":"hello"}`
+	chatReq := `{"session_id":"s1","surface":"web","provider":"google-ai-studio","model":"default","message":"hello"}`
 	chatResp := performJSONRequest(t, handler, http.MethodPost, "/v1/chat", chatReq)
 	if chatResp.Code != http.StatusOK {
 		t.Fatalf("unexpected chat status: %d body=%s", chatResp.Code, chatResp.Body.String())

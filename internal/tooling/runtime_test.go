@@ -91,7 +91,7 @@ func TestRuntimeReadOnlyToolAutoExecutes(t *testing.T) {
 	}
 	result, err := rt.Run(context.Background(), RunRequest{
 		SessionID:    "s1",
-		Surface:      core.SurfaceTUI,
+		Surface:      core.SurfaceWeb,
 		ProviderID:   "anthropic",
 		ModelID:      "claude-sonnet-4-5",
 		Account:      core.Account{ID: "a1"},
@@ -138,7 +138,7 @@ func TestRuntimeMutatingToolRequiresApprovalAndResume(t *testing.T) {
 	}
 	first, err := rt.Run(context.Background(), RunRequest{
 		SessionID:    "s2",
-		Surface:      core.SurfaceTUI,
+		Surface:      core.SurfaceWeb,
 		ProviderID:   "anthropic",
 		ModelID:      "claude-sonnet-4-5",
 		Account:      core.Account{ID: "a1"},
@@ -167,7 +167,7 @@ func TestRuntimeMutatingToolRequiresApprovalAndResume(t *testing.T) {
 
 	second, err := rt.Run(context.Background(), RunRequest{
 		SessionID:    "s2",
-		Surface:      core.SurfaceTUI,
+		Surface:      core.SurfaceWeb,
 		ProviderID:   "anthropic",
 		ModelID:      "claude-sonnet-4-5",
 		Account:      core.Account{ID: "a1"},
@@ -199,7 +199,7 @@ func TestRuntimeReturnsToolsNotSupported(t *testing.T) {
 	fakeProv := &fakeToolProvider{id: "mock", support: false}
 	_, err := rt.Run(context.Background(), RunRequest{
 		SessionID:    "s3",
-		Surface:      core.SurfaceTUI,
+		Surface:      core.SurfaceWeb,
 		ProviderID:   "mock",
 		ModelID:      "default",
 		Account:      core.Account{ID: "a1"},

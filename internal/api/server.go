@@ -226,7 +226,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Surface == "" {
-		req.Surface = core.SurfaceTUI
+		req.Surface = core.SurfaceWeb
 	}
 	resp, err := s.svc.HandleChat(r.Context(), req)
 	if err != nil {
@@ -247,7 +247,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Surface == "" {
-		req.Surface = core.SurfaceTUI
+		req.Surface = core.SurfaceWeb
 	}
 
 	flusher, ok := w.(http.Flusher)
@@ -313,7 +313,7 @@ func (s *Server) handleDiscordEvent(w http.ResponseWriter, r *http.Request) {
 			respondJSON(w, http.StatusOK, map[string]any{
 				"session_id": sessionID,
 				"provider":   providerID,
-				"reply":      "Gemini 尚未登入或所有 profile 暫時不可用。請先在 TUI 或 API 完成 OAuth：POST /v1/auth/gemini/start",
+				"reply":      "Gemini 尚未登入或所有 profile 暫時不可用。請先在 Web UI 或 API 完成 OAuth：POST /v1/auth/gemini/start",
 				"is_error":   true,
 			})
 			return

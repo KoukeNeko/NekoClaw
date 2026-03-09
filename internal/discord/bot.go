@@ -1048,7 +1048,7 @@ func responseElapsed(resp core.ChatResponse, fallback time.Duration) time.Durati
 	return fallback
 }
 
-// formatUsageStats builds a TUI-style usage summary:
+// formatUsageStats builds a compact usage summary:
 // ⏱ 2.3s · ↑1.2K ↓567 · 245 tok/s · google-gemini-cli/gemini-2.0-flash
 func formatUsageStats(usage core.UsageInfo, elapsed time.Duration, provider, model string) string {
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 && elapsed == 0 {

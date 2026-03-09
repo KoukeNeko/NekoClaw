@@ -29,7 +29,7 @@ func TestOpenAIChatDefaultModel(t *testing.T) {
 	server := NewServer(svc)
 	handler := server.Handler()
 
-	chatReq := `{"session_id":"o1","surface":"tui","provider":"openai","model":"default","message":"hello"}`
+	chatReq := `{"session_id":"o1","surface":"web","provider":"openai","model":"default","message":"hello"}`
 	chatResp := performJSONRequest(t, handler, http.MethodPost, "/v1/chat", chatReq)
 	if chatResp.Code != http.StatusOK {
 		t.Fatalf("unexpected chat status: %d body=%s", chatResp.Code, chatResp.Body.String())
@@ -56,7 +56,7 @@ func TestOpenAIRequiresAPIKeyWhenOnlyCodexOAuthExists(t *testing.T) {
 	server := NewServer(svc)
 	handler := server.Handler()
 
-	chatReq := `{"session_id":"o2","surface":"tui","provider":"openai","model":"default","message":"hello"}`
+	chatReq := `{"session_id":"o2","surface":"web","provider":"openai","model":"default","message":"hello"}`
 	chatResp := performJSONRequest(t, handler, http.MethodPost, "/v1/chat", chatReq)
 	if chatResp.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502 when openai key missing, got %d body=%s", chatResp.Code, chatResp.Body.String())
@@ -81,7 +81,7 @@ func TestChatEnableToolsReturnsToolsNotSupportedForNonToolProvider(t *testing.T)
 	server := NewServer(svc)
 	handler := server.Handler()
 
-	chatReq := `{"session_id":"o-tools","surface":"tui","provider":"openai","model":"default","message":"hello","enable_tools":true}`
+	chatReq := `{"session_id":"o-tools","surface":"web","provider":"openai","model":"default","message":"hello","enable_tools":true}`
 	chatResp := performJSONRequest(t, handler, http.MethodPost, "/v1/chat", chatReq)
 	if chatResp.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 when tools are unsupported, got %d body=%s", chatResp.Code, chatResp.Body.String())

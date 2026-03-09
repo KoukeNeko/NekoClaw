@@ -140,7 +140,7 @@ func TestHandleChat_EphemeralMessages_AffectProviderInput_ButNotPersisted(t *tes
 
 	_, err := svc.HandleChat(context.Background(), core.ChatRequest{
 		SessionID: sessionID,
-		Surface:   core.SurfaceTUI,
+		Surface:   core.SurfaceWeb,
 		Provider:  "test-provider",
 		Model:     "test-model",
 		Message:   "current user message",
@@ -211,7 +211,7 @@ func TestHandleChat_EphemeralMessages_Order(t *testing.T) {
 
 	_, err := svc.HandleChat(context.Background(), core.ChatRequest{
 		SessionID: sessionID,
-		Surface:   core.SurfaceTUI,
+		Surface:   core.SurfaceWeb,
 		Provider:  "test-provider",
 		Model:     "test-model",
 		Message:   "persisted turn",
@@ -222,7 +222,7 @@ func TestHandleChat_EphemeralMessages_Order(t *testing.T) {
 
 	_, err = svc.HandleChat(context.Background(), core.ChatRequest{
 		SessionID: sessionID,
-		Surface:   core.SurfaceTUI,
+		Surface:   core.SurfaceWeb,
 		Provider:  "test-provider",
 		Model:     "test-model",
 		Message:   "current turn",

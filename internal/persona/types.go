@@ -54,7 +54,7 @@ type Persona struct {
 	DirName string // folder name, used as a stable key
 }
 
-// PersonaInfo is a lightweight summary for API and TUI display.
+// PersonaInfo is a lightweight summary for API and Web UI display.
 type PersonaInfo struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`

@@ -73,7 +73,7 @@ func TestGeminiOAuthManualFlowEndToEnd(t *testing.T) {
 		t.Fatalf("profiles response missing p1: %s", profilesResp.Body.String())
 	}
 
-	chatReq := `{"session_id":"s1","surface":"tui","provider":"google-gemini-cli","model":"gemini-test","message":"hello"}`
+	chatReq := `{"session_id":"s1","surface":"web","provider":"google-gemini-cli","model":"gemini-test","message":"hello"}`
 	chatResp := performJSONRequest(t, handler, http.MethodPost, "/v1/chat", chatReq)
 	if chatResp.Code != http.StatusOK {
 		t.Fatalf("unexpected chat status: %d body=%s", chatResp.Code, chatResp.Body.String())
@@ -223,7 +223,7 @@ func TestChatMissingProjectReturnsStructuredError(t *testing.T) {
 	server := NewServer(svc)
 	handler := server.Handler()
 
-	chatReq := `{"session_id":"s1","surface":"tui","provider":"google-gemini-cli","model":"default","message":"hello"}`
+	chatReq := `{"session_id":"s1","surface":"web","provider":"google-gemini-cli","model":"default","message":"hello"}`
 	chatResp := performJSONRequest(t, handler, http.MethodPost, "/v1/chat", chatReq)
 	if chatResp.Code != http.StatusBadRequest {
 		t.Fatalf("unexpected chat status: %d body=%s", chatResp.Code, chatResp.Body.String())
@@ -258,7 +258,7 @@ func TestChatMissingProjectAutoDiscoversLikeOpenClaw(t *testing.T) {
 	server := NewServer(svc)
 	handler := server.Handler()
 
-	chatReq := `{"session_id":"s1","surface":"tui","provider":"google-gemini-cli","model":"gemini-3-pro-preview","message":"hello"}`
+	chatReq := `{"session_id":"s1","surface":"web","provider":"google-gemini-cli","model":"gemini-3-pro-preview","message":"hello"}`
 	first := performJSONRequest(t, handler, http.MethodPost, "/v1/chat", chatReq)
 	if first.Code != http.StatusOK {
 		t.Fatalf("unexpected first chat status: %d body=%s", first.Code, first.Body.String())
@@ -363,7 +363,7 @@ func TestChatNoAvailableGeminiProfilesWithMissingProjectReturnsStructuredError(t
 	server := NewServer(svc)
 	handler := server.Handler()
 
-	chatReq := `{"session_id":"s1","surface":"tui","provider":"google-gemini-cli","model":"default","message":"hello"}`
+	chatReq := `{"session_id":"s1","surface":"web","provider":"google-gemini-cli","model":"default","message":"hello"}`
 	chatResp := performJSONRequest(t, handler, http.MethodPost, "/v1/chat", chatReq)
 	if chatResp.Code != http.StatusBadRequest {
 		t.Fatalf("unexpected chat status: %d body=%s", chatResp.Code, chatResp.Body.String())

@@ -42,7 +42,7 @@ var (
 	senderMu      sync.RWMutex
 
 	// output is the destination for log messages (defaults to os.Stderr).
-	// In TUI mode this is redirected to a file to avoid corrupting the screen.
+	// In web mode this is redirected to a file to avoid mixing logs with stdout.
 	output   io.Writer = os.Stderr
 	outputMu sync.RWMutex
 

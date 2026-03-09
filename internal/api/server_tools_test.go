@@ -62,7 +62,7 @@ func TestChatToolApprovalFlow(t *testing.T) {
 	server := NewServer(svc)
 	handler := server.Handler()
 
-	firstReq := `{"session_id":"tool-1","surface":"tui","provider":"anthropic","model":"default","message":"write file","enable_tools":true}`
+	firstReq := `{"session_id":"tool-1","surface":"web","provider":"anthropic","model":"default","message":"write file","enable_tools":true}`
 	firstResp := performJSONRequest(t, handler, http.MethodPost, "/v1/chat", firstReq)
 	if firstResp.Code != http.StatusOK {
 		t.Fatalf("unexpected first status: %d body=%s", firstResp.Code, firstResp.Body.String())
@@ -82,7 +82,7 @@ func TestChatToolApprovalFlow(t *testing.T) {
 		t.Fatalf("expected approval_required elapsed_ms > 0, got %d", firstPayload.ElapsedMs)
 	}
 
-	secondReq := `{"session_id":"tool-1","surface":"tui","provider":"anthropic","model":"default","enable_tools":true,"run_id":"` + firstPayload.RunID + `","tool_approvals":[{"approval_id":"call-1","decision":"allow"}]}`
+	secondReq := `{"session_id":"tool-1","surface":"web","provider":"anthropic","model":"default","enable_tools":true,"run_id":"` + firstPayload.RunID + `","tool_approvals":[{"approval_id":"call-1","decision":"allow"}]}`
 	secondResp := performJSONRequest(t, handler, http.MethodPost, "/v1/chat", secondReq)
 	if secondResp.Code != http.StatusOK {
 		t.Fatalf("unexpected second status: %d body=%s", secondResp.Code, secondResp.Body.String())

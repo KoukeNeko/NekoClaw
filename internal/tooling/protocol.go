@@ -51,7 +51,7 @@ type RunRequest struct {
 	// OnToolEvent is an optional callback invoked synchronously when tool
 	// execution phases change (e.g. "requested", "executed", "failed").
 	// Used by the service layer to track active tool status for real-time
-	// display in the TUI spinner.
+	// display in the web tool status UI.
 	OnToolEvent func(core.ToolEvent)
 }
 
