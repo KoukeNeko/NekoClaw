@@ -593,6 +593,39 @@ export interface PersonaInfo {
 }
 
 // ---------------------------------------------------------------------------
+// Backups
+// ---------------------------------------------------------------------------
+
+export type BackupSource = "created" | "imported";
+export type BackupRestoreMode = "replace";
+
+export interface BackupComponentSummary {
+  key: string;
+  label: string;
+  item_count: number;
+}
+
+export interface BackupManifest {
+  version: number;
+  backup_id: string;
+  created_at: string;
+  source: BackupSource;
+  contains_secrets: boolean;
+  restore_mode: BackupRestoreMode;
+  restart_required: boolean;
+  components: BackupComponentSummary[];
+  size_bytes: number;
+}
+
+export interface BackupEntry extends BackupManifest {
+  file_name: string;
+}
+
+export interface BackupRestoreResponse {
+  restart_required: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Memory
 // ---------------------------------------------------------------------------
 

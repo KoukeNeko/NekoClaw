@@ -8,11 +8,13 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/doeshing/nekoclaw/internal/app"
 	"github.com/doeshing/nekoclaw/internal/auth"
+	"github.com/doeshing/nekoclaw/internal/backup"
 	"github.com/doeshing/nekoclaw/internal/core"
 	"github.com/doeshing/nekoclaw/internal/mcp"
 	"github.com/doeshing/nekoclaw/internal/persona"
@@ -117,6 +119,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/personas/clear", s.handlePersonaClear)
 	mux.HandleFunc("/v1/personas/reload", s.handlePersonaReload)
 	mux.HandleFunc("/v1/tool-status", s.handleToolStatus)
+	mux.HandleFunc("/v1/backups", s.handleBackups)
+	mux.HandleFunc("/v1/backups/create", s.handleBackupsCreate)
+	mux.HandleFunc("/v1/backups/import", s.handleBackupsImport)
+	mux.HandleFunc("/v1/backups/download", s.handleBackupsDownload)
+	mux.HandleFunc("/v1/backups/delete", s.handleBackupsDelete)
+	mux.HandleFunc("/v1/backups/restore", s.handleBackupsRestore)
 
 	// SPA fallback: serve embedded frontend when webFS is configured.
 	// API routes (/v1/*, /healthz, /oauth2callback) are matched first by
@@ -1763,4 +1771,141 @@ func (s *Server) handleToolStatus(w http.ResponseWriter, r *http.Request) {
 		"tool_name":    toolName,
 		"retry_status": retryStatus,
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Backups
+// ---------------------------------------------------------------------------
+
+func (s *Server) handleBackups(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	backups, err := s.svc.ListBackups()
+	if err != nil {
+		respondBackupError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"backups": backups})
+}
+
+func (s *Server) handleBackupsCreate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	entry, err := s.svc.CreateBackup()
+	if err != nil {
+		respondBackupError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"backup": entry})
+}
+
+func (s *Server) handleBackupsImport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid multipart form")
+		return
+	}
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "file is required")
+		return
+	}
+	defer file.Close()
+
+	entry, err := s.svc.ImportBackup(file)
+	if err != nil {
+		respondBackupError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"backup": entry})
+}
+
+func (s *Server) handleBackupsDownload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		respondError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	path, fileName, err := s.svc.BackupArchivePath(id)
+	if err != nil {
+		respondBackupError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(fileName)))
+	http.ServeFile(w, r, path)
+}
+
+func (s *Server) handleBackupsDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if strings.TrimSpace(req.ID) == "" {
+		respondError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	if err := s.svc.DeleteBackup(req.ID); err != nil {
+		respondBackupError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleBackupsRestore(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if strings.TrimSpace(req.ID) == "" {
+		respondError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	result, err := s.svc.RestoreBackup(req.ID)
+	if err != nil {
+		respondBackupError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"ok":               true,
+		"restart_required": result.RestartRequired,
+	})
+}
+
+func respondBackupError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, backup.ErrInvalidArchive), errors.Is(err, backup.ErrInvalidManifest):
+		respondError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, backup.ErrBackupNotFound):
+		respondError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, backup.ErrNotConfigured):
+		respondError(w, http.StatusServiceUnavailable, err.Error())
+	default:
+		respondError(w, http.StatusInternalServerError, err.Error())
+	}
 }

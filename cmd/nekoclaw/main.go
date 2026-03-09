@@ -21,6 +21,7 @@ import (
 	"github.com/doeshing/nekoclaw/internal/api"
 	"github.com/doeshing/nekoclaw/internal/app"
 	"github.com/doeshing/nekoclaw/internal/auth"
+	"github.com/doeshing/nekoclaw/internal/backup"
 	"github.com/doeshing/nekoclaw/internal/core"
 	"github.com/doeshing/nekoclaw/internal/discord"
 	"github.com/doeshing/nekoclaw/internal/logger"
@@ -355,6 +356,7 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		go runHousekeepingLoop(lifecycle)
 	}
 	workspaceRoot, _ := os.Getwd()
+	stateDir := resolveStateDir()
 
 	// Resolve MCP config directory (default: ~/.nekoclaw/mcp/).
 	mcpDir := strings.TrimSpace(envOr("NEKOCLAW_MCP_DIR", ""))
@@ -491,6 +493,15 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("init auth store: %w", err)
 	}
+	svc.SetBackupManager(backup.NewManager(backup.ManagerOptions{
+		ConfigRoot:  configDir,
+		SessionsDir: sessionsDir,
+		MemoryDir:   memoryDir,
+		MCPDir:      mcpDir,
+		PersonasDir: personasDir,
+		StateDir:    stateDir,
+		AuthStore:   authStore,
+	}))
 
 	oauthManager := auth.NewGeminiOAuthManager(auth.ManagerOptions{
 		Host: strings.TrimSpace(opts.OAuthCallbackHost),

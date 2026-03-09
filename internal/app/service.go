@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/doeshing/nekoclaw/internal/auth"
+	"github.com/doeshing/nekoclaw/internal/backup"
 	"github.com/doeshing/nekoclaw/internal/compaction"
 	"github.com/doeshing/nekoclaw/internal/contextwindow"
 	"github.com/doeshing/nekoclaw/internal/core"
@@ -65,6 +67,7 @@ type Service struct {
 	toolRuntime       *tooling.Runtime
 	mcpManager        *mcp.Manager
 	personaManager    *persona.Manager
+	backupManager     *backup.Manager
 	titleGenPending   sync.Map // sessionID -> bool; dedup concurrent title generation
 	activeToolStatus  sync.Map // sessionID -> string (current tool name being executed)
 	activeRetryStatus sync.Map // sessionID -> string (failback status message)
@@ -246,6 +249,72 @@ func (s *Service) DeleteMCPConfig(fileName string) error {
 		return fmt.Errorf("mcp not configured")
 	}
 	return s.mcpManager.DeleteConfig(fileName)
+}
+
+func (s *Service) SetBackupManager(manager *backup.Manager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.backupManager = manager
+}
+
+func (s *Service) ListBackups() ([]backup.Entry, error) {
+	s.mu.RLock()
+	manager := s.backupManager
+	s.mu.RUnlock()
+	if manager == nil {
+		return nil, backup.ErrNotConfigured
+	}
+	return manager.List()
+}
+
+func (s *Service) CreateBackup() (backup.Entry, error) {
+	s.mu.RLock()
+	manager := s.backupManager
+	s.mu.RUnlock()
+	if manager == nil {
+		return backup.Entry{}, backup.ErrNotConfigured
+	}
+	return manager.Create()
+}
+
+func (s *Service) ImportBackup(reader io.Reader) (backup.Entry, error) {
+	s.mu.RLock()
+	manager := s.backupManager
+	s.mu.RUnlock()
+	if manager == nil {
+		return backup.Entry{}, backup.ErrNotConfigured
+	}
+	return manager.Import(reader)
+}
+
+func (s *Service) DeleteBackup(id string) error {
+	s.mu.RLock()
+	manager := s.backupManager
+	s.mu.RUnlock()
+	if manager == nil {
+		return backup.ErrNotConfigured
+	}
+	return manager.Delete(id)
+}
+
+func (s *Service) BackupArchivePath(id string) (string, string, error) {
+	s.mu.RLock()
+	manager := s.backupManager
+	s.mu.RUnlock()
+	if manager == nil {
+		return "", "", backup.ErrNotConfigured
+	}
+	return manager.ArchivePath(id)
+}
+
+func (s *Service) RestoreBackup(id string) (backup.RestoreResult, error) {
+	s.mu.RLock()
+	manager := s.backupManager
+	s.mu.RUnlock()
+	if manager == nil {
+		return backup.RestoreResult{}, backup.ErrNotConfigured
+	}
+	return manager.Restore(id)
 }
 
 // ApplyMCPConfigs reconciles runtime custom MCP servers with config files.

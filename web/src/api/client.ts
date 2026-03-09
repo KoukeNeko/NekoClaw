@@ -44,6 +44,8 @@ import type {
   MCPConfigsResponse,
   SaveMCPConfigRequest,
   PersonaInfo,
+  BackupEntry,
+  BackupRestoreResponse,
   UsageSummary,
   MemorySearchRequest,
   MemorySearchResponse,
@@ -104,13 +106,16 @@ async function fetchJSON<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
+  const headers = new Headers(init?.headers);
+  const isFormData =
+    typeof FormData !== "undefined" && init?.body instanceof FormData;
+  if (!headers.has("Content-Type") && init?.body != null && !isFormData) {
+    headers.set("Content-Type", "application/json");
+  }
   const resp = await fetch(`${BASE}${path}`, {
     ...init,
     credentials: "same-origin",
-    headers: {
-      "Content-Type": "application/json",
-      ...init?.headers,
-    },
+    headers,
   });
   if (!resp.ok) {
     const error = await parseErrorBody(resp);
@@ -127,6 +132,30 @@ async function fetchJSON<T>(
   // Some endpoints return 204 No Content
   if (resp.status === 204) return undefined as unknown as T;
   return resp.json();
+}
+
+async function fetchBinary(
+  path: string,
+  init?: RequestInit,
+): Promise<Response> {
+  const resp = await fetch(`${BASE}${path}`, {
+    ...init,
+    credentials: "same-origin",
+    headers: init?.headers,
+  });
+  if (!resp.ok) {
+    const error = await parseErrorBody(resp);
+    if (
+      error.statusCode === 401 &&
+      (error.code === "setup_required" ||
+        error.code === "auth_required" ||
+        error.code === "session_expired")
+    ) {
+      dispatchBrowserAuthEvent(error.code);
+    }
+    throw error;
+  }
+  return resp;
 }
 
 function post<T>(path: string, body?: unknown): Promise<T> {
@@ -481,6 +510,57 @@ export function clearPersona(): Promise<void> {
 
 export function reloadPersonas(): Promise<void> {
   return post("/v1/personas/reload", {});
+}
+
+// ---------------------------------------------------------------------------
+// Backups
+// ---------------------------------------------------------------------------
+
+export async function listBackups(): Promise<BackupEntry[]> {
+  const resp = await get<{ backups: BackupEntry[] }>("/v1/backups");
+  return resp.backups ?? [];
+}
+
+export async function createBackup(): Promise<BackupEntry> {
+  const resp = await post<{ backup: BackupEntry }>("/v1/backups/create", {});
+  return resp.backup;
+}
+
+export async function importBackupArchive(file: File): Promise<BackupEntry> {
+  const form = new FormData();
+  form.append("file", file);
+  const resp = await fetchJSON<{ backup: BackupEntry }>("/v1/backups/import", {
+    method: "POST",
+    body: form,
+  });
+  return resp.backup;
+}
+
+export function deleteBackup(id: string): Promise<void> {
+  return post("/v1/backups/delete", { id });
+}
+
+export async function restoreBackup(id: string): Promise<BackupRestoreResponse> {
+  return post("/v1/backups/restore", { id });
+}
+
+export async function downloadBackupArchive(id: string): Promise<void> {
+  const resp = await fetchBinary(
+    `/v1/backups/download?id=${encodeURIComponent(id)}`,
+    { method: "GET" },
+  );
+  const blob = await resp.blob();
+  const disposition = resp.headers.get("Content-Disposition") ?? "";
+  const match = disposition.match(/filename="?([^"]+)"?/i);
+  const fileName = match?.[1] ?? `backup-${id}.zip`;
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 1000);
 }
 
 // ---------------------------------------------------------------------------

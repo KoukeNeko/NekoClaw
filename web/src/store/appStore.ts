@@ -39,6 +39,7 @@ export type Route =
   | "chat"
   | "settings/general"
   | "settings/security"
+  | "settings/backup"
   | "settings/provider"
   | "settings/persona"
   | "settings/auth"

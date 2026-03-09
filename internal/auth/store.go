@@ -56,6 +56,7 @@ type StoreOptions struct {
 
 type Store struct {
 	mu           sync.Mutex
+	baseDir      string
 	metadataPath string
 	keyring      CredentialKeyring
 	fallback     *encryptedCredentialFile
@@ -95,6 +96,7 @@ func NewStore(opts StoreOptions) (*Store, error) {
 	}
 
 	store := &Store{
+		baseDir:      baseDir,
 		metadataPath: filepath.Join(baseDir, "profiles.json"),
 		keyring:      keyring,
 		fallback:     fallback,
@@ -103,6 +105,10 @@ func NewStore(opts StoreOptions) (*Store, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+func (s *Store) BaseDir() string {
+	return s.baseDir
 }
 
 func (s *Store) ListProfiles(provider string) ([]ProfileMetadata, error) {

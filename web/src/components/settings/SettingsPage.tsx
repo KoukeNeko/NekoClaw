@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import { useAppStore, type Route } from "@/store/appStore";
 import { GeneralPanel } from "./GeneralPanel";
 import { SecurityPanel } from "./SecurityPanel";
+import { BackupPanel } from "./BackupPanel";
 import { PersonaPanel } from "./PersonaPanel";
 import { ProviderPanel } from "./ProviderPanel";
 import { DiscordPanel } from "./DiscordPanel";
@@ -25,6 +26,7 @@ interface TabDef {
 const TABS: TabDef[] = [
   { route: "settings/general", label: "一般" },
   { route: "settings/security", label: "安全" },
+  { route: "settings/backup", label: "備份" },
   { route: "settings/provider", label: "Provider" },
   { route: "settings/persona", label: "Persona" },
   { route: "settings/auth", label: "認證" },
@@ -43,6 +45,8 @@ function renderPanel(route: Route) {
       return <GeneralPanel />;
     case "settings/security":
       return <SecurityPanel />;
+    case "settings/backup":
+      return <BackupPanel />;
     case "settings/provider":
       return <ProviderPanel />;
     case "settings/persona":
