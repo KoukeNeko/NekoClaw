@@ -1915,8 +1915,6 @@ func respondBackupError(w http.ResponseWriter, err error) {
 		respondErrorDetail(w, http.StatusBadRequest, "password_required", err.Error())
 	case errors.Is(err, backup.ErrInvalidPassword):
 		respondErrorDetail(w, http.StatusBadRequest, "invalid_backup_password", err.Error())
-	case errors.Is(err, backup.ErrLegacyBackupUnsupported):
-		respondErrorDetail(w, http.StatusConflict, "unsupported_legacy_backup", err.Error())
 	case errors.Is(err, backup.ErrBackupNotFound):
 		respondError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, backup.ErrNotConfigured):

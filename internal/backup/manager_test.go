@@ -221,37 +221,6 @@ func TestManagerRestoreRollsBackOnFailure(t *testing.T) {
 	}
 }
 
-func TestManagerLegacyArchiveIsListedButCannotBeImportedOrRestored(t *testing.T) {
-	env := newTestEnv(t)
-	seedState(t, env, "backup-secret", "Asia/Taipei")
-
-	entry, err := env.manager.Create(testBackupPassword)
-	if err != nil {
-		t.Fatalf("Create failed: %v", err)
-	}
-	archivePath := filepath.Join(env.root, "backups", entry.FileName)
-	rewriteArchiveAsLegacy(t, archivePath, testBackupPassword)
-
-	backups, err := env.manager.List()
-	if err != nil {
-		t.Fatalf("List failed: %v", err)
-	}
-	if len(backups) != 1 {
-		t.Fatalf("expected 1 listed backup, got %d", len(backups))
-	}
-	if backups[0].Encryption != EncryptionNone {
-		t.Fatalf("legacy encryption = %q, want %q", backups[0].Encryption, EncryptionNone)
-	}
-
-	raw := readBytes(t, archivePath)
-	if _, err := env.manager.Import(bytes.NewReader(raw), testBackupPassword); !errors.Is(err, ErrLegacyBackupUnsupported) {
-		t.Fatalf("expected legacy import to be rejected, got %v", err)
-	}
-	if _, err := env.manager.Restore(entry.BackupID, testBackupPassword); !errors.Is(err, ErrLegacyBackupUnsupported) {
-		t.Fatalf("expected legacy restore to be rejected, got %v", err)
-	}
-}
-
 func newTestEnv(t *testing.T) testEnv {
 	t.Helper()
 	root := t.TempDir()
@@ -361,26 +330,6 @@ func assertArchiveSecurity(t *testing.T, archivePath string) {
 	}
 	if !foundEncryptedPayload {
 		t.Fatal("expected at least one encrypted payload entry")
-	}
-}
-
-func rewriteArchiveAsLegacy(t *testing.T, archivePath string, password string) {
-	t.Helper()
-	legacyRoot := t.TempDir()
-	if err := extractZipToDir(archivePath, legacyRoot, password); err != nil {
-		t.Fatalf("extractZipToDir failed: %v", err)
-	}
-	manifest, err := readManifest(filepath.Join(legacyRoot, "manifest.json"))
-	if err != nil {
-		t.Fatalf("readManifest failed: %v", err)
-	}
-	manifest.Version = ManifestVersionLegacy
-	manifest.Encryption = EncryptionNone
-	if err := writeManifest(filepath.Join(legacyRoot, "manifest.json"), manifest); err != nil {
-		t.Fatalf("writeManifest failed: %v", err)
-	}
-	if err := zipSnapshot(legacyRoot, archivePath, ""); err != nil {
-		t.Fatalf("zipSnapshot failed: %v", err)
 	}
 }
 

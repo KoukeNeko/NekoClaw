@@ -112,16 +112,12 @@ function sourceLabel(source: BackupEntry["source"]): string {
   return source === "imported" ? "匯入" : "建立";
 }
 
-function encryptionBadgeClass(encryption: BackupEntry["encryption"]): string {
-  return encryption === "zip-aes-256" ? "badge-success" : "badge-warning";
+function encryptionBadgeClass(_encryption: BackupEntry["encryption"]): string {
+  return "badge-success";
 }
 
-function encryptionLabel(encryption: BackupEntry["encryption"]): string {
-  return encryption === "zip-aes-256" ? "已加密" : "Legacy";
-}
-
-function isEncryptedBackup(backup: BackupEntry | null | undefined): backup is BackupEntry {
-  return !!backup && backup.encryption === "zip-aes-256";
+function encryptionLabel(_encryption: BackupEntry["encryption"]): string {
+  return "已加密";
 }
 
 function formatBytes(size: number): string {
@@ -306,9 +302,6 @@ function importErrorHint(error: ImportErrorState | null): string | null {
   if (!error) return null;
   if (error.statusCode === 403 && error.code === "origin_mismatch") {
     return "browser security same-origin 檢查擋下 request，請確認目前請求是從 NekoClaw Web UI 發出。";
-  }
-  if (error.code === "unsupported_legacy_backup") {
-    return "這個 archive 屬於未加密的舊格式，v2 只接受新的密碼保護備份。";
   }
   if (error.code === "invalid_backup_password") {
     return "提供的備份密碼無法解密 payload，請確認這是建立該備份時使用的密碼。";
@@ -731,8 +724,7 @@ export function BackupPanel() {
     }
   }
 
-  function openRestoreDialog(backup: BackupEntry | null) {
-    if (!isEncryptedBackup(backup)) return;
+  function openRestoreDialog(backup: BackupEntry) {
     setRestoreDialog({
       backup,
       password: "",
@@ -1094,9 +1086,7 @@ export function BackupPanel() {
                       </div>
                     </div>
                     <p className="mt-2 text-sm text-base-content/70">
-                      {selectedBackup.encryption === "zip-aes-256"
-                        ? "這份備份的 payload 已用 ZIP AES-256 保護。還原時需要輸入備份密碼，且完成後必須手動重啟服務。"
-                        : "這是一份舊版未加密 archive。可以下載保存，但不支援直接匯入或還原。"}
+                      這份備份的 payload 已用 ZIP AES-256 保護。還原時需要輸入備份密碼，且完成後必須手動重啟服務。
                     </p>
                   </div>
 
@@ -1110,19 +1100,11 @@ export function BackupPanel() {
                   </div>
                 </div>
 
-                {selectedBackup.encryption === "zip-aes-256" ? (
-                  <div className="alert alert-warning">
-                    <span>
-                      還原會替換 config、auth、sessions、memory、MCP、personas 與 bot bindings，但會保留目前後台密碼，且需要輸入備份密碼。
-                    </span>
-                  </div>
-                ) : (
-                  <div className="alert alert-warning">
-                    <span>
-                      此舊版備份未使用密碼保護，為避免匯入未加密 archive，現在不支援直接還原。
-                    </span>
-                  </div>
-                )}
+                <div className="alert alert-warning">
+                  <span>
+                    還原會替換 config、auth、sessions、memory、MCP、personas 與 bot bindings，但會保留目前後台密碼，且需要輸入備份密碼。
+                  </span>
+                </div>
 
                 <div className="flex flex-wrap gap-2">
                   {selectedBackup.components.map((component) => (
@@ -1168,11 +1150,7 @@ export function BackupPanel() {
                       <div className="text-xs uppercase tracking-wide text-base-content/50">
                         Encryption
                       </div>
-                      <div className="text-sm">
-                        {selectedBackup.encryption === "zip-aes-256"
-                          ? "ZIP AES-256"
-                          : "Legacy / none"}
-                      </div>
+                      <div className="text-sm">ZIP AES-256</div>
                     </div>
                   </li>
                   <li className="list-row">
@@ -1213,12 +1191,8 @@ export function BackupPanel() {
                   <button
                     className="btn btn-primary"
                     onClick={() => openRestoreDialog(selectedBackup)}
-                    disabled={busyAction !== "" || !isEncryptedBackup(selectedBackup)}
-                    title={
-                      isEncryptedBackup(selectedBackup)
-                        ? "還原這份備份"
-                        : "Legacy 備份不支援直接還原"
-                    }
+                    disabled={busyAction !== ""}
+                    title="還原這份備份"
                   >
                     {busyAction === "restore" && (
                       <span className="loading loading-spinner loading-xs" />

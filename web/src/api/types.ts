@@ -598,7 +598,7 @@ export interface PersonaInfo {
 
 export type BackupSource = "created" | "imported";
 export type BackupRestoreMode = "replace";
-export type BackupEncryption = "none" | "zip-aes-256";
+export type BackupEncryption = "zip-aes-256";
 
 export interface BackupComponentSummary {
   key: string;

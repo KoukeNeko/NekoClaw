@@ -1,10 +1,8 @@
 package api
 
 import (
-	"archive/zip"
 	"bytes"
 	"encoding/json"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -18,7 +16,6 @@ import (
 	"github.com/doeshing/nekoclaw/internal/backup"
 	"github.com/doeshing/nekoclaw/internal/core"
 	"github.com/doeshing/nekoclaw/internal/security"
-	yzip "github.com/yeka/zip"
 )
 
 const apiBackupPassword = "backup-password-123"
@@ -234,70 +231,6 @@ func TestBackupsImportAndValidation(t *testing.T) {
 	}
 }
 
-func TestBackupsLegacyArchivesRemainListableButCannotBeImportedOrRestored(t *testing.T) {
-	svc, root := newBackupTestService(t)
-	seedBackupAPIState(t, root, svc)
-	handler := NewServer(svc).Handler()
-
-	entry, err := svc.CreateBackup(apiBackupPassword)
-	if err != nil {
-		t.Fatalf("CreateBackup failed: %v", err)
-	}
-	archivePath := filepath.Join(root, "backups", entry.FileName)
-	rewriteBackupArchiveAsLegacy(t, archivePath, apiBackupPassword)
-
-	listResp := performJSONRequest(t, handler, http.MethodGet, "/v1/backups", "")
-	if listResp.Code != http.StatusOK {
-		t.Fatalf("unexpected list status: %d body=%s", listResp.Code, listResp.Body.String())
-	}
-	var listPayload struct {
-		Backups []backup.Entry `json:"backups"`
-	}
-	if err := json.Unmarshal(listResp.Body.Bytes(), &listPayload); err != nil {
-		t.Fatalf("decode list response: %v", err)
-	}
-	if len(listPayload.Backups) != 1 {
-		t.Fatalf("expected 1 backup, got %d", len(listPayload.Backups))
-	}
-	if listPayload.Backups[0].Encryption != backup.EncryptionNone {
-		t.Fatalf("legacy encryption = %q, want %q", listPayload.Backups[0].Encryption, backup.EncryptionNone)
-	}
-
-	rawArchive, err := os.ReadFile(archivePath)
-	if err != nil {
-		t.Fatalf("read legacy archive: %v", err)
-	}
-	importResp := performMultipartRequest(
-		t,
-		handler,
-		"/v1/backups/import",
-		"file",
-		"legacy.zip",
-		rawArchive,
-		map[string]string{"password": apiBackupPassword},
-	)
-	if importResp.Code != http.StatusConflict {
-		t.Fatalf("expected legacy import to return 409, got %d body=%s", importResp.Code, importResp.Body.String())
-	}
-	if code := errorCodeFromBody(t, importResp); code != "unsupported_legacy_backup" {
-		t.Fatalf("legacy import error code = %q, want unsupported_legacy_backup", code)
-	}
-
-	restoreResp := performJSONRequest(
-		t,
-		handler,
-		http.MethodPost,
-		"/v1/backups/restore",
-		`{"id":"`+entry.BackupID+`","password":"`+apiBackupPassword+`"}`,
-	)
-	if restoreResp.Code != http.StatusConflict {
-		t.Fatalf("expected legacy restore to return 409, got %d body=%s", restoreResp.Code, restoreResp.Body.String())
-	}
-	if code := errorCodeFromBody(t, restoreResp); code != "unsupported_legacy_backup" {
-		t.Fatalf("legacy restore error code = %q, want unsupported_legacy_backup", code)
-	}
-}
-
 func TestBackupsImportRequiresOriginOrTrustedUIHeaderWhenSecurityEnabled(t *testing.T) {
 	svc, root := newBackupTestService(t)
 	seedBackupAPIState(t, root, svc)
@@ -474,123 +407,4 @@ func performMultipartRequestWithOptions(
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	return rr
-}
-
-func rewriteBackupArchiveAsLegacy(t *testing.T, archivePath string, password string) {
-	t.Helper()
-	root := t.TempDir()
-	extractEncryptedArchive(t, archivePath, root, password)
-
-	manifestPath := filepath.Join(root, "manifest.json")
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		t.Fatalf("ReadFile(manifest): %v", err)
-	}
-	var manifest backup.Manifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		t.Fatalf("Unmarshal manifest: %v", err)
-	}
-	manifest.Version = backup.ManifestVersionLegacy
-	manifest.Encryption = backup.EncryptionNone
-	updated, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		t.Fatalf("Marshal manifest: %v", err)
-	}
-	if err := os.WriteFile(manifestPath, updated, 0o644); err != nil {
-		t.Fatalf("WriteFile(manifest): %v", err)
-	}
-
-	writePlainArchive(t, root, archivePath)
-}
-
-func extractEncryptedArchive(t *testing.T, archivePath string, dst string, password string) {
-	t.Helper()
-	reader, err := yzip.OpenReader(archivePath)
-	if err != nil {
-		t.Fatalf("OpenReader(%s): %v", archivePath, err)
-	}
-	defer reader.Close()
-
-	for _, file := range reader.File {
-		target := filepath.Join(dst, filepath.FromSlash(file.Name))
-		if file.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0o755); err != nil {
-				t.Fatalf("MkdirAll(%s): %v", target, err)
-			}
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			t.Fatalf("MkdirAll(%s): %v", filepath.Dir(target), err)
-		}
-		if file.IsEncrypted() {
-			file.SetPassword(password)
-		}
-		rc, err := file.Open()
-		if err != nil {
-			t.Fatalf("Open(%s): %v", file.Name, err)
-		}
-		f, err := os.Create(target)
-		if err != nil {
-			rc.Close()
-			t.Fatalf("Create(%s): %v", target, err)
-		}
-		if _, err := io.Copy(f, rc); err != nil {
-			f.Close()
-			rc.Close()
-			t.Fatalf("Copy(%s): %v", file.Name, err)
-		}
-		if err := f.Close(); err != nil {
-			rc.Close()
-			t.Fatalf("Close(%s): %v", target, err)
-		}
-		if err := rc.Close(); err != nil {
-			t.Fatalf("Close archive reader(%s): %v", file.Name, err)
-		}
-	}
-}
-
-func writePlainArchive(t *testing.T, srcRoot string, archivePath string) {
-	t.Helper()
-	f, err := os.Create(archivePath)
-	if err != nil {
-		t.Fatalf("Create(%s): %v", archivePath, err)
-	}
-	defer f.Close()
-
-	writer := zip.NewWriter(f)
-	defer writer.Close()
-
-	if err := filepath.Walk(srcRoot, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if info.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(srcRoot, path)
-		if err != nil {
-			return err
-		}
-		header, err := zip.FileInfoHeader(info)
-		if err != nil {
-			return err
-		}
-		header.Name = filepath.ToSlash(rel)
-		header.Method = zip.Deflate
-		entryWriter, err := writer.CreateHeader(header)
-		if err != nil {
-			return err
-		}
-		source, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		_, err = io.Copy(entryWriter, source)
-		if closeErr := source.Close(); err == nil {
-			err = closeErr
-		}
-		return err
-	}); err != nil {
-		t.Fatalf("Walk(%s): %v", srcRoot, err)
-	}
 }

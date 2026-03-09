@@ -19,13 +19,12 @@ import (
 )
 
 var (
-	ErrNotConfigured            = errors.New("backup manager not configured")
-	ErrBackupNotFound           = errors.New("backup not found")
-	ErrInvalidArchive           = errors.New("invalid backup archive")
-	ErrInvalidManifest          = errors.New("invalid backup manifest")
-	ErrPasswordRequired         = errors.New("backup password is required")
-	ErrInvalidPassword          = errors.New("invalid backup password")
-	ErrLegacyBackupUnsupported  = errors.New("legacy backups must be recreated as encrypted archives")
+	ErrNotConfigured    = errors.New("backup manager not configured")
+	ErrBackupNotFound   = errors.New("backup not found")
+	ErrInvalidArchive   = errors.New("invalid backup archive")
+	ErrInvalidManifest  = errors.New("invalid backup manifest")
+	ErrPasswordRequired = errors.New("backup password is required")
+	ErrInvalidPassword  = errors.New("invalid backup password")
 )
 
 const (
@@ -48,8 +47,6 @@ type Manager struct {
 	backupsDir          string
 	configPath          string
 	authStore           *auth.Store
-	authBaseDir         string
-	securityStatePath   string
 	sessionsDir         string
 	memoryDir           string
 	mcpDir              string
@@ -70,30 +67,19 @@ type authExportProfile struct {
 
 func NewManager(opts ManagerOptions) *Manager {
 	configRoot := strings.TrimSpace(opts.ConfigRoot)
-	authBaseDir := ""
-	securityStatePath := ""
-	if opts.AuthStore != nil {
-		authBaseDir = strings.TrimSpace(opts.AuthStore.BaseDir())
-		if authBaseDir != "" {
-			securityStatePath = filepath.Join(authBaseDir, "security-state.json")
-		}
-	}
-
 	mcpDir := strings.TrimSpace(opts.MCPDir)
 	personasDir := strings.TrimSpace(opts.PersonasDir)
 
 	manager := &Manager{
-		configRoot:        configRoot,
-		backupsDir:        filepath.Join(configRoot, "backups"),
-		configPath:        filepath.Join(configRoot, "config.json"),
-		authStore:         opts.AuthStore,
-		authBaseDir:       authBaseDir,
-		securityStatePath: securityStatePath,
-		sessionsDir:       strings.TrimSpace(opts.SessionsDir),
-		memoryDir:         strings.TrimSpace(opts.MemoryDir),
-		mcpDir:            mcpDir,
-		personasDir:       personasDir,
-		stateDir:          strings.TrimSpace(opts.StateDir),
+		configRoot:  configRoot,
+		backupsDir:  filepath.Join(configRoot, "backups"),
+		configPath:  filepath.Join(configRoot, "config.json"),
+		authStore:   opts.AuthStore,
+		sessionsDir: strings.TrimSpace(opts.SessionsDir),
+		memoryDir:   strings.TrimSpace(opts.MemoryDir),
+		mcpDir:      mcpDir,
+		personasDir: personasDir,
+		stateDir:    strings.TrimSpace(opts.StateDir),
 	}
 	if mcpDir != "" {
 		manager.mcpBuiltinStatePath = filepath.Join(filepath.Dir(mcpDir), "mcp-builtin.json")
@@ -160,12 +146,8 @@ func (m *Manager) Import(reader io.Reader, password string) (Entry, error) {
 	if err != nil {
 		return Entry{}, fmt.Errorf("%w: %v", ErrInvalidManifest, err)
 	}
-	uploadedManifest = normalizeManifest(uploadedManifest)
 	if err := validateManifest(uploadedManifest); err != nil {
 		return Entry{}, fmt.Errorf("%w: %v", ErrInvalidManifest, err)
-	}
-	if uploadedManifest.Encryption != EncryptionZipAES256 {
-		return Entry{}, ErrLegacyBackupUnsupported
 	}
 
 	extractedRoot := filepath.Join(tempRoot, "extracted")
@@ -180,9 +162,6 @@ func (m *Manager) Import(reader io.Reader, password string) (Entry, error) {
 	manifest := newManifest(SourceImported, createdAt)
 	if _, err := copyDirectory(filepath.Join(extractedRoot, "payload"), filepath.Join(tempRoot, "payload"), nil); err != nil {
 		return Entry{}, fmt.Errorf("%w: %v", ErrInvalidArchive, err)
-	}
-	if err := removeLegacySecurityPayload(filepath.Join(tempRoot, "payload")); err != nil {
-		return Entry{}, err
 	}
 	manifest.Components, err = buildComponentSummaries(filepath.Join(tempRoot, "payload"))
 	if err != nil {
@@ -220,7 +199,6 @@ func (m *Manager) List() ([]Entry, error) {
 		if err := validateManifest(manifest); err != nil {
 			continue
 		}
-		manifest = normalizeManifest(manifest)
 		info, err := entry.Info()
 		if err != nil {
 			continue
@@ -279,12 +257,8 @@ func (m *Manager) Restore(id string, password string) (RestoreResult, error) {
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%w: %v", ErrInvalidManifest, err)
 	}
-	manifest = normalizeManifest(manifest)
 	if err := validateManifest(manifest); err != nil {
 		return RestoreResult{}, fmt.Errorf("%w: %v", ErrInvalidManifest, err)
-	}
-	if manifest.Encryption != EncryptionZipAES256 {
-		return RestoreResult{}, ErrLegacyBackupUnsupported
 	}
 
 	extractedRoot := filepath.Join(tempRoot, "archive")
@@ -567,33 +541,6 @@ func buildComponentSummaries(payloadRoot string) ([]ComponentSummary, error) {
 	return components, nil
 }
 
-func normalizeManifest(manifest Manifest) Manifest {
-	if manifest.Version == ManifestVersionLegacy && strings.TrimSpace(manifest.Encryption) == "" {
-		manifest.Encryption = EncryptionNone
-	}
-	filtered := make([]ComponentSummary, 0, len(manifest.Components))
-	for _, component := range manifest.Components {
-		if component.Key == ComponentSecurity {
-			continue
-		}
-		filtered = append(filtered, component)
-	}
-	manifest.Components = filtered
-	return manifest
-}
-
-func removeLegacySecurityPayload(payloadRoot string) error {
-	payloadRoot = strings.TrimSpace(payloadRoot)
-	if payloadRoot == "" {
-		return nil
-	}
-	securityRoot := filepath.Join(payloadRoot, "security")
-	if err := os.RemoveAll(securityRoot); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
-}
-
 func validateBackupPassword(password string) error {
 	password = strings.TrimSpace(password)
 	if password == "" {
@@ -642,7 +589,6 @@ func newManifest(source string, createdAt time.Time) Manifest {
 }
 
 func validateManifest(manifest Manifest) error {
-	manifest = normalizeManifest(manifest)
 	if strings.TrimSpace(manifest.BackupID) == "" {
 		return ErrInvalidManifest
 	}
@@ -654,16 +600,10 @@ func validateManifest(manifest Manifest) error {
 	if !manifest.ContainsSecrets || manifest.RestoreMode != RestoreModeReplace || !manifest.RestartRequired {
 		return ErrInvalidManifest
 	}
-	switch manifest.Version {
-	case ManifestVersionLegacy:
-		if manifest.Encryption != EncryptionNone {
-			return ErrInvalidManifest
-		}
-	case ManifestVersionEncrypted:
-		if manifest.Encryption != EncryptionZipAES256 {
-			return ErrInvalidManifest
-		}
-	default:
+	if manifest.Version != ManifestVersionEncrypted {
+		return ErrInvalidManifest
+	}
+	if manifest.Encryption != EncryptionZipAES256 {
 		return ErrInvalidManifest
 	}
 	if len(manifest.Components) != 7 {
@@ -749,7 +689,7 @@ func readManifest(path string) (Manifest, error) {
 	if err := readJSONFile(path, &manifest); err != nil {
 		return Manifest{}, err
 	}
-	return normalizeManifest(manifest), nil
+	return manifest, nil
 }
 
 func readManifestFromArchive(path string) (Manifest, error) {
@@ -772,7 +712,7 @@ func readManifestFromArchive(path string) (Manifest, error) {
 		if err := json.NewDecoder(rc).Decode(&manifest); err != nil {
 			return Manifest{}, err
 		}
-		return normalizeManifest(manifest), nil
+		return manifest, nil
 	}
 	return Manifest{}, fs.ErrNotExist
 }

@@ -3,7 +3,6 @@ package backup
 import "time"
 
 const (
-	ManifestVersionLegacy    = 1
 	ManifestVersionEncrypted = 2
 
 	SourceCreated  = "created"
@@ -11,14 +10,12 @@ const (
 
 	RestoreModeReplace = "replace"
 
-	EncryptionNone      = "none"
 	EncryptionZipAES256 = "zip-aes-256"
 )
 
 const (
 	ComponentConfig   = "config"
 	ComponentAuth     = "auth"
-	ComponentSecurity = "security"
 	ComponentSessions = "sessions"
 	ComponentMemory   = "memory"
 	ComponentMCP      = "mcp"
