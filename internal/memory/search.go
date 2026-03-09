@@ -26,6 +26,15 @@ const (
 	searchDriverName   = "sqlite"
 )
 
+var searchTimestampLayouts = []string{
+	time.RFC3339Nano,
+	time.RFC3339,
+	"2006-01-02 15:04:05.999999999 -0700 MST",
+	"2006-01-02 15:04:05 -0700 MST",
+	"2006-01-02 15:04:05.999999999 -0700",
+	"2006-01-02 15:04:05 -0700",
+}
+
 // SearchResult represents a single search hit from the FTS5 index.
 type SearchResult struct {
 	SessionID string    `json:"session_id"`
@@ -151,7 +160,7 @@ func (idx *SearchIndex) Index(sessionID string, entries []core.SessionEntry) err
 
 		chunks := chunkText(e.Content, chunkTargetTokens, chunkOverlapTokens)
 		for _, chunk := range chunks {
-			if _, err := stmt.Exec(sessionID, e.ID, chunk, string(e.Role), e.Timestamp); err != nil {
+			if _, err := stmt.Exec(sessionID, e.ID, chunk, string(e.Role), formatSearchTimestamp(e.Timestamp)); err != nil {
 				return fmt.Errorf("insert chunk: %w", err)
 			}
 		}
@@ -187,14 +196,19 @@ func (idx *SearchIndex) Search(query string, limit int) ([]SearchResult, error) 
 	var results []SearchResult
 	for rows.Next() {
 		var r SearchResult
-		var ts sql.NullTime
+		var rawTimestamp any
 		var path, source sql.NullString
 		if err := rows.Scan(&r.SessionID, &r.EntryID, &path, &r.StartLine, &r.EndLine,
-			&r.Content, &r.Role, &source, &ts, &r.Score); err != nil {
+			&r.Content, &r.Role, &source, &rawTimestamp, &r.Score); err != nil {
 			return nil, fmt.Errorf("scan result: %w", err)
 		}
-		if ts.Valid {
-			r.Timestamp = ts.Time
+		ts, hasTimestamp, err := parseSearchTimestamp(rawTimestamp)
+		if err != nil {
+			logSearch.Warnf("skip search row: session_id=%s entry_id=%s error=%v", r.SessionID, r.EntryID, err)
+			continue
+		}
+		if hasTimestamp {
+			r.Timestamp = ts
 		}
 		if path.Valid {
 			r.Path = path.String
@@ -310,14 +324,14 @@ func (idx *SearchIndex) indexFile(path, baseDir, source string) error {
 	lines := strings.Split(string(data), "\n")
 	chunks := chunkLines(lines, chunkTargetTokens, chunkOverlapTokens)
 	for _, chunk := range chunks {
-		if _, err := stmt.Exec("", relPath, relPath, chunk.startLine, chunk.endLine, chunk.text, "", source, info.ModTime()); err != nil {
+		if _, err := stmt.Exec("", relPath, relPath, chunk.startLine, chunk.endLine, chunk.text, "", source, formatSearchTimestamp(info.ModTime())); err != nil {
 			return err
 		}
 	}
 
 	// Update indexed_files tracking.
 	_, _ = tx.Exec(`INSERT OR REPLACE INTO indexed_files (path, source, size, hash, indexed_at) VALUES (?, ?, ?, ?, ?)`,
-		relPath, source, info.Size(), hash, time.Now())
+		relPath, source, info.Size(), hash, formatSearchTimestamp(time.Now()))
 
 	logSearch.Logf("indexed memory file: path=%s chunks=%d", relPath, len(chunks))
 	return tx.Commit()
@@ -361,7 +375,7 @@ func (idx *SearchIndex) indexSessionFile(path string) error {
 
 	// Update indexed_files tracking.
 	_, _ = idx.db.Exec(`INSERT OR REPLACE INTO indexed_files (path, source, size, hash, indexed_at) VALUES (?, ?, ?, ?, ?)`,
-		path, "sessions", info.Size(), hash, time.Now())
+		path, "sessions", info.Size(), hash, formatSearchTimestamp(time.Now()))
 
 	logSearch.Logf("indexed session file: path=%s entries=%d", filepath.Base(path), len(entries))
 	return nil
@@ -440,6 +454,46 @@ func charOffsetToLine(cumLen []int, offset int) int {
 func fileHash(data []byte) string {
 	h := sha256.Sum256(data)
 	return hex.EncodeToString(h[:8]) // first 8 bytes is sufficient
+}
+
+func formatSearchTimestamp(ts time.Time) string {
+	return ts.UTC().Format(time.RFC3339Nano)
+}
+
+func parseSearchTimestamp(raw any) (time.Time, bool, error) {
+	switch v := raw.(type) {
+	case nil:
+		return time.Time{}, false, nil
+	case time.Time:
+		return v, true, nil
+	case string:
+		return parseSearchTimestampString(v)
+	case []byte:
+		return parseSearchTimestampString(string(v))
+	default:
+		return time.Time{}, false, fmt.Errorf("unsupported timestamp type %T", raw)
+	}
+}
+
+func parseSearchTimestampString(raw string) (time.Time, bool, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, false, nil
+	}
+	raw = stripSearchTimestampMonotonic(raw)
+	for _, layout := range searchTimestampLayouts {
+		if ts, err := time.Parse(layout, raw); err == nil {
+			return ts, true, nil
+		}
+	}
+	return time.Time{}, false, fmt.Errorf("unparseable timestamp %q", raw)
+}
+
+func stripSearchTimestampMonotonic(raw string) string {
+	if idx := strings.Index(raw, " m="); idx >= 0 {
+		return raw[:idx]
+	}
+	return raw
 }
 
 // DeleteSession removes all indexed chunks for a session.
