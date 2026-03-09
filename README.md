@@ -60,6 +60,7 @@ docker run --rm -p 8085:8085 -v nekoclaw-data:/data/.nekoclaw nekoclaw:local
 ```
 
 The container defaults to `-mode web` and persists runtime state under `/data/.nekoclaw`.
+The image also preinstalls Node.js, `@google/gemini-cli`, `@playwright/mcp`, and Chromium so Gemini OAuth plus the builtin Playwright MCP server can start without manual npm setup inside the container.
 
 GitHub Actions can publish the image to GHCR as `ghcr.io/koukeneko/nekoclaw`:
 

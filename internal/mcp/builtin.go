@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 )
 
@@ -14,36 +15,43 @@ type BuiltinServerDef struct {
 	Config      ServerConfig
 }
 
+func resolvePlaywrightCommand() (string, []string) {
+	if path, err := exec.LookPath("playwright-mcp"); err == nil {
+		return path, []string{"--headless", "--vision"}
+	}
+	return "npx", []string{"-y", "@playwright/mcp@latest", "--headless", "--vision"}
+}
+
 // builtinRegistry holds all builtin server definitions.
 // Add new entries here to ship additional builtin servers.
-var builtinRegistry = []BuiltinServerDef{
-	{
-		Name:        "playwright",
-		Description: "Playwright 瀏覽器自動化（需要 Node.js）",
-		Config: ServerConfig{
-			Name:      "playwright",
-			Transport: TransportStdio,
-			Command:   "npx",
-			Args: []string{
-				"-y", "@playwright/mcp@latest",
-				"--headless",
-				"--vision",
+func builtinRegistry() []BuiltinServerDef {
+	command, args := resolvePlaywrightCommand()
+	return []BuiltinServerDef{
+		{
+			Name:        "playwright",
+			Description: "Playwright 瀏覽器自動化（需要 Node.js）",
+			Config: ServerConfig{
+				Name:      "playwright",
+				Transport: TransportStdio,
+				Command:   command,
+				Args:      args,
+				Env: map[string]string{
+					// Skip automatic Chromium download that triggers sudo password prompts.
+					// Users should install browsers separately: npx playwright install
+					"PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD": "1",
+				},
+				Trust:   TrustTrusted,
+				Builtin: true,
 			},
-			Env: map[string]string{
-				// Skip automatic Chromium download that triggers sudo password prompts.
-				// Users should install browsers separately: npx playwright install
-				"PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD": "1",
-			},
-			Trust:   TrustTrusted,
-			Builtin: true,
 		},
-	},
+	}
 }
 
 // BuiltinDefs returns a copy of all builtin server definitions.
 func BuiltinDefs() []BuiltinServerDef {
-	out := make([]BuiltinServerDef, len(builtinRegistry))
-	copy(out, builtinRegistry)
+	defs := builtinRegistry()
+	out := make([]BuiltinServerDef, len(defs))
+	copy(out, defs)
 	return out
 }
 

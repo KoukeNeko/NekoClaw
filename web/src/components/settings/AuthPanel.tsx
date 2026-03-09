@@ -84,6 +84,29 @@ function fallback(value?: string | null, defaultValue = "-"): string {
   return trimmed ? trimmed : defaultValue;
 }
 
+function isLocalBrowserHost(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  return (
+    normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "[::1]"
+  );
+}
+
+function buildGeminiOAuthRequest(): { mode: "auto" | "remote"; redirect_uri?: string } {
+  if (typeof window === "undefined") {
+    return { mode: "auto" };
+  }
+  if (isLocalBrowserHost(window.location.hostname)) {
+    return { mode: "auto" };
+  }
+  return {
+    mode: "remote",
+    redirect_uri: new URL("/oauth2callback", window.location.origin).toString(),
+  };
+}
+
 function formatDateTime(value?: string | null): string {
   if (!value) return "-";
   const date = new Date(value);
@@ -937,20 +960,28 @@ export function AuthPanel() {
   async function handleStartGeminiOAuth() {
     setBusyAction("gemini-start");
     try {
-      const response = await startGeminiOAuth({ mode: "auto" });
+      const request = buildGeminiOAuthRequest();
+      const response = await startGeminiOAuth(request);
       setGeminiFlow(response);
       setGeminiManualInput("");
 
+      const shouldAutoOpen = response.mode === "loopback" || request.mode === "remote";
+      const opened = shouldAutoOpen
+        ? window.open(response.auth_url, "_blank", "noopener,noreferrer")
+        : null;
+
       if (response.mode === "loopback") {
-        const opened = window.open(
-          response.auth_url,
-          "_blank",
-          "noopener,noreferrer",
-        );
         setStatus({
           tone: "info",
           message: opened
             ? "已開啟 Gemini 授權頁面，完成後可返回此頁重新整理或貼上 callback URL"
+            : "Gemini OAuth 已啟動，請手動開啟授權網址完成登入",
+        });
+      } else if (request.mode === "remote") {
+        setStatus({
+          tone: "info",
+          message: opened
+            ? "已開啟 Gemini 授權頁面，完成授權後會導回本站 callback"
             : "Gemini OAuth 已啟動，請手動開啟授權網址完成登入",
         });
       } else {

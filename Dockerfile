@@ -27,13 +27,22 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags="-s -w" -o /out/nekoclaw ./cmd/nekoclaw
 
-FROM alpine:3.20 AS runtime
+FROM node:22-bookworm-slim AS runtime
 
-RUN apk add --no-cache ca-certificates \
-    && addgroup -S nekoclaw \
-    && adduser -S -D -h /data -G nekoclaw nekoclaw \
-    && mkdir -p /app /data/.nekoclaw \
-    && chown -R nekoclaw:nekoclaw /app /data
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates; \
+    mkdir -p /app /data/.nekoclaw /ms-playwright; \
+    PW_VERSION="$(npm view @playwright/mcp@latest dependencies.playwright)"; \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install -g "@google/gemini-cli@latest" "@playwright/mcp@latest" "playwright@${PW_VERSION}"; \
+    playwright install --with-deps chromium; \
+    addgroup --system nekoclaw; \
+    adduser --system --home /data --ingroup nekoclaw nekoclaw; \
+    chown -R nekoclaw:nekoclaw /app /data /ms-playwright; \
+    npm cache clean --force; \
+    rm -rf /var/lib/apt/lists/*
 
 ENV HOME=/data \
     NEKOCLAW_AUTH_DIR=/data/.nekoclaw/auth \
