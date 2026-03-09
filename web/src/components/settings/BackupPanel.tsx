@@ -345,6 +345,19 @@ function importStepLabel(status: ImportStepStatus): string {
   }
 }
 
+function importStepRailClass(status: ImportStepStatus): string {
+  switch (status) {
+    case "done":
+      return "bg-success";
+    case "active":
+      return "bg-warning";
+    case "error":
+      return "bg-error";
+    default:
+      return "bg-base-300/70";
+  }
+}
+
 function fileMimeType(file: File): string {
   return file.type.trim() || "application/octet-stream";
 }
@@ -1667,10 +1680,7 @@ export function BackupPanel() {
                 />
                 <div className="mt-4 space-y-3">
                   {importSteps.map((step) => (
-                    <div
-                      key={step.title}
-                      className="rounded-box border border-base-300 bg-base-200 px-4 py-3"
-                    >
+                    <div key={step.title} className="rounded-box border border-base-300 bg-base-200 px-4 py-3">
                       <div className="flex items-center justify-between gap-3">
                         <div className="font-medium">{step.title}</div>
                         <div className={`badge badge-sm ${importStepBadgeClass(step.status)}`}>
@@ -1679,23 +1689,41 @@ export function BackupPanel() {
                       </div>
                       <p className="mt-2 text-sm text-base-content/60">{step.detail}</p>
                       {step.substeps && step.substeps.length > 0 ? (
-                        <div className="mt-3 space-y-2 rounded-box border border-base-300/70 bg-base-100/70 p-3">
-                          {step.substeps.map((substep) => (
-                            <div
-                              key={`${step.title}-${substep.title}`}
-                              className="flex items-start justify-between gap-3 rounded-box border border-base-300/60 bg-base-100 px-3 py-2"
-                            >
-                              <div className="min-w-0 flex-1">
-                                <div className="text-sm font-medium">{substep.title}</div>
-                                <p className="mt-1 text-xs text-base-content/60">
-                                  {substep.detail}
-                                </p>
+                        <div className="mt-3 rounded-box border border-base-300/70 bg-base-100/70 p-3">
+                          <div className="flex items-center justify-between gap-3 text-xs text-base-content/55">
+                            <span>子任務</span>
+                            <span>
+                              {step.substeps.filter((substep) => substep.status === "done").length} /{" "}
+                              {step.substeps.length}
+                            </span>
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {step.substeps.map((substep) => (
+                              <div
+                                key={`${step.title}-${substep.title}`}
+                                className={`badge gap-1 px-2 py-2 text-[11px] ${importStepBadgeClass(substep.status)}`}
+                                title={substep.detail}
+                              >
+                                <span>{substep.title}</span>
+                                <span>{importStepLabel(substep.status)}</span>
                               </div>
-                              <div className={`badge badge-xs ${importStepBadgeClass(substep.status)}`}>
-                                {importStepLabel(substep.status)}
-                              </div>
-                            </div>
-                          ))}
+                            ))}
+                          </div>
+                          <p className="mt-3 text-xs text-base-content/60">
+                            {step.substeps.find(
+                              (substep) =>
+                                substep.status === "active" || substep.status === "error",
+                            )?.detail ??
+                              step.substeps[step.substeps.length - 1]?.detail}
+                          </p>
+                          <div className="mt-3 flex items-center gap-2">
+                            {step.substeps.map((substep) => (
+                              <div
+                                key={`${step.title}-${substep.title}-rail`}
+                                className={`h-1.5 flex-1 rounded-full ${importStepRailClass(substep.status)}`}
+                              />
+                            ))}
+                          </div>
                         </div>
                       ) : null}
                     </div>
