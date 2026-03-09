@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/doeshing/nekoclaw/internal/core"
@@ -163,5 +164,58 @@ func TestDiscoverPreferredModelUsesCache(t *testing.T) {
 	}
 	if fetchCalls != 1 {
 		t.Fatalf("expected cached model lookup, fetch calls=%d", fetchCalls)
+	}
+}
+
+func TestListModelsIncludesCLIManageDefaultsAndUsesPreferredEndpointForQuota(t *testing.T) {
+	var quotaHosts []string
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.Path {
+			case "/v1internal:fetchAvailableModels":
+				if req.URL.Host == "preferred.test" {
+					return newHTTPResponse(http.StatusOK, `{"models":{"gemini-3.1-pro-preview":{},"gemini-3-flash-preview":{}}}`), nil
+				}
+				return newHTTPResponse(http.StatusInternalServerError, `{"error":"unexpected endpoint"}`), nil
+			case "/v1internal:retrieveUserQuota":
+				quotaHosts = append(quotaHosts, req.URL.Host)
+				if req.URL.Host == "preferred.test" {
+					return newHTTPResponse(http.StatusOK, `{"buckets":[]}`), nil
+				}
+				return newHTTPResponse(http.StatusInternalServerError, `{"error":"unexpected endpoint"}`), nil
+			default:
+				return newHTTPResponse(http.StatusNotFound, `{"error":"not found"}`), nil
+			}
+		}),
+	}
+	p := NewGeminiInternalProvider(GeminiInternalOptions{
+		Endpoints:  []string{"https://prod.test", "https://preferred.test"},
+		HTTPClient: client,
+	})
+
+	models, err := p.ListModels(context.Background(), core.Account{
+		ID:       "list-1",
+		Provider: "google-gemini-cli",
+		Token:    "token-1",
+		Metadata: core.Metadata{
+			"endpoint": "https://preferred.test",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ListModels failed: %v", err)
+	}
+
+	want := []string{
+		"gemini-2.5-flash",
+		"gemini-2.5-flash-lite",
+		"gemini-2.5-pro",
+		"gemini-3-flash-preview",
+		"gemini-3.1-pro-preview",
+	}
+	if !reflect.DeepEqual(models, want) {
+		t.Fatalf("models = %#v, want %#v", models, want)
+	}
+	if len(quotaHosts) != 1 || quotaHosts[0] != "preferred.test" {
+		t.Fatalf("quota hosts = %#v, want [preferred.test]", quotaHosts)
 	}
 }

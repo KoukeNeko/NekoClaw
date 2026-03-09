@@ -349,7 +349,7 @@ func (p *GeminiInternalProvider) fetchAllModels(ctx context.Context, account cor
 	}
 
 	// Also try quota endpoint for additional models.
-	quota, err := p.RetrieveQuota(ctx, account.Token)
+	quota, err := p.RetrieveQuota(ctx, account)
 	if err == nil {
 		for _, bucket := range quota.Buckets {
 			modelID := strings.TrimSpace(bucket.ModelID)
@@ -363,17 +363,9 @@ func (p *GeminiInternalProvider) fetchAllModels(ctx context.Context, account cor
 		}
 	}
 
-	// Always include well-known preview models that may not appear in the
-	// API response but are usable via the internal endpoint.
-	for _, knownModel := range []string{
-		"gemini-3.1-pro-preview",
-		"gemini-3-flash-preview",
-	} {
-		if _, exists := seen[knownModel]; !exists {
-			seen[knownModel] = struct{}{}
-			models = append(models, knownModel)
-		}
-	}
+	// Keep the UI aligned with Gemini CLI's model picker even when the
+	// internal APIs omit some generally-usable Gemini 2.5 / 3 preview IDs.
+	models = appendUniqueModelIDs(models, seen, geminiInternalWellKnownModels()...)
 
 	sort.Strings(models)
 	return models
@@ -647,35 +639,48 @@ func (p *GeminiInternalProvider) readGeminiSSEStream(ctx context.Context, resp *
 	ch <- GenerateStreamChunk{Done: true, Endpoint: endpoint, Usage: usage}
 }
 
-func (p *GeminiInternalProvider) RetrieveQuota(ctx context.Context, token string) (GeminiQuotaResponse, error) {
-	url := strings.TrimRight(defaultGeminiProdEndpoint, "/") + "/v1internal:retrieveUserQuota"
+func (p *GeminiInternalProvider) RetrieveQuota(ctx context.Context, account core.Account) (GeminiQuotaResponse, error) {
 	request, _ := json.Marshal(map[string]any{})
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(request))
-	if err != nil {
-		return GeminiQuotaResponse{}, err
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+token)
-	httpReq.Header.Set("Content-Type", "application/json")
+	endpointOrder := p.resolveEndpointOrder(account)
 
-	resp, err := p.client.Do(httpReq)
-	if err != nil {
-		return GeminiQuotaResponse{}, err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return GeminiQuotaResponse{}, &FailureError{
-			Reason:   classifyStatus(resp.StatusCode, string(body)),
-			Message:  strings.TrimSpace(string(body)),
-			Endpoint: defaultGeminiProdEndpoint,
-			Status:   resp.StatusCode,
+	var lastErr error
+	for _, endpoint := range endpointOrder {
+		url := strings.TrimRight(endpoint, "/") + "/v1internal:retrieveUserQuota"
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(request))
+		if err != nil {
+			return GeminiQuotaResponse{}, err
 		}
+		httpReq.Header.Set("Authorization", "Bearer "+account.Token)
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		resp, err := p.client.Do(httpReq)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			lastErr = &FailureError{
+				Reason:   classifyStatus(resp.StatusCode, string(body)),
+				Message:  strings.TrimSpace(string(body)),
+				Endpoint: endpoint,
+				Status:   resp.StatusCode,
+			}
+			continue
+		}
+		var quota GeminiQuotaResponse
+		if err := json.Unmarshal(body, &quota); err != nil {
+			lastErr = err
+			continue
+		}
+		return quota, nil
 	}
-	var quota GeminiQuotaResponse
-	if err := json.Unmarshal(body, &quota); err != nil {
-		return GeminiQuotaResponse{}, err
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("retrieveUserQuota failed on all configured endpoints")
 	}
-	return quota, nil
+	return GeminiQuotaResponse{}, lastErr
 }
 
 func (p *GeminiInternalProvider) discoverPreferredModelNoCache(
@@ -699,7 +704,7 @@ func (p *GeminiInternalProvider) discoverPreferredModelNoCache(
 		}
 	}
 
-	quota, err := p.RetrieveQuota(ctx, account.Token)
+	quota, err := p.RetrieveQuota(ctx, account)
 	if err == nil {
 		modelIDs := make([]string, 0, len(quota.Buckets))
 		for _, bucket := range quota.Buckets {
@@ -1039,6 +1044,31 @@ func pickPreferredGeminiModel(modelIDs []string) (string, bool) {
 	// Keep deterministic fallback if only unknown IDs are available.
 	sort.Strings(normalized)
 	return normalized[0], true
+}
+
+func appendUniqueModelIDs(models []string, seen map[string]struct{}, modelIDs ...string) []string {
+	for _, modelID := range modelIDs {
+		trimmed := strings.TrimSpace(modelID)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		models = append(models, trimmed)
+	}
+	return models
+}
+
+func geminiInternalWellKnownModels() []string {
+	return []string{
+		"gemini-3.1-pro-preview",
+		"gemini-3-flash-preview",
+		"gemini-2.5-pro",
+		"gemini-2.5-flash",
+		"gemini-2.5-flash-lite",
+	}
 }
 
 func (p *GeminiInternalProvider) resolveEndpointOrder(account core.Account) []string {
