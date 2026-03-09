@@ -295,75 +295,79 @@ function PerformanceOverview({
 }: {
   performance: UsageSummaryPerformance;
 }) {
-  const topCards = [
-    {
-      label: "總處理 TOKEN 數",
-      value: formatOptionalTokens(performance.processed_prompt_tokens),
-      desc: "Prompt-side total for new requests",
-    },
-    {
-      label: "緩存 TOKEN 數",
-      value: formatOptionalTokens(performance.cached_tokens),
-      desc: "Cache-hit tokens only",
-    },
-    {
-      label: "緩存效率",
-      value: formatOptionalPercent(performance.cache_efficiency),
-      desc: "cached / processed prompt tokens",
-    },
-  ];
+  const metricCards = [
+    performance.cached_tokens != null
+      ? {
+          label: "緩存 TOKEN 數",
+          value: formatOptionalTokens(performance.cached_tokens),
+          desc: "Cache-hit tokens only",
+        }
+      : null,
+    performance.cache_efficiency != null
+      ? {
+          label: "緩存效率",
+          value: formatOptionalPercent(performance.cache_efficiency),
+          desc: "cached / processed prompt tokens",
+        }
+      : null,
+    performance.prompt_tokens_per_second != null
+      ? {
+          label: "提示詞處理（不含緩存）",
+          value: formatOptionalRate(performance.prompt_tokens_per_second),
+          desc: "Prompt throughput without cache hits",
+        }
+      : null,
+    performance.output_tokens_per_second != null
+      ? {
+          label: "Token 生成",
+          value: formatOptionalRate(performance.output_tokens_per_second),
+          desc: "Assistant output throughput",
+        }
+      : null,
+  ].filter((item): item is NonNullable<typeof item> => item !== null);
+
+  if (metricCards.length === 0) {
+    return null;
+  }
 
   return (
-    <div className="space-y-4">
-      <div className="grid gap-4 xl:grid-cols-3">
-        {topCards.map((item) => (
+    <div className="card border border-base-300 bg-base-100 shadow-sm">
+      <div className="card-body gap-5">
+        <div className="space-y-2">
+          <h3 className="card-title text-lg">效能概覽</h3>
+          <p className="text-sm leading-relaxed text-base-content/60">
+            只顯示能從新 request 推算的快取與速度指標，避免和下方用量總覽重複。
+          </p>
+        </div>
+
+        <div
+          className={`grid gap-4 ${
+            metricCards.length > 1 ? "md:grid-cols-2 xl:grid-cols-4" : ""
+          }`}
+        >
+          {metricCards.map((item) => (
           <div
             key={item.label}
-            className="card border border-base-300 bg-base-100 shadow-sm"
+            className="rounded-box border border-base-300 bg-base-200/45"
           >
-            <div className="card-body items-center justify-center gap-4 px-6 py-8 text-center">
-              <div className="text-xs uppercase tracking-[0.24em] text-base-content/42">
+            <div className="flex h-full min-h-[11rem] flex-col justify-between gap-4 px-5 py-5">
+              <div className="text-[11px] uppercase tracking-[0.22em] text-base-content/42">
                 {item.label}
               </div>
-              <div className="text-5xl font-semibold tracking-tight tabular-nums text-base-content/90">
+              <div className="text-4xl font-semibold tracking-tight tabular-nums text-base-content/90">
                 {item.value}
               </div>
-              <div className="text-xs text-base-content/55">{item.desc}</div>
+              <div className="text-xs leading-relaxed text-base-content/55">
+                {item.desc}
+              </div>
             </div>
           </div>
         ))}
-      </div>
-
-      <div className="card border border-base-300 bg-base-100 shadow-sm">
-        <div className="card-body gap-0 p-0">
-          <div className="flex items-center gap-3 border-b border-base-300 px-5 py-4">
-            <div className="text-sm font-semibold tracking-wide text-base-content/82">
-              平均速度
-            </div>
-          </div>
-          <div className="grid md:grid-cols-2">
-            <div className="space-y-3 px-5 py-6 md:border-r md:border-base-300">
-              <div className="text-sm font-medium text-base-content/58">
-                提示詞處理（不含緩存）
-              </div>
-              <div className="text-4xl font-semibold tracking-tight tabular-nums text-base-content/90">
-                {formatOptionalRate(performance.prompt_tokens_per_second)}
-              </div>
-            </div>
-            <div className="space-y-3 px-5 py-6">
-              <div className="text-sm font-medium text-base-content/58">
-                Token 生成
-              </div>
-              <div className="text-4xl font-semibold tracking-tight tabular-nums text-base-content/90">
-                {formatOptionalRate(performance.output_tokens_per_second)}
-              </div>
-            </div>
-          </div>
         </div>
-      </div>
 
-      <div className="rounded-box border border-base-300 bg-base-100 px-4 py-3 text-sm text-base-content/58">
-        快取與速度指標只統計含效能欄位的新 request。舊紀錄不回填，缺值顯示 —。
+        <div className="rounded-box border border-base-300 bg-base-200/35 px-4 py-3 text-sm text-base-content/58">
+          快取欄位只會在 provider 有回傳對應資料時顯示；舊紀錄不回填。
+        </div>
       </div>
     </div>
   );
