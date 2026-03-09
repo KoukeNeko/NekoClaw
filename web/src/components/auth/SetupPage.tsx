@@ -84,7 +84,7 @@ export function SetupPage() {
                   <legend className="fieldset-legend">Setup Token</legend>
                   <input
                     type="text"
-                    className="input input-bordered w-full font-mono text-sm"
+                    className="input input-bordered w-full font-mono text-sm outline-none focus:outline-none focus:ring-0 focus-visible:outline-none focus:shadow-none"
                     value={token}
                     readOnly
                     spellCheck={false}
@@ -98,7 +98,7 @@ export function SetupPage() {
                   <legend className="fieldset-legend">管理員密碼</legend>
                   <input
                     type="password"
-                    className="input input-bordered w-full"
+                    className="input input-bordered w-full outline-none focus:outline-none focus:ring-0 focus-visible:outline-none focus:shadow-none"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                     autoComplete="new-password"
@@ -113,7 +113,7 @@ export function SetupPage() {
                   <legend className="fieldset-legend">再次輸入密碼</legend>
                   <input
                     type="password"
-                    className="input input-bordered w-full"
+                    className="input input-bordered w-full outline-none focus:outline-none focus:ring-0 focus-visible:outline-none focus:shadow-none"
                     value={confirmPassword}
                     onChange={(event) => setConfirmPassword(event.target.value)}
                     autoComplete="new-password"
