@@ -145,6 +145,23 @@ export function LoginPage() {
               <div className="alert alert-info">
                 <span>若這是第一次啟動，請使用 console 輸出的 setup URL 完成初始化。</span>
               </div>
+
+              <div className="rounded-box border border-warning/35 bg-warning/12 p-4 text-base-content shadow-sm">
+                <div className="space-y-2 text-sm leading-relaxed">
+                  <div className="font-semibold">忘記密碼時如何重設</div>
+                  <div>
+                    到服務主機刪除 <span className="font-mono">security-state.json</span> 後重啟{" "}
+                    <span className="font-mono">web</span> mode，server 會重新輸出 setup URL。
+                  </div>
+                  <div className="text-base-content/80">
+                    預設路徑：
+                    <span className="font-mono"> ~/.nekoclaw/auth/security-state.json</span>。
+                    若有設定 <span className="font-mono">--auth-dir</span> 或{" "}
+                    <span className="font-mono">NEKOCLAW_AUTH_DIR</span>，請改刪除該目錄下的{" "}
+                    <span className="font-mono">security-state.json</span>。
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

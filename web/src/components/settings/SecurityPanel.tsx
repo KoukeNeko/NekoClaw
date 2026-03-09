@@ -465,7 +465,7 @@ export function SecurityPanel() {
                       <span className="label-text">目前密碼</span>
                       <input
                         type="password"
-                        className="input input-bordered w-full"
+                        className="input input-bordered w-full outline-none focus:outline-none focus:ring-0 focus-visible:outline-none focus:shadow-none"
                         value={currentPassword}
                         onChange={(event) => setCurrentPassword(event.target.value)}
                         autoComplete="current-password"
@@ -476,7 +476,7 @@ export function SecurityPanel() {
                       <span className="label-text">新密碼</span>
                       <input
                         type="password"
-                        className="input input-bordered w-full"
+                        className="input input-bordered w-full outline-none focus:outline-none focus:ring-0 focus-visible:outline-none focus:shadow-none"
                         value={newPassword}
                         onChange={(event) => setNewPassword(event.target.value)}
                         autoComplete="new-password"
@@ -487,7 +487,7 @@ export function SecurityPanel() {
                       <span className="label-text">再次輸入新密碼</span>
                       <input
                         type="password"
-                        className="input input-bordered w-full"
+                        className="input input-bordered w-full outline-none focus:outline-none focus:ring-0 focus-visible:outline-none focus:shadow-none"
                         value={confirmPassword}
                         onChange={(event) => setConfirmPassword(event.target.value)}
                         autoComplete="new-password"
@@ -506,6 +506,25 @@ export function SecurityPanel() {
                         ) : null}
                         更新密碼
                       </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-box border border-warning/35 bg-warning/12 p-4 text-base-content shadow-sm">
+                  <div className="space-y-2 text-sm leading-relaxed">
+                    <div className="font-semibold">忘記密碼時如何重設</div>
+                    <div>
+                      目前沒有線上 recovery flow。請到服務主機刪除{" "}
+                      <span className="font-mono">security-state.json</span>，再重啟{" "}
+                      <span className="font-mono">web</span> mode，server 會重新輸出 setup URL。
+                    </div>
+                    <div className="text-base-content/80">
+                      預設路徑：
+                      <span className="font-mono"> ~/.nekoclaw/auth/security-state.json</span>。
+                      若有設定 <span className="font-mono">--auth-dir</span> 或{" "}
+                      <span className="font-mono">NEKOCLAW_AUTH_DIR</span>，請改刪除該目錄下的{" "}
+                      <span className="font-mono">security-state.json</span>。重設後，現有 browser
+                      session 也會失效。
                     </div>
                   </div>
                 </div>
