@@ -1760,7 +1760,7 @@ export function BackupPanel() {
           if (busyAction === "import") event.preventDefault();
         }}
       >
-        <div className="modal-box max-w-5xl space-y-6">
+        <div className="modal-box h-[90vh] max-h-none w-[90vw] max-w-none space-y-6 px-6 py-6 md:px-8 md:py-8">
           <div className="flex items-start justify-between gap-4">
             <div>
               <h3 className="text-2xl font-semibold">匯入備份檔</h3>
@@ -1777,205 +1777,233 @@ export function BackupPanel() {
 
           {importDialog ? (
             <>
-              <div className="rounded-box border border-base-300 bg-base-100 p-4">
-                <h4 className="text-lg font-semibold">檔案資訊</h4>
-                <div className="mt-4 grid gap-4 md:grid-cols-3">
-                  <div>
-                    <div className="text-xs uppercase tracking-wide text-base-content/50">File</div>
-                    <div className="mt-1 font-medium">{importDialog.file.name}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs uppercase tracking-wide text-base-content/50">Size</div>
-                    <div className="mt-1 font-medium">{formatBytes(importDialog.file.size)}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs uppercase tracking-wide text-base-content/50">MIME Type</div>
-                    <div className="mt-1 font-medium">{fileMimeType(importDialog.file)}</div>
-                  </div>
-                </div>
-                {importDialog.job ? (
-                  <div className="mt-4 border-t border-base-300 pt-4">
-                    <div className="text-xs uppercase tracking-wide text-base-content/50">Job ID</div>
-                    <div className="mt-1 font-mono text-sm">{importDialog.job.job_id}</div>
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="rounded-box border border-base-300 bg-base-100 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <h4 className="text-lg font-semibold">目前狀態</h4>
-                  <div className="text-sm font-medium">{importProgressValue(importDialog)}%</div>
-                </div>
-                <p className="mt-3 text-sm text-base-content/70">
-                  {importPhaseDescription(
-                    importDialog,
-                    activeImportStep,
-                    activeImportSubstep,
-                  )}
-                </p>
-                <progress
-                  className={`progress mt-4 h-3 w-full ${importPhaseProgressClass(importDialog.phase)}`}
-                  value={importProgressValue(importDialog)}
-                  max={100}
-                />
-                {importDialog.phase === "processing" && importDialog.job ? (
-                  <div className="mt-3 grid gap-3 text-xs text-base-content/55 md:grid-cols-3">
-                    <div>
-                      <span className="font-medium text-base-content/70">Stage</span>
-                      <div className="mt-1 font-mono">{importDialog.job.stage}</div>
-                    </div>
-                    <div>
-                      <span className="font-medium text-base-content/70">Substage</span>
-                      <div className="mt-1 font-mono">{importDialog.job.substage || "-"}</div>
-                    </div>
-                    <div>
-                      <span className="font-medium text-base-content/70">Updated</span>
-                      <div className="mt-1">{formatDateTime(importDialog.job.updated_at)}</div>
-                    </div>
-                  </div>
-                ) : null}
-                <div className="mt-4 space-y-3">
-                  {importSteps.map((step) => (
-                    <div key={step.title} className="rounded-box border border-base-300 bg-base-200 px-4 py-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="font-medium">{step.title}</div>
-                        <div className={`badge badge-sm ${importStepBadgeClass(step.status)}`}>
-                          {importStepLabel(step.status)}
+              <div className="grid gap-6 xl:grid-cols-[minmax(280px,0.82fr)_minmax(0,1.45fr)_minmax(320px,0.95fr)]">
+                <div className="space-y-4">
+                  <div className="rounded-box border border-base-300 bg-base-100 p-4">
+                    <h4 className="text-lg font-semibold">檔案資訊</h4>
+                    <div className="mt-4 space-y-4">
+                      <div>
+                        <div className="text-xs uppercase tracking-wide text-base-content/50">File</div>
+                        <div className="mt-1 break-all text-lg font-semibold leading-snug">
+                          {importDialog.file.name}
                         </div>
                       </div>
-                      <p className="mt-2 text-sm text-base-content/60">{step.detail}</p>
-                      {step.substeps && step.substeps.length > 0 ? (
-                        <div className="mt-3 rounded-box border border-base-300/70 bg-base-100/70 p-3">
-                          <div className="flex items-center justify-between gap-3 text-xs text-base-content/55">
-                            <span>
-                              {step.substeps.filter((substep) => substep.status === "done").length} /{" "}
-                              {step.substeps.length}
-                            </span>
-                          </div>
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {step.substeps.map((substep) => (
-                              <div
-                                key={`${step.title}-${substep.title}`}
-                                className={`badge gap-1 px-2 py-2 text-[11px] ${importStepBadgeClass(substep.status)}`}
-                                title={substep.detail}
-                              >
-                                <span>{substep.title}</span>
-                                <span>{importStepLabel(substep.status)}</span>
-                              </div>
-                            ))}
-                          </div>
-                          <p className="mt-3 text-xs text-base-content/60">
-                            {step.substeps.find(
-                              (substep) =>
-                                substep.status === "active" || substep.status === "error",
-                            )?.detail ??
-                              step.substeps[step.substeps.length - 1]?.detail}
-                          </p>
-                          <div className="mt-3 flex items-center gap-2">
-                            {step.substeps.map((substep) => (
-                              <div
-                                key={`${step.title}-${substep.title}-rail`}
-                                className={`h-1.5 flex-1 rounded-full ${importStepRailClass(substep.status)}`}
-                              />
-                            ))}
-                          </div>
+                      <div className="grid gap-4">
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">Size</div>
+                          <div className="mt-1 font-medium">{formatBytes(importDialog.file.size)}</div>
                         </div>
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">MIME Type</div>
+                          <div className="mt-1 font-medium">{fileMimeType(importDialog.file)}</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-box border border-base-300 bg-base-100 p-4">
+                    <h4 className="text-lg font-semibold">工作資訊</h4>
+                    <div className="mt-4 grid gap-4">
+                      <div>
+                        <div className="text-xs uppercase tracking-wide text-base-content/50">Phase</div>
+                        <div className="mt-1">{importPhaseLabel(importDialog.phase)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs uppercase tracking-wide text-base-content/50">Upload</div>
+                        <div className="mt-1 font-medium">
+                          {formatBytes(importDialog.upload.loaded)} / {formatBytes(importDialog.upload.total)}
+                        </div>
+                      </div>
+                      {importDialog.job ? (
+                        <>
+                          <div>
+                            <div className="text-xs uppercase tracking-wide text-base-content/50">Job ID</div>
+                            <div className="mt-1 break-all font-mono text-sm">{importDialog.job.job_id}</div>
+                          </div>
+                          <div>
+                            <div className="text-xs uppercase tracking-wide text-base-content/50">Stage</div>
+                            <div className="mt-1 font-mono text-sm">{importDialog.job.stage}</div>
+                          </div>
+                          <div>
+                            <div className="text-xs uppercase tracking-wide text-base-content/50">Substage</div>
+                            <div className="mt-1 font-mono text-sm">{importDialog.job.substage || "-"}</div>
+                          </div>
+                          <div>
+                            <div className="text-xs uppercase tracking-wide text-base-content/50">Updated</div>
+                            <div className="mt-1">{formatDateTime(importDialog.job.updated_at)}</div>
+                          </div>
+                        </>
                       ) : null}
                     </div>
-                  ))}
+                  </div>
                 </div>
-                {importDialog.job?.events && importDialog.job.events.length > 0 ? (
-                  <div className="mt-4 rounded-box border border-base-300/70 bg-base-100/70 p-3">
-                    <div className="text-xs font-medium uppercase tracking-wide text-base-content/50">
-                      最近事件
+
+                <div className="space-y-4">
+                  <div className="rounded-box border border-base-300 bg-base-100 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <h4 className="text-lg font-semibold">目前狀態</h4>
+                      <div className="text-sm font-medium">{importProgressValue(importDialog)}%</div>
                     </div>
-                    <div className="mt-3 space-y-2">
-                      {importDialog.job.events.slice(-5).map((event) => (
-                        <div
-                          key={`${event.at}-${event.message}`}
-                          className="flex items-start justify-between gap-3 text-sm"
-                        >
-                          <span className="text-base-content/70">{event.message}</span>
-                          <span className="shrink-0 text-xs text-base-content/50">
-                            {formatDateTime(event.at)}
-                          </span>
+                    <p className="mt-3 text-sm text-base-content/70">
+                      {importPhaseDescription(
+                        importDialog,
+                        activeImportStep,
+                        activeImportSubstep,
+                      )}
+                    </p>
+                    <progress
+                      className={`progress mt-4 h-3 w-full ${importPhaseProgressClass(importDialog.phase)}`}
+                      value={importProgressValue(importDialog)}
+                      max={100}
+                    />
+                  </div>
+
+                  <div className="rounded-box border border-base-300 bg-base-100 p-4">
+                    <div className="space-y-3">
+                      {importSteps.map((step) => (
+                        <div key={step.title} className="rounded-box border border-base-300 bg-base-200 px-4 py-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="font-medium">{step.title}</div>
+                            <div className={`badge badge-sm ${importStepBadgeClass(step.status)}`}>
+                              {importStepLabel(step.status)}
+                            </div>
+                          </div>
+                          <p className="mt-2 text-sm text-base-content/60">{step.detail}</p>
+                          {step.substeps && step.substeps.length > 0 ? (
+                            <div className="mt-3 rounded-box border border-base-300/70 bg-base-100/70 p-3">
+                              <div className="flex items-center justify-between gap-3 text-xs text-base-content/55">
+                                <span>
+                                  {step.substeps.filter((substep) => substep.status === "done").length} /{" "}
+                                  {step.substeps.length}
+                                </span>
+                              </div>
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                {step.substeps.map((substep) => (
+                                  <div
+                                    key={`${step.title}-${substep.title}`}
+                                    className={`badge gap-1 px-2 py-2 text-[11px] ${importStepBadgeClass(substep.status)}`}
+                                    title={substep.detail}
+                                  >
+                                    <span>{substep.title}</span>
+                                    <span>{importStepLabel(substep.status)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                              <p className="mt-3 text-xs text-base-content/60">
+                                {step.substeps.find(
+                                  (substep) =>
+                                    substep.status === "active" || substep.status === "error",
+                                )?.detail ??
+                                  step.substeps[step.substeps.length - 1]?.detail}
+                              </p>
+                              <div className="mt-3 flex items-center gap-2">
+                                {step.substeps.map((substep) => (
+                                  <div
+                                    key={`${step.title}-${substep.title}-rail`}
+                                    className={`h-1.5 flex-1 rounded-full ${importStepRailClass(substep.status)}`}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
                       ))}
                     </div>
                   </div>
-                ) : null}
-              </div>
-
-              {importDialog.imported ? (
-                <div className="rounded-box border border-success/30 bg-success/5 p-4">
-                  <h4 className="text-lg font-semibold">成功結果</h4>
-                  <div className="mt-4 grid gap-4 md:grid-cols-2">
-                    <div>
-                      <div className="text-xs uppercase tracking-wide text-base-content/50">File Name</div>
-                      <div className="mt-1 font-medium">{importDialog.imported.file_name}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs uppercase tracking-wide text-base-content/50">Backup ID</div>
-                      <div className="mt-1 font-mono text-sm">{importDialog.imported.backup_id}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs uppercase tracking-wide text-base-content/50">Source</div>
-                      <div className="mt-1">{sourceLabel(importDialog.imported.source)}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs uppercase tracking-wide text-base-content/50">Created At</div>
-                      <div className="mt-1">{formatDateTime(importDialog.imported.created_at)}</div>
-                    </div>
-                    <div>
-                      <div className="text-xs uppercase tracking-wide text-base-content/50">Encryption</div>
-                      <div className="mt-1">ZIP AES-256</div>
-                    </div>
-                    <div>
-                      <div className="text-xs uppercase tracking-wide text-base-content/50">Size</div>
-                      <div className="mt-1">{formatBytes(importDialog.imported.size_bytes)}</div>
-                    </div>
-                  </div>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {importDialog.imported.components.map((component) => (
-                      <div key={component.key} className="badge badge-outline gap-1 px-3 py-3">
-                        <span>{component.label}</span>
-                        <span className="font-mono text-[11px] opacity-70">
-                          {component.item_count}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
                 </div>
-              ) : null}
 
-              {importDialog.error ? (
-                <div className="rounded-box border border-error/30 bg-error/5 p-4">
-                  <h4 className="text-lg font-semibold">失敗細節</h4>
-                  <div className="mt-4 grid gap-4 md:grid-cols-3">
-                    <div>
-                      <div className="text-xs uppercase tracking-wide text-base-content/50">HTTP Status</div>
-                      <div className="mt-1 font-medium">
-                        {importDialog.error.statusCode || "-"}
+                <div className="space-y-4">
+                  {importDialog.job?.events && importDialog.job.events.length > 0 ? (
+                    <div className="rounded-box border border-base-300 bg-base-100 p-4">
+                      <div className="text-lg font-semibold">最近事件</div>
+                      <div className="mt-4 space-y-3">
+                        {importDialog.job.events.slice(-6).map((event) => (
+                          <div
+                            key={`${event.at}-${event.message}`}
+                            className="flex items-start justify-between gap-3 text-sm"
+                          >
+                            <span className="text-base-content/70">{event.message}</span>
+                            <span className="shrink-0 text-xs text-base-content/50">
+                              {formatDateTime(event.at)}
+                            </span>
+                          </div>
+                        ))}
                       </div>
                     </div>
-                    <div>
-                      <div className="text-xs uppercase tracking-wide text-base-content/50">Error Code</div>
-                      <div className="mt-1 font-mono text-sm">
-                        {importDialog.error.code || "-"}
+                  ) : null}
+
+                  {importDialog.imported ? (
+                    <div className="rounded-box border border-success/30 bg-success/5 p-4">
+                      <h4 className="text-lg font-semibold">成功結果</h4>
+                      <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">File Name</div>
+                          <div className="mt-1 break-all font-medium">{importDialog.imported.file_name}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">Backup ID</div>
+                          <div className="mt-1 break-all font-mono text-sm">{importDialog.imported.backup_id}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">Source</div>
+                          <div className="mt-1">{sourceLabel(importDialog.imported.source)}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">Created At</div>
+                          <div className="mt-1">{formatDateTime(importDialog.imported.created_at)}</div>
+                        </div>
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">Encryption</div>
+                          <div className="mt-1">ZIP AES-256</div>
+                        </div>
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">Size</div>
+                          <div className="mt-1">{formatBytes(importDialog.imported.size_bytes)}</div>
+                        </div>
+                      </div>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {importDialog.imported.components.map((component) => (
+                          <div key={component.key} className="badge badge-outline gap-1 px-3 py-3">
+                            <span>{component.label}</span>
+                            <span className="font-mono text-[11px] opacity-70">
+                              {component.item_count}
+                            </span>
+                          </div>
+                        ))}
                       </div>
                     </div>
-                    <div>
-                      <div className="text-xs uppercase tracking-wide text-base-content/50">Message</div>
-                      <div className="mt-1">{importDialog.error.message}</div>
-                    </div>
-                  </div>
-                  {importErrorHint(importDialog.error) ? (
-                    <div className="alert alert-warning mt-4">
-                      <span>{importErrorHint(importDialog.error)}</span>
+                  ) : null}
+
+                  {importDialog.error ? (
+                    <div className="rounded-box border border-error/30 bg-error/5 p-4">
+                      <h4 className="text-lg font-semibold">失敗細節</h4>
+                      <div className="mt-4 grid gap-4">
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">HTTP Status</div>
+                          <div className="mt-1 font-medium">
+                            {importDialog.error.statusCode || "-"}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">Error Code</div>
+                          <div className="mt-1 break-all font-mono text-sm">
+                            {importDialog.error.code || "-"}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-xs uppercase tracking-wide text-base-content/50">Message</div>
+                          <div className="mt-1">{importDialog.error.message}</div>
+                        </div>
+                      </div>
+                      {importErrorHint(importDialog.error) ? (
+                        <div className="alert alert-warning mt-4">
+                          <span>{importErrorHint(importDialog.error)}</span>
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
-              ) : null}
+              </div>
             </>
           ) : null}
 
