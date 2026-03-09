@@ -139,6 +139,30 @@ function importPhaseBadgeClass(phase: ImportPhase): string {
   }
 }
 
+function importPhaseProgressClass(phase: ImportPhase): string {
+  switch (phase) {
+    case "success":
+      return "progress-success";
+    case "error":
+      return "progress-error";
+    default:
+      return "progress-warning";
+  }
+}
+
+function importPhaseDescription(phase: ImportPhase): string {
+  switch (phase) {
+    case "ready":
+      return "已接收檔案，準備送出匯入請求。";
+    case "running":
+      return "正在上傳、驗證 archive，並寫入目前備份庫。";
+    case "success":
+      return "備份檔已通過驗證並寫入備份庫。";
+    case "error":
+      return "匯入在驗證或寫入階段失敗。";
+  }
+}
+
 function fileMimeType(file: File): string {
   return file.type.trim() || "application/octet-stream";
 }
@@ -155,6 +179,7 @@ export function BackupPanel() {
   const [restorePrompt, setRestorePrompt] = useState<BackupEntry | null>(null);
   const [restoreNotice, setRestoreNotice] = useState<string | null>(null);
   const [importDialog, setImportDialog] = useState<ImportDialogState | null>(null);
+  const [importProgress, setImportProgress] = useState(0);
 
   async function syncBackups(showLoading = false, preferredID = "") {
     if (showLoading) setLoading(true);
@@ -192,6 +217,34 @@ export function BackupPanel() {
     const timer = window.setTimeout(() => setStatus(null), 2200);
     return () => window.clearTimeout(timer);
   }, [status]);
+
+  useEffect(() => {
+    if (!importDialog) {
+      setImportProgress(0);
+      return undefined;
+    }
+
+    if (importDialog.phase === "ready") {
+      setImportProgress(12);
+      return undefined;
+    }
+
+    if (importDialog.phase === "running") {
+      setImportProgress((current) => Math.max(current, 18));
+      const timer = window.setInterval(() => {
+        setImportProgress((current) => {
+          if (current >= 92) return current;
+          if (current < 48) return Math.min(92, current + 8);
+          if (current < 76) return Math.min(92, current + 4);
+          return Math.min(92, current + 2);
+        });
+      }, 240);
+      return () => window.clearInterval(timer);
+    }
+
+    setImportProgress(100);
+    return undefined;
+  }, [importDialog]);
 
   useEffect(() => {
     if (!importDialog || importDialog.phase !== "ready") return undefined;
@@ -887,6 +940,17 @@ export function BackupPanel() {
                   <h4 className="text-sm font-semibold uppercase tracking-wide text-base-content/55">
                     目前狀態
                   </h4>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3 text-xs text-base-content/60">
+                      <span>{importPhaseDescription(importDialog.phase)}</span>
+                      <span className="font-mono">{importProgress}%</span>
+                    </div>
+                    <progress
+                      className={`progress w-full ${importPhaseProgressClass(importDialog.phase)}`}
+                      value={importProgress}
+                      max="100"
+                    />
+                  </div>
                   {importDialog.phase === "running" || importDialog.phase === "ready" ? (
                     <div className="alert alert-warning">
                       <span className="loading loading-spinner loading-sm" />
