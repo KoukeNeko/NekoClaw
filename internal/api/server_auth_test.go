@@ -83,7 +83,7 @@ func TestGeminiOAuthManualFlowEndToEnd(t *testing.T) {
 	}
 }
 
-func TestOAuthCallbackStateMismatch(t *testing.T) {
+func TestOAuthCallbackStateMismatchShowsManualRecovery(t *testing.T) {
 	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterProvider(fakeGeminiProvider{})
 	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
@@ -113,8 +113,14 @@ func TestOAuthCallbackStateMismatch(t *testing.T) {
 
 	url := "/oauth2callback?code=abc&state=wrong-" + state
 	callbackResp := performJSONRequest(t, handler, http.MethodGet, url, "")
-	if callbackResp.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for state mismatch, got %d body=%s", callbackResp.Code, callbackResp.Body.String())
+	if callbackResp.Code != http.StatusOK {
+		t.Fatalf("expected 200 for manual recovery page, got %d body=%s", callbackResp.Code, callbackResp.Body.String())
+	}
+	if !strings.Contains(callbackResp.Body.String(), "Manual Complete Required") {
+		t.Fatalf("expected manual recovery page, got body=%s", callbackResp.Body.String())
+	}
+	if !strings.Contains(callbackResp.Body.String(), "wrong-"+state) {
+		t.Fatalf("expected callback state to be shown, got body=%s", callbackResp.Body.String())
 	}
 }
 

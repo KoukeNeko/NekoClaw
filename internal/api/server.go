@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"io/fs"
 	"net/http"
@@ -210,7 +211,7 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 			errors.Is(err, auth.ErrStateNotFound) ||
 			errors.Is(err, auth.ErrStateExpired) ||
 			errors.Is(err, auth.ErrStateConsumed) {
-			respondPlain(w, http.StatusBadRequest, "State mismatch. Please restart OAuth login.")
+			respondGeminiOAuthManualRecovery(w, r)
 			return
 		}
 		if errors.Is(err, provider.ErrProjectDiscoveryFailed) {
@@ -1521,6 +1522,49 @@ func respondGeminiProjectDiscoveryError(w http.ResponseWriter, err error) {
 			"Could not discover or provision a Google Cloud project. Re-run Gemini OAuth or ensure gemini CLI provisioning succeeded.",
 		),
 	)
+}
+
+func respondGeminiOAuthManualRecovery(w http.ResponseWriter, r *http.Request) {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	callbackURL := fmt.Sprintf("%s://%s%s", scheme, r.Host, r.URL.RequestURI())
+	body := fmt.Sprintf(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gemini OAuth Manual Complete</title>
+  <style>
+    body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #111827; color: #f3f4f6; margin: 0; padding: 24px; }
+    .card { max-width: 840px; margin: 0 auto; padding: 24px; border: 1px solid #374151; border-radius: 16px; background: #0f172a; }
+    h1 { margin: 0 0 12px; font-size: 24px; }
+    p { line-height: 1.6; color: #d1d5db; }
+    textarea { width: 100%%; min-height: 112px; margin-top: 8px; padding: 12px; border-radius: 12px; border: 1px solid #4b5563; background: #030712; color: #f9fafb; resize: vertical; }
+    code { color: #fde68a; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Manual Complete Required</h1>
+    <p>This callback could not be matched to the current NekoClaw instance. If you started Gemini OAuth from another tab, host, or deployment, paste the full callback URL below back into that original NekoClaw page and click <code>完成 Gemini OAuth</code>.</p>
+    <p><strong>Callback URL</strong></p>
+    <textarea readonly>%s</textarea>
+    <p><strong>Code</strong>: <code>%s</code></p>
+    <p><strong>State</strong>: <code>%s</code></p>
+    <p>If you did not start Gemini OAuth from another NekoClaw page, restart the login flow and use the latest callback URL.</p>
+  </div>
+</body>
+</html>`,
+		html.EscapeString(callbackURL),
+		html.EscapeString(strings.TrimSpace(r.URL.Query().Get("code"))),
+		html.EscapeString(strings.TrimSpace(r.URL.Query().Get("state"))),
+	)
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(body))
 }
 
 func respondPlain(w http.ResponseWriter, status int, message string) {
