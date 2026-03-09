@@ -108,12 +108,11 @@ API endpoints:
 - `mode`: `auto` (default), `local`, `remote`
 - `redirect_uri`: override callback URI (useful in `remote` mode)
 
-OAuth client env:
+OAuth client source:
 
-- `OPENCLAW_GEMINI_OAUTH_CLIENT_ID`
-- `OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET`
-- `GEMINI_CLI_OAUTH_CLIENT_ID`
-- `GEMINI_CLI_OAUTH_CLIENT_SECRET`
+- Preferred: installed `gemini` CLI (NekoClaw extracts the OAuth client config from it)
+- Deprecated fallback: `OPENCLAW_GEMINI_OAUTH_CLIENT_ID` / `OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET`
+- Deprecated compatibility aliases: `GEMINI_CLI_OAUTH_CLIENT_ID` / `GEMINI_CLI_OAUTH_CLIENT_SECRET`
 
 Runtime OAuth env:
 

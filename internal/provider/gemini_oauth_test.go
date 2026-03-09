@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -23,18 +25,81 @@ func newHTTPResponse(status int, body string) *http.Response {
 	}
 }
 
-func TestCompleteOAuthFailsWhenLoadCodeAssistUnavailable(t *testing.T) {
-	t.Setenv("OPENCLAW_GEMINI_OAUTH_CLIENT_ID", "test-client-id")
-	t.Setenv("OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET", "test-client-secret")
-
+func resetOAuthClientConfigCache() {
 	oauthClientMu.Lock()
 	cachedOAuthClientConfig = nil
 	oauthClientMu.Unlock()
-	t.Cleanup(func() {
-		oauthClientMu.Lock()
-		cachedOAuthClientConfig = nil
-		oauthClientMu.Unlock()
-	})
+}
+
+func writeFakeGeminiCLI(t *testing.T, clientID, clientSecret string) string {
+	t.Helper()
+
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	oauthDir := filepath.Join(
+		root,
+		"lib",
+		"node_modules",
+		"@google",
+		"gemini-cli",
+		"node_modules",
+		"@google",
+		"gemini-cli-core",
+		"dist",
+		"src",
+		"code_assist",
+	)
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin dir: %v", err)
+	}
+	if err := os.MkdirAll(oauthDir, 0o755); err != nil {
+		t.Fatalf("mkdir oauth dir: %v", err)
+	}
+
+	binPath := filepath.Join(binDir, "gemini")
+	if err := os.WriteFile(binPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake gemini binary: %v", err)
+	}
+	oauthPath := filepath.Join(oauthDir, "oauth2.js")
+	content := []byte("client_id=" + clientID + "\nclient_secret=" + clientSecret + "\n")
+	if err := os.WriteFile(oauthPath, content, 0o644); err != nil {
+		t.Fatalf("write fake oauth config: %v", err)
+	}
+	return binDir
+}
+
+func TestResolveOAuthClientConfigPrefersGeminiCLIOverEnv(t *testing.T) {
+	t.Setenv("OPENCLAW_GEMINI_OAUTH_CLIENT_ID", "111111111111-env.apps.googleusercontent.com")
+	t.Setenv("OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET", "GOCSPX-env-secret")
+	binDir := writeFakeGeminiCLI(
+		t,
+		"222222222222-cli.apps.googleusercontent.com",
+		"GOCSPX-cli-secret",
+	)
+	t.Setenv("PATH", binDir)
+
+	resetOAuthClientConfigCache()
+	t.Cleanup(resetOAuthClientConfigCache)
+
+	cfg, err := resolveOAuthClientConfig()
+	if err != nil {
+		t.Fatalf("resolve oauth client config: %v", err)
+	}
+	if cfg.ClientID != "222222222222-cli.apps.googleusercontent.com" {
+		t.Fatalf("expected cli client id, got %q", cfg.ClientID)
+	}
+	if cfg.ClientSecret != "GOCSPX-cli-secret" {
+		t.Fatalf("expected cli client secret, got %q", cfg.ClientSecret)
+	}
+}
+
+func TestCompleteOAuthFailsWhenLoadCodeAssistUnavailable(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("OPENCLAW_GEMINI_OAUTH_CLIENT_ID", "test-client-id")
+	t.Setenv("OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET", "test-client-secret")
+
+	resetOAuthClientConfigCache()
+	t.Cleanup(resetOAuthClientConfigCache)
 
 	client := &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -72,18 +137,13 @@ func TestCompleteOAuthFailsWhenLoadCodeAssistUnavailable(t *testing.T) {
 }
 
 func TestCompleteOAuthAllowsSecurityPolicyPathWithEnvProject(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	t.Setenv("OPENCLAW_GEMINI_OAUTH_CLIENT_ID", "test-client-id")
 	t.Setenv("OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET", "test-client-secret")
 	t.Setenv("GOOGLE_CLOUD_PROJECT", "env-project-1")
 
-	oauthClientMu.Lock()
-	cachedOAuthClientConfig = nil
-	oauthClientMu.Unlock()
-	t.Cleanup(func() {
-		oauthClientMu.Lock()
-		cachedOAuthClientConfig = nil
-		oauthClientMu.Unlock()
-	})
+	resetOAuthClientConfigCache()
+	t.Cleanup(resetOAuthClientConfigCache)
 
 	client := &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {

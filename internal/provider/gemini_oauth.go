@@ -24,6 +24,7 @@ const (
 )
 
 var (
+	// Deprecated fallback for environments that cannot install gemini-cli yet.
 	googleClientIDEnvKeys     = []string{"OPENCLAW_GEMINI_OAUTH_CLIENT_ID", "GEMINI_CLI_OAUTH_CLIENT_ID"}
 	googleClientSecretEnvKeys = []string{"OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET", "GEMINI_CLI_OAUTH_CLIENT_SECRET"}
 	googleScopes              = []string{
@@ -247,6 +248,12 @@ func resolveOAuthClientConfig() (oauthClientConfig, error) {
 		return *cachedOAuthClientConfig, nil
 	}
 
+	config, err := extractOAuthClientConfigFromGeminiCLI()
+	if err == nil {
+		cachedOAuthClientConfig = &config
+		return *cachedOAuthClientConfig, nil
+	}
+
 	clientID := resolveFirstNonEmptyEnv(googleClientIDEnvKeys)
 	clientSecret := resolveFirstNonEmptyEnv(googleClientSecretEnvKeys)
 	if clientID != "" {
@@ -254,14 +261,8 @@ func resolveOAuthClientConfig() (oauthClientConfig, error) {
 		return *cachedOAuthClientConfig, nil
 	}
 
-	config, err := extractOAuthClientConfigFromGeminiCLI()
-	if err == nil {
-		cachedOAuthClientConfig = &config
-		return *cachedOAuthClientConfig, nil
-	}
-
 	return oauthClientConfig{}, fmt.Errorf(
-		"gemini oauth client not found; install gemini-cli or set OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
+		"gemini oauth client not found; install gemini-cli (env fallback is deprecated)",
 	)
 }
 
