@@ -163,6 +163,9 @@ func (m *Manager) Import(reader io.Reader) (Entry, error) {
 	if _, err := copyDirectory(filepath.Join(extractedRoot, "payload"), filepath.Join(tempRoot, "payload"), nil); err != nil {
 		return Entry{}, fmt.Errorf("%w: %v", ErrInvalidArchive, err)
 	}
+	if err := removeLegacySecurityPayload(filepath.Join(tempRoot, "payload")); err != nil {
+		return Entry{}, err
+	}
 	manifest.Components, err = buildComponentSummaries(filepath.Join(tempRoot, "payload"))
 	if err != nil {
 		return Entry{}, err
@@ -199,6 +202,7 @@ func (m *Manager) List() ([]Entry, error) {
 		if err := validateManifest(manifest); err != nil {
 			continue
 		}
+		manifest = normalizeManifestComponents(manifest)
 		info, err := entry.Info()
 		if err != nil {
 			continue
@@ -299,9 +303,6 @@ func (m *Manager) snapshotCurrentState(snapshotRoot string, manifest Manifest) (
 	if _, err := m.exportAuth(filepath.Join(payloadRoot, "auth", "store.json")); err != nil {
 		return Manifest{}, err
 	}
-	if _, err := copyFileIfExists(m.securityStatePath, filepath.Join(payloadRoot, "security", "security-state.json")); err != nil {
-		return Manifest{}, err
-	}
 	if _, err := copyDirectory(m.sessionsDir, filepath.Join(payloadRoot, "sessions"), nil); err != nil {
 		return Manifest{}, err
 	}
@@ -392,9 +393,6 @@ func (m *Manager) applySnapshot(snapshotRoot string, manifest Manifest) error {
 		return err
 	}
 	if err := m.importAuth(filepath.Join(payloadRoot, "auth", "store.json")); err != nil {
-		return err
-	}
-	if err := replaceFile(filepath.Join(payloadRoot, "security", "security-state.json"), m.securityStatePath); err != nil {
 		return err
 	}
 	if err := replaceDirectory(filepath.Join(payloadRoot, "sessions"), m.sessionsDir); err != nil {
@@ -535,7 +533,6 @@ func buildComponentSummaries(payloadRoot string) ([]ComponentSummary, error) {
 	components := []ComponentSummary{
 		{Key: ComponentConfig, Label: "Config", ItemCount: boolCount(fileExists(filepath.Join(payloadRoot, "config", "config.json")))},
 		{Key: ComponentAuth, Label: "Auth", ItemCount: boolCount(fileExists(filepath.Join(payloadRoot, "auth", "store.json")))},
-		{Key: ComponentSecurity, Label: "Security", ItemCount: boolCount(fileExists(filepath.Join(payloadRoot, "security", "security-state.json")))},
 		{Key: ComponentSessions, Label: "Sessions", ItemCount: sessionsCount},
 		{Key: ComponentMemory, Label: "Memory", ItemCount: memoryCount},
 		{Key: ComponentMCP, Label: "MCP", ItemCount: mcpConfigsCount + boolCount(fileExists(filepath.Join(payloadRoot, "mcp", "mcp-builtin.json")))},
@@ -543,6 +540,30 @@ func buildComponentSummaries(payloadRoot string) ([]ComponentSummary, error) {
 		{Key: ComponentBindings, Label: "Bindings", ItemCount: bindingsCount},
 	}
 	return components, nil
+}
+
+func normalizeManifestComponents(manifest Manifest) Manifest {
+	filtered := make([]ComponentSummary, 0, len(manifest.Components))
+	for _, component := range manifest.Components {
+		if component.Key == ComponentSecurity {
+			continue
+		}
+		filtered = append(filtered, component)
+	}
+	manifest.Components = filtered
+	return manifest
+}
+
+func removeLegacySecurityPayload(payloadRoot string) error {
+	payloadRoot = strings.TrimSpace(payloadRoot)
+	if payloadRoot == "" {
+		return nil
+	}
+	securityRoot := filepath.Join(payloadRoot, "security")
+	if err := os.RemoveAll(securityRoot); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 func newManifest(source string, createdAt time.Time) Manifest {
@@ -560,7 +581,6 @@ func newManifest(source string, createdAt time.Time) Manifest {
 		Components: []ComponentSummary{
 			{Key: ComponentConfig, Label: "Config"},
 			{Key: ComponentAuth, Label: "Auth"},
-			{Key: ComponentSecurity, Label: "Security"},
 			{Key: ComponentSessions, Label: "Sessions"},
 			{Key: ComponentMemory, Label: "Memory"},
 			{Key: ComponentMCP, Label: "MCP"},
@@ -585,13 +605,12 @@ func validateManifest(manifest Manifest) error {
 	if !manifest.ContainsSecrets || manifest.RestoreMode != RestoreModeReplace || !manifest.RestartRequired {
 		return ErrInvalidManifest
 	}
-	if len(manifest.Components) != 8 {
+	if len(manifest.Components) < 7 || len(manifest.Components) > 8 {
 		return ErrInvalidManifest
 	}
 	expected := map[string]struct{}{
 		ComponentConfig:   {},
 		ComponentAuth:     {},
-		ComponentSecurity: {},
 		ComponentSessions: {},
 		ComponentMemory:   {},
 		ComponentMCP:      {},
@@ -599,6 +618,9 @@ func validateManifest(manifest Manifest) error {
 		ComponentBindings: {},
 	}
 	for _, component := range manifest.Components {
+		if component.Key == ComponentSecurity {
+			continue
+		}
 		if _, ok := expected[component.Key]; !ok {
 			return ErrInvalidManifest
 		}

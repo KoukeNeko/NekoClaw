@@ -73,6 +73,9 @@ func TestManagerCreateListAndRestoreRoundTrip(t *testing.T) {
 		if strings.Contains(name, "search.db") {
 			t.Fatalf("archive unexpectedly included search.db: %q", name)
 		}
+		if strings.Contains(name, "security-state.json") {
+			t.Fatalf("archive unexpectedly included security-state.json: %q", name)
+		}
 	}
 
 	backups, err := env.manager.List()
@@ -92,7 +95,7 @@ func TestManagerCreateListAndRestoreRoundTrip(t *testing.T) {
 	removePathForTest(t, filepath.Join(env.root, "mcp"))
 	removePathForTest(t, filepath.Join(env.root, "personas"))
 	removePathForTest(t, filepath.Join(env.root, "state"))
-	removePathForTest(t, filepath.Join(env.root, "security-state.json"))
+	writeFile(t, filepath.Join(env.root, "auth", "security-state.json"), `{"password_hash":"current-hash"}`)
 	writeFile(t, filepath.Join(env.root, "memory", "orphan.md"), "orphan")
 
 	restoreResult, err := env.manager.Restore(entry.BackupID)
@@ -121,6 +124,9 @@ func TestManagerCreateListAndRestoreRoundTrip(t *testing.T) {
 	}
 	if got := strings.TrimSpace(readFile(t, filepath.Join(env.root, "state", "discord-bindings.json"))); !strings.Contains(got, "discord:alpha") {
 		t.Fatalf("discord binding not restored: %s", got)
+	}
+	if got := strings.TrimSpace(readFile(t, filepath.Join(env.root, "auth", "security-state.json"))); !strings.Contains(got, "current-hash") {
+		t.Fatalf("security-state.json should have been kept, got %s", got)
 	}
 }
 
@@ -205,6 +211,48 @@ func TestManagerRestoreRollsBackOnFailure(t *testing.T) {
 	}
 	if credential.AccessToken != "current-secret" {
 		t.Fatalf("credential.AccessToken = %q, want %q", credential.AccessToken, "current-secret")
+	}
+}
+
+func TestManagerRestoreLegacyArchiveKeepsCurrentSecurityState(t *testing.T) {
+	env := newTestEnv(t)
+	seedState(t, env, "backup-secret", "Asia/Taipei")
+
+	entry, err := env.manager.Create()
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	archivePath := filepath.Join(env.root, "backups", entry.FileName)
+	legacyRoot := t.TempDir()
+	if err := extractZipToDir(archivePath, legacyRoot); err != nil {
+		t.Fatalf("extractZipToDir failed: %v", err)
+	}
+	writeFile(t, filepath.Join(legacyRoot, "payload", "security", "security-state.json"), `{"password_hash":"legacy-hash"}`)
+	manifest, err := readManifest(filepath.Join(legacyRoot, "manifest.json"))
+	if err != nil {
+		t.Fatalf("readManifest failed: %v", err)
+	}
+	manifest.Components = append(manifest.Components, ComponentSummary{
+		Key:       ComponentSecurity,
+		Label:     "Security",
+		ItemCount: 1,
+	})
+	if err := writeManifest(filepath.Join(legacyRoot, "manifest.json"), manifest); err != nil {
+		t.Fatalf("writeManifest failed: %v", err)
+	}
+	if err := zipSnapshot(legacyRoot, archivePath); err != nil {
+		t.Fatalf("zipSnapshot failed: %v", err)
+	}
+
+	writeFile(t, filepath.Join(env.root, "auth", "security-state.json"), `{"password_hash":"current-hash"}`)
+
+	if _, err := env.manager.Restore(entry.BackupID); err != nil {
+		t.Fatalf("Restore failed: %v", err)
+	}
+
+	if got := strings.TrimSpace(readFile(t, filepath.Join(env.root, "auth", "security-state.json"))); !strings.Contains(got, "current-hash") {
+		t.Fatalf("legacy restore should keep current security-state.json, got %s", got)
 	}
 }
 

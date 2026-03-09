@@ -812,7 +812,7 @@ export function BackupPanel() {
                       <div className="badge badge-warning">含機密資料</div>
                     </div>
                     <p className="mt-2 text-sm text-base-content/70">
-                      這份備份會完整覆蓋目前磁碟上的持久化狀態，還原完成後必須手動重啟服務。
+                      這份備份會覆蓋目前磁碟上的主要持久化狀態，但不會覆蓋目前 Web 後台密碼；還原完成後必須手動重啟服務。
                     </p>
                   </div>
 
@@ -828,7 +828,7 @@ export function BackupPanel() {
 
                 <div className="alert alert-warning">
                   <span>
-                    還原會替換 config、auth、sessions、memory、MCP、personas 與 bot bindings。
+                    還原會替換 config、auth、sessions、memory、MCP、personas 與 bot bindings，但會保留目前後台密碼。
                   </span>
                 </div>
 
@@ -935,7 +935,8 @@ export function BackupPanel() {
               <p>
                 你即將還原 <span className="font-medium">{restorePrompt.file_name}</span>。
               </p>
-              <p>這會完整覆蓋目前的持久化資料，包含 auth、memory、sessions、MCP 與 bot bindings。</p>
+              <p>這會覆蓋目前的持久化資料，包含 auth、memory、sessions、MCP 與 bot bindings。</p>
+              <p>目前 Web 後台密碼會保留，不會被這份備份覆蓋回舊值。</p>
               <p>還原完成後不會熱套用；你需要手動重啟 NekoClaw。</p>
             </div>
             <div className="modal-action">
