@@ -464,15 +464,37 @@ func equalHosts(left, right string) bool {
 }
 
 func clientKeyFromRequest(r *http.Request) string {
-	if forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0]); forwarded != "" {
-		return forwarded
-	}
-	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err == nil && host != "" {
-		return host
-	}
-	if remote := strings.TrimSpace(r.RemoteAddr); remote != "" {
-		return remote
+	for _, raw := range []string{
+		r.Header.Get("CF-Connecting-IP"),
+		r.Header.Get("True-Client-IP"),
+		forwardedHeaderValue(r.Header.Get("Forwarded"), "for"),
+		r.Header.Get("X-Real-IP"),
+		r.Header.Get("X-Forwarded-For"),
+		r.RemoteAddr,
+	} {
+		if client := normalizeClientKey(raw); client != "" {
+			return client
+		}
 	}
 	return "unknown"
+}
+
+func normalizeClientKey(raw string) string {
+	value := strings.Trim(strings.TrimSpace(strings.Split(raw, ",")[0]), `"`)
+	if value == "" {
+		return ""
+	}
+	if strings.EqualFold(value, "unknown") || strings.HasPrefix(value, "_") {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(value); err == nil && host != "" {
+		return strings.Trim(host, "[]")
+	}
+	if strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]") {
+		value = strings.Trim(value, "[]")
+	}
+	if ip := net.ParseIP(value); ip != nil {
+		return ip.String()
+	}
+	return value
 }
