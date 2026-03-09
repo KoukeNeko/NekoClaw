@@ -137,7 +137,7 @@ func (p *GoogleAIStudioProvider) GenerateToolTurn(ctx context.Context, req ToolT
 			"parts": []map[string]any{{"text": systemInstruction}},
 		}
 	}
-	if genConfig := buildGeminiGenerationConfig(modelID, req.Generation); genConfig != nil {
+	if genConfig := buildGeminiGenerationConfig(p.ID(), modelID, req.Generation); genConfig != nil {
 		payload["generationConfig"] = genConfig
 	}
 
@@ -224,7 +224,7 @@ func (p *GoogleAIStudioProvider) Generate(ctx context.Context, req GenerateReque
 	payload := map[string]any{
 		"contents": toAIStudioContents(req.Messages),
 	}
-	if genConfig := buildGeminiGenerationConfig(modelID, req.Generation); genConfig != nil {
+	if genConfig := buildGeminiGenerationConfig(p.ID(), modelID, req.Generation); genConfig != nil {
 		payload["generationConfig"] = genConfig
 	}
 	raw, _ := json.Marshal(payload)
@@ -305,7 +305,7 @@ func (p *GoogleAIStudioProvider) GenerateStream(ctx context.Context, req Generat
 	payload := map[string]any{
 		"contents": toAIStudioContents(req.Messages),
 	}
-	if genConfig := buildGeminiGenerationConfig(modelID, req.Generation); genConfig != nil {
+	if genConfig := buildGeminiGenerationConfig(p.ID(), modelID, req.Generation); genConfig != nil {
 		payload["generationConfig"] = genConfig
 	}
 	raw, _ := json.Marshal(payload)

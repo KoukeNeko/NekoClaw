@@ -50,8 +50,16 @@ func TestLoadConfig_DefaultsSecurityConfigWhenMissing(t *testing.T) {
 func TestLoadAndSaveConfig_RoundTripsDefaultSelection(t *testing.T) {
 	configDir := t.TempDir()
 	want := AppConfig{
-		DefaultProvider: "google-gemini-cli",
-		DefaultModel:    "gemini-2.5-pro",
+		DefaultProvider:     "google-gemini-cli",
+		DefaultModel:        "gemini-2.5-pro",
+		DefaultThinkingMode: ThinkingModeHigh,
+		Fallbacks: []FallbackEntry{
+			{
+				Provider:     "google-ai-studio",
+				Model:        "gemini-2.5-flash",
+				ThinkingMode: ThinkingModeMedium,
+			},
+		},
 	}
 
 	if err := SaveConfig(configDir, want); err != nil {
@@ -68,5 +76,47 @@ func TestLoadAndSaveConfig_RoundTripsDefaultSelection(t *testing.T) {
 	}
 	if got.DefaultModel != want.DefaultModel {
 		t.Fatalf("default_model = %q, want %q", got.DefaultModel, want.DefaultModel)
+	}
+	if got.DefaultThinkingMode != want.DefaultThinkingMode {
+		t.Fatalf("default_thinking_mode = %q, want %q", got.DefaultThinkingMode, want.DefaultThinkingMode)
+	}
+	if len(got.Fallbacks) != 1 {
+		t.Fatalf("fallbacks len = %d, want 1", len(got.Fallbacks))
+	}
+	if got.Fallbacks[0].ThinkingMode != ThinkingModeMedium {
+		t.Fatalf("fallback thinking_mode = %q, want %q", got.Fallbacks[0].ThinkingMode, ThinkingModeMedium)
+	}
+}
+
+func TestLoadConfig_SanitizesInvalidThinkingModeToAuto(t *testing.T) {
+	configDir := t.TempDir()
+	if err := SaveConfig(configDir, AppConfig{
+		DefaultProvider:     "google-gemini-cli",
+		DefaultModel:        "gemini-2.5-pro",
+		DefaultThinkingMode: ThinkingMode("LOUD"),
+		Fallbacks: []FallbackEntry{
+			{
+				Provider:     "google-ai-studio",
+				Model:        "gemini-2.5-flash",
+				ThinkingMode: ThinkingMode("turbo"),
+			},
+		},
+	}); err != nil {
+		t.Fatalf("SaveConfig failed: %v", err)
+	}
+
+	got, err := LoadConfig(configDir)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if got.DefaultThinkingMode != ThinkingModeAuto {
+		t.Fatalf("default_thinking_mode = %q, want %q", got.DefaultThinkingMode, ThinkingModeAuto)
+	}
+	if len(got.Fallbacks) != 1 {
+		t.Fatalf("fallbacks len = %d, want 1", len(got.Fallbacks))
+	}
+	if got.Fallbacks[0].ThinkingMode != ThinkingModeAuto {
+		t.Fatalf("fallback thinking_mode = %q, want %q", got.Fallbacks[0].ThinkingMode, ThinkingModeAuto)
 	}
 }

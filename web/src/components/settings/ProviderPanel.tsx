@@ -8,9 +8,17 @@ import {
   setDefaultProvider,
   setFallbacks,
 } from "@/api/client";
-import type { FallbackEntry } from "@/api/types";
+import type { FallbackEntry, ThinkingMode } from "@/api/types";
 
 const MAX_FALLBACKS = 5;
+const THINKING_OPTIONS: ThinkingMode[] = [
+  "auto",
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+];
 
 type StatusTone = "success" | "error" | "info";
 type StatusState = { tone: StatusTone; message: string } | null;
@@ -23,6 +31,24 @@ function statusClass(tone: StatusTone): string {
       return "alert-error";
     default:
       return "alert-info";
+  }
+}
+
+function isGeminiProvider(providerName: string): boolean {
+  return providerName === "google-ai-studio" || providerName === "google-gemini-cli";
+}
+
+function normalizeThinkingMode(mode?: string | null): ThinkingMode {
+  const normalized = (mode || "").trim().toLowerCase();
+  switch (normalized) {
+    case "off":
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+      return normalized as ThinkingMode;
+    default:
+      return "auto";
   }
 }
 
@@ -65,8 +91,10 @@ async function loadModelOptions(
 export function ProviderPanel() {
   const provider = useAppStore((s) => s.provider);
   const model = useAppStore((s) => s.model);
+  const thinkingMode = useAppStore((s) => s.thinkingMode);
   const storeSetProvider = useAppStore((s) => s.setProvider);
   const storeSetModel = useAppStore((s) => s.setModel);
+  const storeSetThinkingMode = useAppStore((s) => s.setThinkingMode);
 
   const [providers, setProviders] = useState<string[]>([]);
   const [models, setModels] = useState<string[]>([]);
@@ -94,8 +122,20 @@ export function ProviderPanel() {
       setProviders(loadedProviders);
       storeSetProvider(defaultProvider.provider);
       storeSetModel(defaultProvider.model);
+      storeSetThinkingMode(
+        isGeminiProvider(defaultProvider.provider)
+          ? normalizeThinkingMode(defaultProvider.thinking_mode)
+          : "auto",
+      );
       setModels(loadedModels.primaryModels);
-      setFallbacksList(loadedFallbacks);
+      setFallbacksList(
+        loadedFallbacks.map((entry) => ({
+          ...entry,
+          thinking_mode: isGeminiProvider(entry.provider)
+            ? normalizeThinkingMode(entry.thinking_mode)
+            : "auto",
+        })),
+      );
       setFallbackModels(loadedModels.fallbackModelMap);
       return true;
     } catch {
@@ -120,10 +160,18 @@ export function ProviderPanel() {
     setBusyAction("provider");
     storeSetProvider(newProvider);
     storeSetModel("default");
+    const nextThinkingMode = isGeminiProvider(newProvider)
+      ? normalizeThinkingMode(thinkingMode)
+      : "auto";
+    storeSetThinkingMode(nextThinkingMode);
     setModels([]);
 
     try {
-      await setDefaultProvider({ provider: newProvider, model: "default" });
+      await setDefaultProvider({
+        provider: newProvider,
+        model: "default",
+        thinking_mode: nextThinkingMode,
+      });
       const { primaryModels } = await loadModelOptions(newProvider, []);
       setModels(primaryModels);
       setStatus({ tone: "success", message: "已切換 Provider" });
@@ -139,10 +187,33 @@ export function ProviderPanel() {
     storeSetModel(newModel);
 
     try {
-      await setDefaultProvider({ provider, model: newModel });
+      await setDefaultProvider({
+        provider,
+        model: newModel,
+        thinking_mode: normalizeThinkingMode(thinkingMode),
+      });
       setStatus({ tone: "success", message: "已切換 Model" });
     } catch {
       setStatus({ tone: "error", message: "切換 Model 失敗" });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleThinkingModeChange(nextThinkingMode: ThinkingMode) {
+    const normalized = isGeminiProvider(provider) ? nextThinkingMode : "auto";
+    setBusyAction("thinking");
+    storeSetThinkingMode(normalized);
+
+    try {
+      await setDefaultProvider({
+        provider,
+        model: model || "default",
+        thinking_mode: normalized,
+      });
+      setStatus({ tone: "success", message: "已更新思考程度" });
+    } catch {
+      setStatus({ tone: "error", message: "更新思考程度失敗" });
     } finally {
       setBusyAction("");
     }
@@ -153,12 +224,20 @@ export function ProviderPanel() {
     newProvider: string,
   ) {
     const updated = [...fallbacks];
+    const thinkingMode = isGeminiProvider(newProvider)
+      ? normalizeThinkingMode(updated[index]?.thinking_mode)
+      : "auto";
     if (!updated[index]) {
-      updated[index] = { provider: newProvider, model: "default" };
+      updated[index] = {
+        provider: newProvider,
+        model: "default",
+        thinking_mode: thinkingMode,
+      };
     } else {
       updated[index] = {
         provider: newProvider,
         model: newProvider ? "default" : "",
+        thinking_mode: newProvider ? thinkingMode : "auto",
       };
     }
 
@@ -187,6 +266,29 @@ export function ProviderPanel() {
     if (!updated[index]) return;
 
     updated[index] = { ...updated[index], model: newModel };
+    setBusyAction(`fallback-${index}`);
+    setFallbacksList(updated);
+
+    try {
+      await saveFallbacks(updated, "Fallback 已更新");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleFallbackThinkingModeChange(
+    index: number,
+    nextThinkingMode: ThinkingMode,
+  ) {
+    const updated = [...fallbacks];
+    if (!updated[index]) return;
+
+    updated[index] = {
+      ...updated[index],
+      thinking_mode: updated[index].provider
+        ? nextThinkingMode
+        : "auto",
+    };
     setBusyAction(`fallback-${index}`);
     setFallbacksList(updated);
 
@@ -235,6 +337,7 @@ export function ProviderPanel() {
   const configuredFallbacks = fallbacks.filter((entry) => entry.provider).length;
   const providerDisabled = loading || providers.length === 0 || busyAction !== "";
   const modelDisabled = providerDisabled || !provider;
+  const thinkingDisabled = providerDisabled || !provider || !isGeminiProvider(provider);
 
   if (loading) {
     return (
@@ -455,6 +558,33 @@ export function ProviderPanel() {
                     </p>
                   )}
                 </div>
+
+                {isGeminiProvider(provider) && (
+                  <div className="space-y-2">
+                    <label className="label p-0">
+                      <span className="label-text font-medium">思考程度</span>
+                    </label>
+                    <select
+                      className="select select-bordered w-full focus:outline-0"
+                      value={normalizeThinkingMode(thinkingMode)}
+                      onChange={(e) =>
+                        void handleThinkingModeChange(
+                          normalizeThinkingMode(e.target.value),
+                        )
+                      }
+                      disabled={thinkingDisabled}
+                    >
+                      {THINKING_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-base-content/60">
+                      僅套用於 Gemini。`auto` 交由模型自行決定，其他值會依實際模型映射成 level 或 budget。
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -480,6 +610,10 @@ export function ProviderPanel() {
                 const rowBusy = busyAction === `fallback-${index}`;
                 const fallbackProvider = fallback?.provider || "";
                 const fallbackModel = fallback?.model || "default";
+                const fallbackThinkingMode = normalizeThinkingMode(
+                  fallback?.thinking_mode,
+                );
+                const showFallbackThinking = isGeminiProvider(fallbackProvider);
 
                 return (
                   <div
@@ -546,6 +680,31 @@ export function ProviderPanel() {
                           ))}
                         </select>
                       </div>
+
+                      {showFallbackThinking && (
+                        <div className="space-y-2">
+                          <label className="label p-0">
+                            <span className="label-text font-medium">思考程度</span>
+                          </label>
+                          <select
+                            className="select select-bordered w-full focus:outline-0"
+                            value={fallbackThinkingMode}
+                            onChange={(e) =>
+                              void handleFallbackThinkingModeChange(
+                                index,
+                                normalizeThinkingMode(e.target.value),
+                              )
+                            }
+                            disabled={!fallbackProvider || busyAction !== ""}
+                          >
+                            {THINKING_OPTIONS.map((option) => (
+                              <option key={option} value={option}>
+                                {option}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
 
                       <p className="text-xs text-base-content/60">
                         {fallbackProvider

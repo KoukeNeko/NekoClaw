@@ -63,6 +63,7 @@ type Service struct {
 	toolsConfig       core.ToolsConfig     // persisted tool settings (web_search API key, etc.)
 	defaultProvider   string               // current default provider (synced from the Web UI)
 	defaultModel      string               // current default model (synced from the Web UI)
+	defaultThinking   core.ThinkingMode    // current default Gemini thinking mode
 	configDir         string               // directory for config.json persistence
 	toolRuntime       *tooling.Runtime
 	mcpManager        *mcp.Manager
@@ -98,6 +99,7 @@ func NewService(opts ServiceOptions) *Service {
 		memoryDir:         opts.MemoryDir,
 		searchIndex:       opts.SearchIndex,
 		preferredProfiles: map[string]string{},
+		defaultThinking:   core.ThinkingModeAuto,
 	}
 	policy := tooling.DefaultPolicy(opts.WorkspaceRoot)
 	execCfg := tooling.ExecutorConfig{
@@ -530,7 +532,7 @@ func (s *Service) RegisterPool(pool *core.AccountPool) {
 func (s *Service) SetFallbacks(entries []core.FallbackEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.fallbacks = append([]core.FallbackEntry(nil), entries...)
+	s.fallbacks = normalizeFallbackEntries(entries)
 }
 
 // GetFallbacks returns a copy of the current fallback chain.
@@ -550,13 +552,14 @@ func (s *Service) SetConfigDir(dir string) {
 // SaveFallbacks persists the given fallback entries to config.json and updates
 // the in-memory fallback chain atomically.
 func (s *Service) SaveFallbacks(entries []core.FallbackEntry) error {
+	normalized := normalizeFallbackEntries(entries)
 	s.mu.Lock()
 	configDir := s.configDir
-	s.fallbacks = append([]core.FallbackEntry(nil), entries...)
+	s.fallbacks = normalized
 	s.mu.Unlock()
 
 	cfg, _ := core.LoadConfig(configDir)
-	cfg.Fallbacks = entries
+	cfg.Fallbacks = normalized
 	return core.SaveConfig(configDir, cfg)
 }
 
@@ -694,13 +697,26 @@ func (s *Service) GetDefaultModel() string {
 	return s.defaultModel
 }
 
+// GetDefaultThinkingMode returns the current default Gemini thinking mode.
+func (s *Service) GetDefaultThinkingMode() core.ThinkingMode {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return core.NormalizeThinkingMode(string(s.defaultThinking))
+}
+
 // SaveDefaultProviderConfig persists the default provider/model selection and
 // updates in-memory state.
-func (s *Service) SaveDefaultProviderConfig(providerID string, modelID string) error {
+func (s *Service) SaveDefaultProviderConfig(
+	providerID string,
+	modelID string,
+	thinkingMode core.ThinkingMode,
+) error {
 	providerID = strings.TrimSpace(providerID)
 	modelID = strings.TrimSpace(modelID)
+	thinkingMode = core.NormalizeThinkingMode(string(thinkingMode))
 	if providerID == "" {
 		modelID = ""
+		thinkingMode = core.ThinkingModeAuto
 	} else if modelID == "" {
 		modelID = "default"
 	}
@@ -709,11 +725,13 @@ func (s *Service) SaveDefaultProviderConfig(providerID string, modelID string) e
 	configDir := s.configDir
 	s.defaultProvider = providerID
 	s.defaultModel = modelID
+	s.defaultThinking = thinkingMode
 	s.mu.Unlock()
 
 	appCfg, _ := core.LoadConfig(configDir)
 	appCfg.DefaultProvider = providerID
 	appCfg.DefaultModel = modelID
+	appCfg.DefaultThinkingMode = thinkingMode
 	return core.SaveConfig(configDir, appCfg)
 }
 
@@ -729,6 +747,13 @@ func (s *Service) SetDefaultModel(m string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.defaultModel = strings.TrimSpace(m)
+}
+
+// SetDefaultThinkingMode updates the current default Gemini thinking mode.
+func (s *Service) SetDefaultThinkingMode(mode core.ThinkingMode) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.defaultThinking = core.NormalizeThinkingMode(string(mode))
 }
 
 func (s *Service) SetAuthIntegration(manager *auth.GeminiOAuthManager, store *auth.Store) {
@@ -2493,14 +2518,24 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 
 	// Build provider+model chain: primary first, then configured fallbacks.
 	type fallbackCandidate struct {
-		provider string
-		model    string
+		provider     string
+		model        string
+		thinkingMode core.ThinkingMode
 	}
-	chain := []fallbackCandidate{{provider: providerID, model: modelID}}
+	primaryThinkingMode := s.GetDefaultThinkingMode()
+	chain := []fallbackCandidate{{
+		provider:     providerID,
+		model:        modelID,
+		thinkingMode: primaryThinkingMode,
+	}}
 	if runID == "" {
 		s.mu.RLock()
 		for _, fb := range s.fallbacks {
-			chain = append(chain, fallbackCandidate{provider: fb.Provider, model: fb.Model})
+			chain = append(chain, fallbackCandidate{
+				provider:     fb.Provider,
+				model:        fb.Model,
+				thinkingMode: core.NormalizeThinkingMode(string(fb.ThinkingMode)),
+			})
 		}
 		s.mu.RUnlock()
 	}
@@ -2522,6 +2557,7 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 			providerID:        candidate.provider,
 			modelID:           candidateModel,
 			isDefaultModel:    candidateIsDefault,
+			thinkingMode:      candidate.thinkingMode,
 			sessionID:         sessionID,
 			disableSession:    disableSession,
 			isFallback:        isFallback,
@@ -2622,14 +2658,24 @@ func (s *Service) HandleChatStream(ctx context.Context, req core.ChatRequest) <-
 
 		// Provider chain.
 		type fallbackCandidate struct {
-			provider string
-			model    string
+			provider     string
+			model        string
+			thinkingMode core.ThinkingMode
 		}
-		chain := []fallbackCandidate{{provider: providerID, model: modelID}}
+		primaryThinkingMode := s.GetDefaultThinkingMode()
+		chain := []fallbackCandidate{{
+			provider:     providerID,
+			model:        modelID,
+			thinkingMode: primaryThinkingMode,
+		}}
 		if runID == "" {
 			s.mu.RLock()
 			for _, fb := range s.fallbacks {
-				chain = append(chain, fallbackCandidate{provider: fb.Provider, model: fb.Model})
+				chain = append(chain, fallbackCandidate{
+					provider:     fb.Provider,
+					model:        fb.Model,
+					thinkingMode: core.NormalizeThinkingMode(string(fb.ThinkingMode)),
+				})
 			}
 			s.mu.RUnlock()
 		}
@@ -2652,6 +2698,7 @@ func (s *Service) HandleChatStream(ctx context.Context, req core.ChatRequest) <-
 				providerID:        candidate.provider,
 				modelID:           candidateModel,
 				isDefaultModel:    candidateIsDefault,
+				thinkingMode:      candidate.thinkingMode,
 				sessionID:         sessionID,
 				disableSession:    disableSession,
 				isFallback:        isFallback,
@@ -2718,6 +2765,7 @@ type attemptSingleProviderParams struct {
 	providerID        string
 	modelID           string
 	isDefaultModel    bool
+	thinkingMode      core.ThinkingMode
 	sessionID         string
 	disableSession    bool
 	isFallback        bool // true when this is a fallback provider, not the primary
@@ -2878,7 +2926,7 @@ func (s *Service) attemptSingleProvider(
 	}
 
 	// Inject system prompt: persona template (with embedded memory) or plain memory.
-	var generationParams *provider.GenerationParams
+	var baseGenerationParams *provider.GenerationParams
 	if activePersona := s.activePersona(); activePersona != nil {
 		rendered, renderErr := persona.RenderSystemPrompt(activePersona, memoryPrompt, providerID)
 		if renderErr != nil {
@@ -2890,7 +2938,7 @@ func (s *Service) attemptSingleProvider(
 			}
 			compressedMessages = append([]core.Message{systemMsg}, compressedMessages...)
 		}
-		generationParams = s.personaGenerationParams(activePersona)
+		baseGenerationParams = s.personaGenerationParams(activePersona)
 	} else if memoryPrompt != "" {
 		systemMsg := core.Message{
 			Role:    core.RoleSystem,
@@ -2920,6 +2968,18 @@ func (s *Service) attemptSingleProvider(
 	attemptLimit := len(pool.Snapshot())
 	if attemptLimit < 1 {
 		attemptLimit = 1
+	}
+
+	effectiveThinkingMode := core.NormalizeThinkingMode(string(params.thinkingMode))
+	if effectiveThinkingMode != core.ThinkingModeAuto && !providerSupportsThinkingMode(providerID) {
+		logService.Warnf(
+			"thinking mode ignored: provider=%s model=%s thinking_mode=%s reason=%s",
+			providerID,
+			modelID,
+			effectiveThinkingMode,
+			"provider_not_supported",
+		)
+		effectiveThinkingMode = core.ThinkingModeAuto
 	}
 
 	preferredProfile := s.preferredProfile(providerID)
@@ -2999,6 +3059,8 @@ func (s *Service) attemptSingleProvider(
 			}
 		}
 
+		attemptGenerationParams := withThinkingMode(baseGenerationParams, effectiveThinkingMode)
+
 		if params.enableTools {
 			toolProv, ok := prov.(provider.ToolCallingProvider)
 			if !ok || !toolProv.ToolCapabilities().SupportsTools {
@@ -3018,7 +3080,7 @@ func (s *Service) attemptSingleProvider(
 				Approvals:    params.toolApprovals,
 				Compressed:   compressed,
 				Compression:  compressionMeta,
-				Generation:   generationParams,
+				Generation:   attemptGenerationParams,
 				OnToolEvent: func(evt core.ToolEvent) {
 					switch evt.Phase {
 					case "requested":
@@ -3148,7 +3210,7 @@ func (s *Service) attemptSingleProvider(
 					Model:      attemptModelID,
 					Messages:   modelMessages,
 					Account:    account,
-					Generation: generationParams,
+					Generation: attemptGenerationParams,
 				})
 				if streamErr == nil {
 					var fullText strings.Builder
@@ -3260,7 +3322,7 @@ func (s *Service) attemptSingleProvider(
 			Model:      attemptModelID,
 			Messages:   modelMessages,
 			Account:    account,
-			Generation: generationParams,
+			Generation: attemptGenerationParams,
 		})
 		if err == nil {
 			responseElapsedMs := elapsedMs()
@@ -4381,4 +4443,47 @@ func (s *Service) personaGenerationParams(p *persona.Persona) *provider.Generati
 		FrequencyPenalty: gen.FrequencyPenalty,
 		PresencePenalty:  gen.PresencePenalty,
 	}
+}
+
+func providerSupportsThinkingMode(providerID string) bool {
+	switch strings.TrimSpace(providerID) {
+	case "google-ai-studio", "google-gemini-cli":
+		return true
+	default:
+		return false
+	}
+}
+
+func withThinkingMode(
+	base *provider.GenerationParams,
+	mode core.ThinkingMode,
+) *provider.GenerationParams {
+	mode = core.NormalizeThinkingMode(string(mode))
+	if mode == core.ThinkingModeAuto {
+		return base
+	}
+
+	next := &provider.GenerationParams{}
+	if base != nil {
+		*next = *base
+	}
+	next.ThinkingMode = &mode
+	return next
+}
+
+func normalizeFallbackEntries(entries []core.FallbackEntry) []core.FallbackEntry {
+	result := make([]core.FallbackEntry, 0, len(entries))
+	for _, entry := range entries {
+		entry.Provider = strings.TrimSpace(entry.Provider)
+		entry.Model = strings.TrimSpace(entry.Model)
+		entry.ThinkingMode = core.NormalizeThinkingMode(string(entry.ThinkingMode))
+		if entry.Provider == "" {
+			continue
+		}
+		if entry.Model == "" {
+			entry.Model = "default"
+		}
+		result = append(result, entry)
+	}
+	return result
 }

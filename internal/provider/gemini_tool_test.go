@@ -369,7 +369,7 @@ func TestExtractToolCallsFromGeminiResponse_InvalidJSON(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBuildGeminiGenerationConfig_Nil(t *testing.T) {
-	result := buildGeminiGenerationConfig("gemini-2.5-pro", nil)
+	result := buildGeminiGenerationConfig("google-ai-studio", "gemini-2.5-pro", nil)
 	if result != nil {
 		t.Errorf("expected nil, got %v", result)
 	}
@@ -386,7 +386,7 @@ func TestBuildGeminiGenerationConfig_WithValues(t *testing.T) {
 		FrequencyPenalty: &freq,
 		PresencePenalty:  &pres,
 	}
-	result := buildGeminiGenerationConfig("gemini-2.5-pro", gen)
+	result := buildGeminiGenerationConfig("google-ai-studio", "gemini-2.5-pro", gen)
 	if result == nil {
 		t.Fatal("expected non-nil config")
 	}
@@ -415,7 +415,7 @@ func TestBuildGeminiGenerationConfig_OmitsPenaltyForFlashLiteModels(t *testing.T
 		FrequencyPenalty: &freq,
 		PresencePenalty:  &pres,
 	}
-	result := buildGeminiGenerationConfig("models/gemini-3.1-flash-lite-preview", gen)
+	result := buildGeminiGenerationConfig("google-ai-studio", "models/gemini-3.1-flash-lite-preview", gen)
 	if result == nil {
 		t.Fatal("expected non-nil config")
 	}
@@ -435,9 +435,50 @@ func TestBuildGeminiGenerationConfig_OmitsPenaltyForFlashLiteModels(t *testing.T
 
 func TestBuildGeminiGenerationConfig_EmptyParams(t *testing.T) {
 	gen := &GenerationParams{}
-	result := buildGeminiGenerationConfig("gemini-2.5-pro", gen)
+	result := buildGeminiGenerationConfig("google-ai-studio", "gemini-2.5-pro", gen)
 	if result != nil {
 		t.Errorf("expected nil for empty params, got %v", result)
+	}
+}
+
+func TestBuildGeminiGenerationConfig_MapsThinkingBudgetForGemini25(t *testing.T) {
+	mode := core.ThinkingModeMedium
+	gen := &GenerationParams{ThinkingMode: &mode}
+	result := buildGeminiGenerationConfig("google-ai-studio", "gemini-2.5-pro", gen)
+	if result == nil {
+		t.Fatal("expected non-nil config")
+	}
+	thinkingConfig, _ := result["thinkingConfig"].(map[string]any)
+	if thinkingConfig == nil {
+		t.Fatal("expected thinkingConfig")
+	}
+	if thinkingConfig["thinkingBudget"] != 8192 {
+		t.Fatalf("thinkingBudget = %v, want 8192", thinkingConfig["thinkingBudget"])
+	}
+}
+
+func TestBuildGeminiGenerationConfig_MapsThinkingLevelForGemini3Flash(t *testing.T) {
+	mode := core.ThinkingModeOff
+	gen := &GenerationParams{ThinkingMode: &mode}
+	result := buildGeminiGenerationConfig("google-gemini-cli", "gemini-3-flash-preview", gen)
+	if result == nil {
+		t.Fatal("expected non-nil config")
+	}
+	thinkingConfig, _ := result["thinkingConfig"].(map[string]any)
+	if thinkingConfig == nil {
+		t.Fatal("expected thinkingConfig")
+	}
+	if thinkingConfig["thinkingLevel"] != "minimal" {
+		t.Fatalf("thinkingLevel = %v, want minimal", thinkingConfig["thinkingLevel"])
+	}
+}
+
+func TestBuildGeminiGenerationConfig_IgnoresUnsupportedThinkingOffForGemini25Pro(t *testing.T) {
+	mode := core.ThinkingModeOff
+	gen := &GenerationParams{ThinkingMode: &mode}
+	result := buildGeminiGenerationConfig("google-ai-studio", "gemini-2.5-pro", gen)
+	if result != nil {
+		t.Fatalf("expected nil config for unsupported off mode, got %v", result)
 	}
 }
 

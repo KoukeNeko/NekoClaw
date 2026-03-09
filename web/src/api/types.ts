@@ -50,7 +50,16 @@ export interface ToolEvent {
 export interface FallbackEntry {
   provider: string;
   model: string;
+  thinking_mode?: ThinkingMode;
 }
+
+export type ThinkingMode =
+  | "auto"
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high";
 
 export interface UsageInfo {
   input_tokens: number;
@@ -503,11 +512,13 @@ export interface ModelsResponse {
 export interface DefaultProviderResponse {
   provider: string;
   model: string;
+  thinking_mode: ThinkingMode;
 }
 
 export interface SetDefaultProviderRequest {
   provider: string;
   model: string;
+  thinking_mode?: ThinkingMode;
 }
 
 // ---------------------------------------------------------------------------

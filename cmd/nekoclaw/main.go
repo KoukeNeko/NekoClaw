@@ -463,6 +463,7 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	svc.SetDiscordConfig(appConfig.Discord)
 	svc.SetTelegramConfig(appConfig.Telegram)
 	svc.SetToolsConfig(appConfig.Tools)
+	svc.SetDefaultThinkingMode(appConfig.DefaultThinkingMode)
 	if appConfig.DefaultProvider != "" {
 		svc.SetDefaultProvider(appConfig.DefaultProvider)
 		svc.SetDefaultModel(appConfig.DefaultModel)
@@ -473,7 +474,7 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	} else {
 		// Default fallback: when primary accounts are exhausted, try google-ai-studio.
 		svc.SetFallbacks([]core.FallbackEntry{
-			{Provider: "google-ai-studio", Model: "default"},
+			{Provider: "google-ai-studio", Model: "default", ThinkingMode: core.ThinkingModeAuto},
 		})
 	}
 

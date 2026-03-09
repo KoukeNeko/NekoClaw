@@ -413,7 +413,7 @@ func extractToolCallsFromGeminiJSON(body []byte) geminiExtractResult {
 
 // buildGeminiGenerationConfig creates a generationConfig map from
 // GenerationParams, omitting fields that the selected Gemini model rejects.
-func buildGeminiGenerationConfig(model string, gen *GenerationParams) map[string]any {
+func buildGeminiGenerationConfig(providerID string, model string, gen *GenerationParams) map[string]any {
 	if gen == nil {
 		return nil
 	}
@@ -423,6 +423,9 @@ func buildGeminiGenerationConfig(model string, gen *GenerationParams) map[string
 	}
 	if gen.TopP != nil {
 		config["topP"] = *gen.TopP
+	}
+	if thinkingConfig := buildGeminiThinkingConfig(providerID, model, gen); thinkingConfig != nil {
+		config["thinkingConfig"] = thinkingConfig
 	}
 	if geminiModelSupportsPenalty(model) {
 		if gen.FrequencyPenalty != nil {
@@ -439,13 +442,129 @@ func buildGeminiGenerationConfig(model string, gen *GenerationParams) map[string
 }
 
 func geminiModelSupportsPenalty(model string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(model, "models/")))
+	normalized := normalizeGeminiModelID(model)
 	if normalized == "" {
 		return true
 	}
 	// Flash-lite variants reject presence/frequency penalty fields outright
 	// with "Penalty is not enabled for this model".
 	return !strings.Contains(normalized, "flash-lite")
+}
+
+func buildGeminiThinkingConfig(providerID string, model string, gen *GenerationParams) map[string]any {
+	if gen == nil || gen.ThinkingMode == nil {
+		return nil
+	}
+
+	mode := core.NormalizeThinkingMode(string(*gen.ThinkingMode))
+	if mode == core.ThinkingModeAuto {
+		return nil
+	}
+
+	normalized := normalizeGeminiModelID(model)
+	if normalized == "" {
+		logProvider.Warnf(
+			"gemini thinking ignored: provider=%s model=%s thinking_mode=%s reason=%s",
+			providerID,
+			strings.TrimSpace(model),
+			mode,
+			"unknown_model",
+		)
+		return nil
+	}
+
+	switch {
+	case strings.HasPrefix(normalized, "gemini-3.1-flash-lite"):
+		return map[string]any{"thinkingLevel": geminiFlashThinkingLevel(mode)}
+	case strings.HasPrefix(normalized, "gemini-3.1-pro"),
+		strings.HasPrefix(normalized, "gemini-3-pro"):
+		level, ok := geminiProThinkingLevel(mode)
+		if !ok {
+			logGeminiThinkingIgnored(providerID, normalized, mode, "thinking_off_unsupported")
+			return nil
+		}
+		return map[string]any{"thinkingLevel": level}
+	case strings.HasPrefix(normalized, "gemini-3.1-flash"),
+		strings.HasPrefix(normalized, "gemini-3-flash"):
+		return map[string]any{"thinkingLevel": geminiFlashThinkingLevel(mode)}
+	case strings.HasPrefix(normalized, "gemini-2.5-pro"):
+		budget, ok := gemini25ThinkingBudget(mode, false)
+		if !ok {
+			logGeminiThinkingIgnored(providerID, normalized, mode, "thinking_off_unsupported")
+			return nil
+		}
+		return map[string]any{"thinkingBudget": budget}
+	case strings.HasPrefix(normalized, "gemini-2.5-flash"):
+		budget, ok := gemini25ThinkingBudget(mode, true)
+		if !ok {
+			logGeminiThinkingIgnored(providerID, normalized, mode, "thinking_mode_unsupported")
+			return nil
+		}
+		return map[string]any{"thinkingBudget": budget}
+	default:
+		logGeminiThinkingIgnored(providerID, normalized, mode, "model_not_supported")
+		return nil
+	}
+}
+
+func normalizeGeminiModelID(model string) string {
+	return strings.ToLower(strings.TrimSpace(strings.TrimPrefix(model, "models/")))
+}
+
+func geminiProThinkingLevel(mode core.ThinkingMode) (string, bool) {
+	switch mode {
+	case core.ThinkingModeMinimal, core.ThinkingModeLow:
+		return "low", true
+	case core.ThinkingModeMedium:
+		return "medium", true
+	case core.ThinkingModeHigh:
+		return "high", true
+	default:
+		return "", false
+	}
+}
+
+func geminiFlashThinkingLevel(mode core.ThinkingMode) string {
+	switch mode {
+	case core.ThinkingModeOff:
+		return "minimal"
+	case core.ThinkingModeLow:
+		return "low"
+	case core.ThinkingModeMedium:
+		return "medium"
+	case core.ThinkingModeHigh:
+		return "high"
+	default:
+		return "minimal"
+	}
+}
+
+func gemini25ThinkingBudget(mode core.ThinkingMode, supportsOff bool) (int, bool) {
+	switch mode {
+	case core.ThinkingModeOff:
+		if supportsOff {
+			return 0, true
+		}
+		return 0, false
+	case core.ThinkingModeMinimal, core.ThinkingModeLow:
+		return 1024, true
+	case core.ThinkingModeMedium:
+		return 8192, true
+	case core.ThinkingModeHigh:
+		return 24576, true
+	default:
+		return 0, false
+	}
+}
+
+func logGeminiThinkingIgnored(providerID string, model string, mode core.ThinkingMode, reason string) {
+	logProvider.Warnf(
+		"gemini thinking ignored: provider=%s model=%s thinking_mode=%s reason=%s",
+		providerID,
+		model,
+		mode,
+		reason,
+	)
 }
 
 // ---------------------------------------------------------------------------

@@ -161,7 +161,7 @@ func (p *GeminiInternalProvider) GenerateToolTurn(ctx context.Context, req ToolT
 			"parts": []map[string]any{{"text": systemInstruction}},
 		}
 	}
-	if genConfig := buildGeminiGenerationConfig(modelID, req.Generation); genConfig != nil {
+	if genConfig := buildGeminiGenerationConfig(p.ID(), modelID, req.Generation); genConfig != nil {
 		requestBody["generationConfig"] = genConfig
 	}
 
@@ -407,7 +407,7 @@ func (p *GeminiInternalProvider) Generate(ctx context.Context, req GenerateReque
 	requestBody := map[string]any{
 		"contents": toGeminiContents(req.Messages),
 	}
-	if genConfig := buildGeminiGenerationConfig(strings.TrimSpace(req.Model), req.Generation); genConfig != nil {
+	if genConfig := buildGeminiGenerationConfig(p.ID(), strings.TrimSpace(req.Model), req.Generation); genConfig != nil {
 		requestBody["generationConfig"] = genConfig
 	}
 	payload := map[string]any{
@@ -493,7 +493,7 @@ func (p *GeminiInternalProvider) GenerateStream(ctx context.Context, req Generat
 	requestBody := map[string]any{
 		"contents": toGeminiContents(req.Messages),
 	}
-	if genConfig := buildGeminiGenerationConfig(strings.TrimSpace(req.Model), req.Generation); genConfig != nil {
+	if genConfig := buildGeminiGenerationConfig(p.ID(), strings.TrimSpace(req.Model), req.Generation); genConfig != nil {
 		requestBody["generationConfig"] = genConfig
 	}
 	payload := map[string]any{

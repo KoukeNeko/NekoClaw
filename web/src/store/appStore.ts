@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type {
   SessionInfo,
+  ThinkingMode,
   UsageInfo,
   ToolEvent,
   PendingToolApproval,
@@ -73,8 +74,10 @@ interface AppState {
   // Provider / model
   provider: string;
   model: string;
+  thinkingMode: ThinkingMode;
   setProvider: (p: string) => void;
   setModel: (m: string) => void;
+  setThinkingMode: (mode: ThinkingMode) => void;
 
   // Session
   sessionID: string;
@@ -151,6 +154,7 @@ export const useAppStore = create<AppState>((set) => ({
       pendingApprovals: [],
       currentRunID: "",
       activePersona: "",
+      thinkingMode: "auto",
       totalUsage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
       totalCost: 0,
       contextPercent: 0,
@@ -164,8 +168,10 @@ export const useAppStore = create<AppState>((set) => ({
   // Provider / model
   provider: "",
   model: "",
+  thinkingMode: "auto",
   setProvider: (p) => set({ provider: p }),
   setModel: (m) => set({ model: m }),
+  setThinkingMode: (thinkingMode) => set({ thinkingMode }),
 
   // Session
   sessionID: "main",

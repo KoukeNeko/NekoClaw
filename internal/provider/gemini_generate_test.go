@@ -149,6 +149,114 @@ func TestGenerateOmitsPenaltyForFlashLiteModels(t *testing.T) {
 	}
 }
 
+func TestGenerateMapsThinkingBudgetForGemini25(t *testing.T) {
+	mode := core.ThinkingModeHigh
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+
+		requestRoot, _ := payload["request"].(map[string]any)
+		genConfig, _ := requestRoot["generationConfig"].(map[string]any)
+		if genConfig == nil {
+			t.Fatalf("expected generationConfig in request payload")
+		}
+		thinkingConfig, _ := genConfig["thinkingConfig"].(map[string]any)
+		if thinkingConfig == nil {
+			t.Fatalf("expected thinkingConfig in request payload")
+		}
+		if thinkingConfig["thinkingBudget"] != float64(24576) {
+			t.Fatalf("expected thinkingBudget 24576, got %v", thinkingConfig["thinkingBudget"])
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"budget\"}]}}]}}\n\n"))
+	}))
+	defer srv.Close()
+
+	p := NewGeminiInternalProvider(GeminiInternalOptions{
+		Endpoints: []string{srv.URL},
+	})
+	resp, err := p.Generate(context.Background(), GenerateRequest{
+		Model: "gemini-2.5-pro",
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: "hi"},
+		},
+		Generation: &GenerationParams{
+			ThinkingMode: &mode,
+		},
+		Account: core.Account{
+			ID:       "a1",
+			Provider: "google-gemini-cli",
+			Type:     core.AccountOAuth,
+			Token:    "token-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("generate failed: %v", err)
+	}
+	if resp.Text != "budget" {
+		t.Fatalf("unexpected response text: %q", resp.Text)
+	}
+}
+
+func TestGenerateToolTurnMapsThinkingLevelForGemini3Pro(t *testing.T) {
+	mode := core.ThinkingModeMinimal
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+
+		requestRoot, _ := payload["request"].(map[string]any)
+		genConfig, _ := requestRoot["generationConfig"].(map[string]any)
+		if genConfig == nil {
+			t.Fatalf("expected generationConfig in request payload")
+		}
+		thinkingConfig, _ := genConfig["thinkingConfig"].(map[string]any)
+		if thinkingConfig == nil {
+			t.Fatalf("expected thinkingConfig in request payload")
+		}
+		if thinkingConfig["thinkingLevel"] != "low" {
+			t.Fatalf("expected thinkingLevel low, got %v", thinkingConfig["thinkingLevel"])
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"tool\"}]}}]}}\n\n"))
+	}))
+	defer srv.Close()
+
+	p := NewGeminiInternalProvider(GeminiInternalOptions{
+		Endpoints: []string{srv.URL},
+	})
+	resp, err := p.GenerateToolTurn(context.Background(), ToolTurnRequest{
+		Model: "gemini-3-pro-preview",
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: "hi"},
+		},
+		Generation: &GenerationParams{
+			ThinkingMode: &mode,
+		},
+		Account: core.Account{
+			ID:       "a1",
+			Provider: "google-gemini-cli",
+			Type:     core.AccountOAuth,
+			Token:    "token-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("generate tool turn failed: %v", err)
+	}
+	if resp.Text != "tool" {
+		t.Fatalf("unexpected response text: %q", resp.Text)
+	}
+}
+
 func TestGenerateReturnsErrorWhenConfiguredPathReturns404(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1internal:generateMessage" {

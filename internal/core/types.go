@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -92,10 +93,41 @@ type ToolEvent struct {
 	Error         string    `json:"error,omitempty"`
 }
 
+type ThinkingMode string
+
+const (
+	ThinkingModeAuto    ThinkingMode = "auto"
+	ThinkingModeOff     ThinkingMode = "off"
+	ThinkingModeMinimal ThinkingMode = "minimal"
+	ThinkingModeLow     ThinkingMode = "low"
+	ThinkingModeMedium  ThinkingMode = "medium"
+	ThinkingModeHigh    ThinkingMode = "high"
+)
+
+func NormalizeThinkingMode(raw string) ThinkingMode {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", string(ThinkingModeAuto):
+		return ThinkingModeAuto
+	case string(ThinkingModeOff):
+		return ThinkingModeOff
+	case string(ThinkingModeMinimal):
+		return ThinkingModeMinimal
+	case string(ThinkingModeLow):
+		return ThinkingModeLow
+	case string(ThinkingModeMedium):
+		return ThinkingModeMedium
+	case string(ThinkingModeHigh):
+		return ThinkingModeHigh
+	default:
+		return ThinkingModeAuto
+	}
+}
+
 // FallbackEntry defines one fallback provider+model combination.
 type FallbackEntry struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
+	Provider     string       `json:"provider"`
+	Model        string       `json:"model"`
+	ThinkingMode ThinkingMode `json:"thinking_mode,omitempty"`
 }
 
 type ChatRequest struct {

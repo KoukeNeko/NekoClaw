@@ -1368,14 +1368,16 @@ func (s *Server) handleFallbacks(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDefaultProvider(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		respondJSON(w, http.StatusOK, map[string]string{
-			"provider": s.svc.GetDefaultProvider(),
-			"model":    s.svc.GetDefaultModel(),
+		respondJSON(w, http.StatusOK, map[string]any{
+			"provider":      s.svc.GetDefaultProvider(),
+			"model":         s.svc.GetDefaultModel(),
+			"thinking_mode": s.svc.GetDefaultThinkingMode(),
 		})
 	case http.MethodPut:
 		var body struct {
-			Provider string `json:"provider"`
-			Model    string `json:"model"`
+			Provider     string            `json:"provider"`
+			Model        string            `json:"model"`
+			ThinkingMode core.ThinkingMode `json:"thinking_mode"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			respondError(w, http.StatusBadRequest, "invalid json body")
@@ -1383,19 +1385,24 @@ func (s *Server) handleDefaultProvider(w http.ResponseWriter, r *http.Request) {
 		}
 		providerID := s.svc.GetDefaultProvider()
 		modelID := s.svc.GetDefaultModel()
+		thinkingMode := s.svc.GetDefaultThinkingMode()
 		if p := strings.TrimSpace(body.Provider); p != "" {
 			providerID = p
 		}
 		if m := strings.TrimSpace(body.Model); m != "" {
 			modelID = m
 		}
-		if err := s.svc.SaveDefaultProviderConfig(providerID, modelID); err != nil {
+		if strings.TrimSpace(string(body.ThinkingMode)) != "" {
+			thinkingMode = core.NormalizeThinkingMode(string(body.ThinkingMode))
+		}
+		if err := s.svc.SaveDefaultProviderConfig(providerID, modelID, thinkingMode); err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		respondJSON(w, http.StatusOK, map[string]string{
-			"provider": s.svc.GetDefaultProvider(),
-			"model":    s.svc.GetDefaultModel(),
+		respondJSON(w, http.StatusOK, map[string]any{
+			"provider":      s.svc.GetDefaultProvider(),
+			"model":         s.svc.GetDefaultModel(),
+			"thinking_mode": s.svc.GetDefaultThinkingMode(),
 		})
 	default:
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")

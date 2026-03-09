@@ -55,14 +55,15 @@ type ToolsConfig struct {
 
 // AppConfig holds user-configurable settings persisted to config.json.
 type AppConfig struct {
-	DefaultProvider string          `json:"default_provider,omitempty"`
-	DefaultModel    string          `json:"default_model,omitempty"`
-	Fallbacks       []FallbackEntry `json:"fallbacks,omitempty"`
-	General         GeneralConfig   `json:"general,omitempty"`
-	Security        SecurityConfig  `json:"security,omitempty"`
-	Discord         DiscordConfig   `json:"discord,omitempty"`
-	Telegram        TelegramConfig  `json:"telegram,omitempty"`
-	Tools           ToolsConfig     `json:"tools,omitempty"`
+	DefaultProvider     string          `json:"default_provider,omitempty"`
+	DefaultModel        string          `json:"default_model,omitempty"`
+	DefaultThinkingMode ThinkingMode    `json:"default_thinking_mode,omitempty"`
+	Fallbacks           []FallbackEntry `json:"fallbacks,omitempty"`
+	General             GeneralConfig   `json:"general,omitempty"`
+	Security            SecurityConfig  `json:"security,omitempty"`
+	Discord             DiscordConfig   `json:"discord,omitempty"`
+	Telegram            TelegramConfig  `json:"telegram,omitempty"`
+	Tools               ToolsConfig     `json:"tools,omitempty"`
 }
 
 // LoadConfig reads config.json from configDir.
@@ -74,7 +75,8 @@ func LoadConfig(configDir string) (AppConfig, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			return AppConfig{
-				Security: DefaultSecurityConfig(),
+				Security:            DefaultSecurityConfig(),
+				DefaultThinkingMode: ThinkingModeAuto,
 			}, nil
 		}
 		return AppConfig{}, err
@@ -87,6 +89,7 @@ func LoadConfig(configDir string) (AppConfig, error) {
 		cfg.DefaultProvider,
 		cfg.DefaultModel,
 	)
+	cfg.DefaultThinkingMode = sanitizeThinkingMode(cfg.DefaultThinkingMode)
 	cfg.Fallbacks = sanitizeFallbacks(cfg.Fallbacks)
 	cfg.General = sanitizeGeneralConfig(cfg.General)
 	cfg.Security = sanitizeSecurityConfig(cfg.Security)
@@ -103,6 +106,7 @@ func SaveConfig(configDir string, cfg AppConfig) error {
 		cfg.DefaultProvider,
 		cfg.DefaultModel,
 	)
+	cfg.DefaultThinkingMode = sanitizeThinkingMode(cfg.DefaultThinkingMode)
 	cfg.Fallbacks = sanitizeFallbacks(cfg.Fallbacks)
 	cfg.General = sanitizeGeneralConfig(cfg.General)
 	cfg.Security = sanitizeSecurityConfig(cfg.Security)
@@ -145,6 +149,7 @@ func sanitizeFallbacks(entries []FallbackEntry) []FallbackEntry {
 	for _, entry := range entries {
 		entry.Provider = strings.TrimSpace(entry.Provider)
 		entry.Model = strings.TrimSpace(entry.Model)
+		entry.ThinkingMode = sanitizeThinkingMode(entry.ThinkingMode)
 		if entry.Provider == "" {
 			continue
 		}
@@ -157,6 +162,10 @@ func sanitizeFallbacks(entries []FallbackEntry) []FallbackEntry {
 		}
 	}
 	return result
+}
+
+func sanitizeThinkingMode(mode ThinkingMode) ThinkingMode {
+	return NormalizeThinkingMode(string(mode))
 }
 
 func sanitizeGeneralConfig(cfg GeneralConfig) GeneralConfig {

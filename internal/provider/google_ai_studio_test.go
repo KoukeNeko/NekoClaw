@@ -136,6 +136,114 @@ func TestGoogleAIStudioGenerateOmitsPenaltyForFlashLiteModels(t *testing.T) {
 	}
 }
 
+func TestGoogleAIStudioGenerateMapsThinkingBudgetForGemini25(t *testing.T) {
+	mode := core.ThinkingModeMedium
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			var payload map[string]any
+			if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode request body: %v", err)
+			}
+			genConfig, _ := payload["generationConfig"].(map[string]any)
+			if genConfig == nil {
+				t.Fatalf("expected generationConfig in payload")
+			}
+			thinkingConfig, _ := genConfig["thinkingConfig"].(map[string]any)
+			if thinkingConfig == nil {
+				t.Fatalf("expected thinkingConfig in payload")
+			}
+			if thinkingConfig["thinkingBudget"] != float64(8192) {
+				t.Fatalf("expected thinkingBudget 8192, got %v", thinkingConfig["thinkingBudget"])
+			}
+			return newHTTPResponse(http.StatusOK, `{
+				"candidates": [{
+					"content": {"parts":[{"text":"budget"}]}
+				}]
+			}`), nil
+		}),
+	}
+	p := NewGoogleAIStudioProvider(GoogleAIStudioOptions{
+		HTTPClient: client,
+	})
+
+	resp, err := p.Generate(context.Background(), GenerateRequest{
+		Model: "gemini-2.5-pro",
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: "hi"},
+		},
+		Generation: &GenerationParams{
+			ThinkingMode: &mode,
+		},
+		Account: core.Account{
+			ID:       "k1",
+			Provider: "google-ai-studio",
+			Type:     core.AccountAPIKey,
+			Token:    "key-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("generate failed: %v", err)
+	}
+	if resp.Text != "budget" {
+		t.Fatalf("unexpected response text: %q", resp.Text)
+	}
+}
+
+func TestGoogleAIStudioGenerateToolTurnMapsThinkingLevelForGemini3Pro(t *testing.T) {
+	mode := core.ThinkingModeMinimal
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			var payload map[string]any
+			if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode request body: %v", err)
+			}
+			genConfig, _ := payload["generationConfig"].(map[string]any)
+			if genConfig == nil {
+				t.Fatalf("expected generationConfig in payload")
+			}
+			thinkingConfig, _ := genConfig["thinkingConfig"].(map[string]any)
+			if thinkingConfig == nil {
+				t.Fatalf("expected thinkingConfig in payload")
+			}
+			if thinkingConfig["thinkingLevel"] != "low" {
+				t.Fatalf("expected thinkingLevel low, got %v", thinkingConfig["thinkingLevel"])
+			}
+			return newHTTPResponse(http.StatusOK, `{
+				"candidates": [{
+					"content": {"parts":[{"text":"tool"}]}
+				}]
+			}`), nil
+		}),
+	}
+	p := NewGoogleAIStudioProvider(GoogleAIStudioOptions{
+		HTTPClient: client,
+	})
+
+	resp, err := p.GenerateToolTurn(context.Background(), ToolTurnRequest{
+		Model: "gemini-3-pro-preview",
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: "hi"},
+		},
+		Generation: &GenerationParams{
+			ThinkingMode: &mode,
+		},
+		Account: core.Account{
+			ID:       "k1",
+			Provider: "google-ai-studio",
+			Type:     core.AccountAPIKey,
+			Token:    "key-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("generate tool turn failed: %v", err)
+	}
+	if resp.Text != "tool" {
+		t.Fatalf("unexpected response text: %q", resp.Text)
+	}
+}
+
 func TestGoogleAIStudioGenerateClassifiesInvalidAPIKey(t *testing.T) {
 	client := &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {

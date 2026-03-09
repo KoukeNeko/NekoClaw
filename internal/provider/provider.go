@@ -20,6 +20,7 @@ type GenerationParams struct {
 	TopP             *float64
 	FrequencyPenalty *float64
 	PresencePenalty  *float64
+	ThinkingMode     *core.ThinkingMode
 }
 
 type GenerateRequest struct {

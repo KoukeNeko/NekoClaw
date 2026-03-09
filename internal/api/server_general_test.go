@@ -89,15 +89,16 @@ func TestDefaultProviderEndpoint_PersistsSelection(t *testing.T) {
 		handler,
 		http.MethodPut,
 		"/v1/default-provider",
-		`{"provider":"google-gemini-cli","model":"gemini-2.5-pro"}`,
+		`{"provider":"google-gemini-cli","model":"gemini-2.5-pro","thinking_mode":"high"}`,
 	)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("unexpected PUT status: %d body=%s", resp.Code, resp.Body.String())
 	}
 
 	var saved struct {
-		Provider string `json:"provider"`
-		Model    string `json:"model"`
+		Provider     string            `json:"provider"`
+		Model        string            `json:"model"`
+		ThinkingMode core.ThinkingMode `json:"thinking_mode"`
 	}
 	if err := json.Unmarshal(resp.Body.Bytes(), &saved); err != nil {
 		t.Fatalf("decode saved default provider: %v", err)
@@ -107,6 +108,9 @@ func TestDefaultProviderEndpoint_PersistsSelection(t *testing.T) {
 	}
 	if saved.Model != "gemini-2.5-pro" {
 		t.Fatalf("saved model = %q, want %q", saved.Model, "gemini-2.5-pro")
+	}
+	if saved.ThinkingMode != core.ThinkingModeHigh {
+		t.Fatalf("saved thinking_mode = %q, want %q", saved.ThinkingMode, core.ThinkingModeHigh)
 	}
 
 	config, err := core.LoadConfig(configDir)
@@ -118,5 +122,56 @@ func TestDefaultProviderEndpoint_PersistsSelection(t *testing.T) {
 	}
 	if config.DefaultModel != "gemini-2.5-pro" {
 		t.Fatalf("config default_model = %q, want %q", config.DefaultModel, "gemini-2.5-pro")
+	}
+	if config.DefaultThinkingMode != core.ThinkingModeHigh {
+		t.Fatalf("config default_thinking_mode = %q, want %q", config.DefaultThinkingMode, core.ThinkingModeHigh)
+	}
+}
+
+func TestFallbacksEndpoint_PersistsThinkingMode(t *testing.T) {
+	svc := app.NewService(app.ServiceOptions{})
+	configDir := t.TempDir()
+	svc.SetConfigDir(configDir)
+
+	handler := NewServer(svc).Handler()
+	resp := performJSONRequest(
+		t,
+		handler,
+		http.MethodPut,
+		"/v1/fallbacks",
+		`{"fallbacks":[{"provider":"google-ai-studio","model":"gemini-2.5-flash","thinking_mode":"medium"},{"provider":"openai","model":"gpt-5","thinking_mode":"high"}]}`,
+	)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected PUT status: %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var saved struct {
+		Fallbacks []core.FallbackEntry `json:"fallbacks"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &saved); err != nil {
+		t.Fatalf("decode saved fallbacks: %v", err)
+	}
+	if len(saved.Fallbacks) != 2 {
+		t.Fatalf("fallbacks len = %d, want 2", len(saved.Fallbacks))
+	}
+	if saved.Fallbacks[0].ThinkingMode != core.ThinkingModeMedium {
+		t.Fatalf("fallback[0].thinking_mode = %q, want %q", saved.Fallbacks[0].ThinkingMode, core.ThinkingModeMedium)
+	}
+	if saved.Fallbacks[1].ThinkingMode != core.ThinkingModeHigh {
+		t.Fatalf("fallback[1].thinking_mode = %q, want %q", saved.Fallbacks[1].ThinkingMode, core.ThinkingModeHigh)
+	}
+
+	config, err := core.LoadConfig(configDir)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if len(config.Fallbacks) != 2 {
+		t.Fatalf("config fallbacks len = %d, want 2", len(config.Fallbacks))
+	}
+	if config.Fallbacks[0].ThinkingMode != core.ThinkingModeMedium {
+		t.Fatalf("config fallback[0].thinking_mode = %q, want %q", config.Fallbacks[0].ThinkingMode, core.ThinkingModeMedium)
+	}
+	if config.Fallbacks[1].ThinkingMode != core.ThinkingModeHigh {
+		t.Fatalf("config fallback[1].thinking_mode = %q, want %q", config.Fallbacks[1].ThinkingMode, core.ThinkingModeHigh)
 	}
 }

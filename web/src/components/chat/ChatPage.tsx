@@ -14,6 +14,7 @@ export function ChatPage() {
   const provider = useAppStore((s) => s.provider);
   const setProvider = useAppStore((s) => s.setProvider);
   const setModel = useAppStore((s) => s.setModel);
+  const setThinkingMode = useAppStore((s) => s.setThinkingMode);
   const pendingApprovals = useAppStore((s) => s.pendingApprovals);
 
   const { sendMessage, sendApprovals, cancelStream, isStreaming } = useChat();
@@ -25,12 +26,13 @@ export function ChatPage() {
         .then((dp) => {
           setProvider(dp.provider);
           setModel(dp.model);
+          setThinkingMode(dp.thinking_mode ?? "auto");
         })
         .catch(() => {
           /* server not ready */
         });
     }
-  }, [provider, setProvider, setModel]);
+  }, [provider, setProvider, setModel, setThinkingMode]);
 
   return (
     <div className="flex flex-col h-full">
