@@ -16,13 +16,13 @@
 
 `start` 可指定 `mode`：
 
-- `auto`（預設）：本機可用時走 loopback，否則 manual
-- `local`：優先 loopback（localhost callback）
-- `remote`：強制 manual/paste callback
+- `auto`（預設）：優先 loopback；Web UI 在 `localhost`/loopback host 會用這個模式
+- `local`：強制 localhost loopback callback
+- `remote`：使用指定的 `redirect_uri`，或走 manual/paste fallback
 
 ## 3) Manual 流程（fallback / remote）
 
-當 callback 無法使用（例如遠端環境），`start` 會回傳 `mode=manual`：
+當 callback 無法使用（例如遠端環境、popup 被阻擋，或你明確走 `remote` 模式），`start` 會回傳 `mode=manual`：
 
 1. 開啟 `auth_url`
 2. 取得 redirect URL（或僅 code）
@@ -30,19 +30,25 @@
    - `state`
    - `callback_url_or_code`
 
-`remote` 模式可搭配 `redirect_uri` 指到公網 callback（例如反向代理後的 `/oauth2callback`）。
+`remote` 模式可搭配 `redirect_uri` 指到公網 callback（例如反向代理後、目前站點的 `/oauth2callback`）。
 
 ## 4) Web UI 操作
 
-改為選單操作（方向鍵 + Enter）：
+Web UI（Settings -> Auth）：
 
 - `Provider` -> `google-gemini-cli`
-- `OAuth Auto` / `OAuth Local` / `OAuth Remote`
-- `Manual Complete`（remote/manual 時貼 callback URL 或 code）
-- `Profiles` / `Use Profile`
+- `開始 OAuth`
+- `重新整理`
+- `使用此 profile`
+- `完成 Gemini OAuth`（manual fallback 時貼 callback URL 或 code）
 
 > 不再手動選 endpoint / project。  
 > endpoint 由系統自動 fallback；project 由 `loadCodeAssist/onboardUser` 自動決策。
+
+目前 Web UI 會依瀏覽器 host 自動選擇模式：
+
+- `localhost` / `127.0.0.1` / `::1`：優先 loopback callback
+- 公網或反向代理 host：送 `remote` 模式，並把 `redirect_uri` 設為目前站點的 `/oauth2callback`
 
 若 profile 仍然缺少 project_id，請重新執行 Gemini OAuth，並確認 `gemini` CLI 端的 provisioning 已完成。
 

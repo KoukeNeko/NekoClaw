@@ -60,7 +60,7 @@ docker run --rm -p 8085:8085 -v nekoclaw-data:/data/.nekoclaw nekoclaw:local
 ```
 
 The container defaults to `-mode web` and persists runtime state under `/data/.nekoclaw`.
-The image also preinstalls Node.js, `@google/gemini-cli`, `@playwright/mcp`, and Chromium so Gemini OAuth plus the builtin Playwright MCP server can start without manual npm setup inside the container.
+The image also preinstalls Node.js, `@google/gemini-cli`, `@playwright/mcp`, and Chromium so Gemini OAuth plus the builtin Playwright MCP server can start without manual npm setup inside the container. Containerized Gemini OAuth now reads its OAuth client config from the bundled `gemini` CLI; no separate Gemini OAuth client env setup is required.
 
 GitHub Actions can publish the image to GHCR as `ghcr.io/koukeneko/nekoclaw`:
 
@@ -80,6 +80,7 @@ The project includes a `google-gemini-cli` provider that supports:
 Gemini OAuth flow supports:
 
 - localhost callback (default `http://localhost:8085/oauth2callback`)
+- browser-host aware startup (`localhost` keeps loopback flow; non-local origins use the current origin's `/oauth2callback`)
 - manual fallback (paste callback URL or code)
 - PKCE/state verification
 - endpoint auto selection (`cloudcode-pa` -> `daily` -> `autopush`)
@@ -88,12 +89,11 @@ Gemini OAuth flow supports:
 
 Web UI flow (Settings -> Auth):
 
-- `OAuth Auto` (auto detect local/remote), or:
-  - `OAuth Local` force localhost callback mode
-  - `OAuth Remote` force manual mode
+- `開始 OAuth` starts the flow; on localhost it prefers loopback callback, while public deployments use the current origin's `/oauth2callback`
+- `重新整理` reloads profile and flow state after browser auth returns
 - `Profiles` to inspect account availability and cooldown status
-- `Use Profile` to switch runtime profile
-- `Manual Complete` to paste callback URL or code when running in remote mode
+- `使用此 profile` to switch runtime profile
+- `完成 Gemini OAuth` appears for manual fallback so you can paste a callback URL or auth code when loopback/popup flow is unavailable
 
 API endpoints:
 
