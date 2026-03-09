@@ -498,7 +498,8 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 		reply = "（無回應）"
 	}
 
-	// Append usage stats and tool summary.
+	// Append usage stats and tool summary as a quoted footer so metadata
+	// stays readable without competing with the main reply.
 	var footer []string
 	if stats := formatUsageStats(streamResp.Usage, elapsed, streamResp.Provider, streamResp.Model); stats != "" {
 		footer = append(footer, stats)
@@ -506,9 +507,7 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 	if summary := formatToolSummary(streamResp.ToolEvents); summary != "" {
 		footer = append(footer, summary)
 	}
-	if len(footer) > 0 {
-		reply += "\n\n" + strings.Join(footer, "\n")
-	}
+	formattedReply := formatReplyWithFooter(reply, footer)
 
 	// Always delete the placeholder and resend as fresh messages.
 	// This prevents the "(edited)" label and handles overflow / message ordering
@@ -517,7 +516,7 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 		del := tgbotapi.NewDeleteMessage(chatID, placeholderMsg.MessageID)
 		_, _ = b.api.Send(del)
 	}
-	b.sendReply(chatID, msg.MessageID, reply)
+	b.sendMarkdownV2Reply(chatID, msg.MessageID, formattedReply)
 }
 
 // extractText returns the user's text from a message, stripping the bot mention.
@@ -1007,10 +1006,13 @@ func (b *Bot) editMessage(chatID int64, messageID int, text string) {
 }
 
 func (b *Bot) sendReply(chatID int64, replyToID int, content string) {
-	chunks := splitMessage(content, telegramMessageLimit)
+	b.sendMarkdownV2Reply(chatID, replyToID, RenderMarkdownV2(content))
+}
+
+func (b *Bot) sendMarkdownV2Reply(chatID int64, replyToID int, formatted string) {
+	chunks := splitMessage(formatted, telegramMessageLimit)
 	for i, chunk := range chunks {
-		formatted := RenderMarkdownV2(chunk)
-		msg := tgbotapi.NewMessage(chatID, formatted)
+		msg := tgbotapi.NewMessage(chatID, chunk)
 		msg.ParseMode = tgbotapi.ModeMarkdownV2
 		if i == 0 {
 			msg.ReplyToMessageID = replyToID
@@ -1020,6 +1022,37 @@ func (b *Bot) sendReply(chatID int64, replyToID int, content string) {
 			return
 		}
 	}
+}
+
+func formatReplyWithFooter(body string, footer []string) string {
+	renderedBody := RenderMarkdownV2(body)
+	quotedFooter := formatFooterBlockquote(footer)
+	switch {
+	case renderedBody == "":
+		return quotedFooter
+	case quotedFooter == "":
+		return renderedBody
+	default:
+		return renderedBody + "\n\n" + quotedFooter
+	}
+}
+
+func formatFooterBlockquote(parts []string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+
+	var quoted []string
+	for _, part := range parts {
+		for _, line := range strings.Split(strings.TrimSpace(part), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			quoted = append(quoted, "> "+escapeText(line))
+		}
+	}
+	return strings.Join(quoted, "\n")
 }
 
 // ---------------------------------------------------------------------------

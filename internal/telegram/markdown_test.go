@@ -69,7 +69,7 @@ func TestEscapeMarkdownV2(t *testing.T) {
 		{
 			name:     "blockquote",
 			input:    "> Hello context",
-			expected: "\\> Hello context", // Or actually, Telegram MarkdownV2 supports blockquotes natively using > but nothing can precede it...? Wait, Telegram's API doesn't mention > as blockquote natively until relatively recently. Actually, it does support blockquote: > blockquote. No, wait, wait. Blockquote is not supported by standard MarkdownV2 in Telegram, it's just blockquotes. Ah wait, Telegram just added blockquote `>` support recently. "blockquote can be started with `>` or `**` wait no. "Blockquotation block should be formatted as `> blockquote`".
+			expected: "> Hello context",
 		},
 	}
 
