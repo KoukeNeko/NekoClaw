@@ -814,7 +814,7 @@ export function UsagePanel() {
               </div>
             </div>
 
-            <div className="join">
+            <div className="join join-vertical w-full sm:join-horizontal sm:w-auto">
               <button
                 className="btn btn-sm join-item"
                 onClick={handleRefresh}
@@ -856,7 +856,7 @@ export function UsagePanel() {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(320px,0.9fr)_minmax(0,1.3fr)]">
-        <div className="card min-h-[34rem] border border-base-300 bg-base-200 shadow-sm">
+        <div className="card min-w-0 min-h-[34rem] border border-base-300 bg-base-200 shadow-sm">
           <div className="card-body gap-4 p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -870,7 +870,7 @@ export function UsagePanel() {
               </div>
             </div>
 
-            <div className="join">
+            <div className="join w-full overflow-x-auto sm:w-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <button
                 className={`btn btn-sm join-item ${sortMode === "recent" ? "btn-primary" : ""}`}
                 onClick={() => setSortMode("recent")}
@@ -914,7 +914,7 @@ export function UsagePanel() {
                         onClick={() => setSelectedSessionID(session.session_id)}
                       >
                         <div className="space-y-3">
-                          <div className="flex items-start gap-3">
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
                             <div className="min-w-0 flex-1">
                               <div className="truncate text-xl font-semibold">
                                 {sessionLabel(session)}
@@ -934,12 +934,12 @@ export function UsagePanel() {
                                 </div>
                               )}
                             </div>
-                            <span className="shrink-0 pt-1 text-xs text-base-content/45">
+                            <span className="shrink-0 text-xs text-base-content/45 sm:pt-1 sm:text-right">
                               {formatRelativeTime(session.updated_at)}
                             </span>
                           </div>
 
-                          <div className="grid grid-cols-3 gap-2 text-xs">
+                          <div className="grid grid-cols-1 gap-2 text-xs min-[420px]:grid-cols-3">
                             <div className="rounded-box bg-base-200/70 px-3 py-2">
                               <div className="text-[10px] uppercase tracking-[0.16em] text-base-content/40">
                                 Tokens
@@ -975,16 +975,16 @@ export function UsagePanel() {
           </div>
         </div>
 
-        <div className="card min-h-[34rem] border border-base-300 bg-base-200 shadow-sm">
+        <div className="card min-w-0 min-h-[34rem] border border-base-300 bg-base-200 shadow-sm">
           <div className="card-body gap-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h3 className="card-title text-lg">Session Detail</h3>
                 <p className="text-sm text-base-content/60">
                   顯示選取 session 的摘要與最近 10 筆 assistant requests。
                 </p>
               </div>
-              <div className="join">
+              <div className="join join-vertical w-full sm:join-horizontal sm:w-auto">
                 <button
                   className="btn btn-primary btn-sm join-item"
                   onClick={handleOpenConversation}
@@ -1012,7 +1012,10 @@ export function UsagePanel() {
                       )}
                     </div>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      <div className="badge badge-outline badge-sm font-mono">
+                      <div
+                        className="max-w-full truncate rounded-full border border-base-300 px-2 py-1 text-xs font-mono text-base-content/80"
+                        title={selectedSession.session_id}
+                      >
                         {selectedSession.session_id}
                       </div>
                       {selectedSession.top_provider && (
@@ -1101,7 +1104,7 @@ export function UsagePanel() {
                 </div>
 
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <h4 className="text-base font-semibold">最近 10 筆 Requests</h4>
                     <div className="badge badge-ghost badge-sm">
                       {requestDetails.length} rows

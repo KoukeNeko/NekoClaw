@@ -1,4 +1,3 @@
-import { Fragment } from "react";
 import { useAppStore, type Route } from "@/store/appStore";
 import { GeneralPanel } from "./GeneralPanel";
 import { SecurityPanel } from "./SecurityPanel";
@@ -13,11 +12,6 @@ import { MemoryPanel } from "./MemoryPanel";
 import { MCPPanel } from "./MCPPanel";
 import { UsagePanel } from "./UsagePanel";
 import { ConsolePanel } from "./ConsolePanel";
-
-/**
- * Settings page — daisyUI tabs (official radio + tab-content pattern).
- * Tabs structure matches https://daisyui.com/components/tab/ exactly.
- */
 
 interface TabDef {
   route: Route;
@@ -83,7 +77,6 @@ export function SettingsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Header */}
       <header className="navbar bg-base-200/50 backdrop-blur-sm border-b border-base-300 min-h-12 px-3">
         <div className="flex-none">
           <label
@@ -118,25 +111,40 @@ export function SettingsPage() {
         </button>
       </header>
 
-      {/* daisyUI tabs — official pattern */}
-      <div className="tabs tabs-border flex-1 min-h-0 overflow-hidden">
-        {TABS.map((tab) => (
-          <Fragment key={tab.route}>
-            <input
-              type="radio"
-              name="settings-tabs"
-              className="tab"
-              aria-label={tab.label}
-              checked={route === tab.route}
-              onChange={() => setRoute(tab.route)}
-            />
-            <div className="tab-content min-h-0 overflow-y-auto border-l-0 border-r-0 border-base-300 rounded-none bg-base-100 p-6 [scrollbar-width:thin]">
-              <div className={`mx-auto w-full pb-6 ${panelWidth}`}>
-                {route === tab.route && renderPanel(tab.route)}
-              </div>
-            </div>
-          </Fragment>
-        ))}
+      <div className="border-b border-base-300 bg-base-200/35">
+        <div className={`mx-auto w-full ${panelWidth}`}>
+          <div
+            role="tablist"
+            aria-label="設定分類"
+            className="flex gap-2 overflow-x-auto px-2 py-2 sm:px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          >
+            {TABS.map((tab) => {
+              const active = route === tab.route;
+              return (
+                <button
+                  key={tab.route}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  className={`btn btn-sm shrink-0 rounded-full border transition-colors ${
+                    active
+                      ? "border-primary/50 bg-base-100 text-base-content shadow-sm"
+                      : "border-transparent bg-transparent text-base-content/65 hover:border-base-300 hover:bg-base-100/70 hover:text-base-content"
+                  }`}
+                  onClick={() => setRoute(tab.route)}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto bg-base-100 [scrollbar-width:thin]">
+        <div className={`mx-auto w-full px-4 py-4 sm:px-6 sm:py-6 ${panelWidth}`}>
+          {renderPanel(route)}
+        </div>
       </div>
     </div>
   );

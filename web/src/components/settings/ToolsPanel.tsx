@@ -352,7 +352,7 @@ export function ToolsPanel() {
               </div>
             </div>
 
-            <div className="join">
+            <div className="join join-vertical w-full sm:join-horizontal sm:w-auto">
               <button
                 className="btn btn-sm join-item"
                 onClick={handleReload}
@@ -410,7 +410,7 @@ export function ToolsPanel() {
 
       <div className="card border border-base-300 bg-base-200 shadow-sm">
         <div className="card-body gap-4">
-          <div className="join w-full">
+          <div className="join join-vertical w-full sm:join-horizontal">
             <label className="input input-bordered join-item flex w-full items-center gap-2 focus-within:outline-none focus-within:ring-0 focus-within:shadow-none">
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -443,7 +443,7 @@ export function ToolsPanel() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
-        <div className="card min-h-[28rem] border border-base-300 bg-base-200 shadow-sm">
+        <div className="card min-w-0 min-h-[28rem] border border-base-300 bg-base-200 shadow-sm">
           <div className="card-body gap-4 p-4">
             <div className="flex items-center justify-between gap-3">
               <h3 className="card-title text-lg">工具清單</h3>
@@ -512,7 +512,7 @@ export function ToolsPanel() {
           </div>
         </div>
 
-        <div className="card min-h-[28rem] border border-base-300 bg-base-200 shadow-sm">
+        <div className="card min-w-0 min-h-[28rem] border border-base-300 bg-base-200 shadow-sm">
           <div className="card-body gap-5">
             <div className="flex items-center justify-between gap-3">
               <h3 className="card-title text-lg">工具詳情</h3>

@@ -26,7 +26,7 @@ export function SelectionListItem({
   return (
     <li className="w-full">
       <button
-        className={`flex w-full rounded-box border border-base-300 px-4 py-3 text-left transition-colors ${
+        className={`flex w-full min-w-0 items-start rounded-box border border-base-300 px-4 py-3 text-left transition-colors ${
           selected
             ? "border-primary/60 bg-base-300"
             : "bg-base-100 hover:bg-base-200"

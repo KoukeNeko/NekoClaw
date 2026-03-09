@@ -300,7 +300,7 @@ export function ConsolePanel() {
               </div>
             </div>
 
-            <div className="join">
+            <div className="join join-vertical w-full sm:join-horizontal sm:w-auto">
               <button
                 className="btn btn-sm join-item"
                 onClick={() => setReconnectToken((value) => value + 1)}
@@ -349,7 +349,7 @@ export function ConsolePanel() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[minmax(260px,0.75fr)_minmax(0,1.25fr)]">
-        <div className="card min-h-[32rem] border border-base-300 bg-base-200 shadow-sm">
+        <div className="card min-w-0 min-h-[32rem] border border-base-300 bg-base-200 shadow-sm">
           <div className="card-body gap-4">
             <div className="flex items-center justify-between gap-3">
               <h3 className="card-title text-lg">Module Filter</h3>
@@ -397,7 +397,7 @@ export function ConsolePanel() {
           </div>
         </div>
 
-        <div className="card min-h-[32rem] border border-base-300 bg-base-200 shadow-sm">
+        <div className="card min-w-0 min-h-[32rem] border border-base-300 bg-base-200 shadow-sm">
           <div className="card-body gap-5">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div className="space-y-2">

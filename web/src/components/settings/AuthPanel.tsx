@@ -419,7 +419,7 @@ function ProviderNavCard(props: {
 
   return (
     <div
-      className={`card border shadow-sm transition-colors ${
+      className={`card min-w-0 border shadow-sm transition-colors ${
         active
           ? "border-primary bg-base-200"
           : "border-base-300 bg-base-200/80"
@@ -428,10 +428,10 @@ function ProviderNavCard(props: {
       <div className="card-body gap-4 p-4">
         <button
           type="button"
-          className="flex w-full items-start justify-between gap-3 text-left"
+          className="flex w-full min-w-0 items-start justify-between gap-3 text-left"
           onClick={onActivate}
         >
-          <div className="space-y-2">
+          <div className="min-w-0 flex-1 space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-semibold">{title}</span>
               <div className={`badge badge-sm ${stateBadge.className}`}>
@@ -449,7 +449,7 @@ function ProviderNavCard(props: {
           <div className="text-xs uppercase tracking-wide text-base-content/45">
             Current Selection
           </div>
-          <div className="mt-1 text-sm font-medium">{selectedLabel}</div>
+          <div className="mt-1 break-all text-sm font-medium">{selectedLabel}</div>
         </div>
 
         {profiles.length === 0 ? (
@@ -526,7 +526,7 @@ function SecretField(props: {
   return (
     <label className="fieldset">
       <legend className="fieldset-legend">{label}</legend>
-      <div className="join w-full">
+      <div className="join join-vertical w-full sm:join-horizontal">
         <input
           type={visible ? "text" : "password"}
           className="input input-bordered join-item w-full font-mono outline-none focus:outline-none focus:ring-0 focus-visible:outline-none focus:shadow-none"
@@ -1595,8 +1595,8 @@ export function AuthPanel() {
               </div>
             </div>
 
-            <div className="shrink-0">
-              <div className="join">
+            <div className="w-full shrink-0 sm:w-auto">
+              <div className="join join-vertical w-full sm:join-horizontal">
                 <button
                   className="btn btn-sm join-item"
                   onClick={handleRefresh}
@@ -1637,7 +1637,7 @@ export function AuthPanel() {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(320px,0.95fr)_minmax(0,1.65fr)]">
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           {navCards.map((card) => (
             <ProviderNavCard
               key={card.group}
@@ -1655,7 +1655,7 @@ export function AuthPanel() {
           ))}
         </div>
 
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           {selectedGroup === "gemini" && (
             <>
               <div className="card border border-base-300 bg-base-200 shadow-sm">
@@ -1696,7 +1696,7 @@ export function AuthPanel() {
                     </div>
 
                     <div className="max-w-full overflow-x-auto lg:shrink-0">
-                      <div className="join w-max">
+                      <div className="join join-vertical w-full sm:w-max sm:join-horizontal">
                         <button
                           className="btn btn-sm join-item"
                           onClick={handleStartGeminiOAuth}
@@ -1781,7 +1781,7 @@ export function AuthPanel() {
                               <div className="text-xs uppercase tracking-wide text-base-content/50">
                                 Profile ID
                               </div>
-                              <div className="font-mono text-sm">
+                              <div className="break-all font-mono text-sm">
                                 {selectedGemini.profile_id}
                               </div>
                             </div>
@@ -1799,7 +1799,7 @@ export function AuthPanel() {
                               <div className="text-xs uppercase tracking-wide text-base-content/50">
                                 Project ID
                               </div>
-                              <div className="font-mono text-sm">
+                              <div className="break-all font-mono text-sm">
                                 {fallback(selectedGemini.project_id)}
                               </div>
                             </div>
@@ -1809,7 +1809,7 @@ export function AuthPanel() {
                               <div className="text-xs uppercase tracking-wide text-base-content/50">
                                 Endpoint
                               </div>
-                              <div className="font-mono text-sm">
+                              <div className="break-all font-mono text-sm">
                                 {fallback(selectedGemini.endpoint)}
                               </div>
                             </div>
@@ -1925,7 +1925,7 @@ export function AuthPanel() {
                             </li>
                           </ul>
 
-                          <div className="join">
+                          <div className="join join-vertical w-full sm:join-horizontal">
                             <button
                               className="btn btn-sm join-item"
                               onClick={() =>
@@ -2055,7 +2055,7 @@ export function AuthPanel() {
                     </div>
 
                     <div className="max-w-full overflow-x-auto lg:shrink-0">
-                      <div className="join w-max">
+                      <div className="join join-vertical w-full sm:w-max sm:join-horizontal">
                         <button
                           className="btn btn-sm join-item"
                           onClick={handleRefresh}
@@ -2194,7 +2194,7 @@ export function AuthPanel() {
                             <div className="text-xs uppercase tracking-wide text-base-content/50">
                               Profile ID
                             </div>
-                            <div className="font-mono text-sm">
+                            <div className="break-all font-mono text-sm">
                               {selectedAIStudio.profile_id}
                             </div>
                           </div>
@@ -2214,7 +2214,7 @@ export function AuthPanel() {
                             <div className="text-xs uppercase tracking-wide text-base-content/50">
                               Key Hint
                             </div>
-                            <div className="font-mono text-sm">
+                            <div className="break-all font-mono text-sm">
                               {fallback(selectedAIStudio.key_hint)}
                             </div>
                           </div>
@@ -2285,7 +2285,7 @@ export function AuthPanel() {
                     </div>
 
                     <div className="max-w-full overflow-x-auto lg:shrink-0">
-                      <div className="join w-max">
+                      <div className="join join-vertical w-full sm:w-max sm:join-horizontal">
                         <button
                           className="btn btn-sm join-item"
                           onClick={handleRefresh}
@@ -2504,7 +2504,7 @@ export function AuthPanel() {
                                 <div className="text-xs uppercase tracking-wide text-base-content/50">
                                   Profile ID
                                 </div>
-                                <div className="font-mono text-sm">
+                                <div className="break-all font-mono text-sm">
                                   {selectedAnthropic.profile_id}
                                 </div>
                               </div>
@@ -2524,7 +2524,7 @@ export function AuthPanel() {
                                 <div className="text-xs uppercase tracking-wide text-base-content/50">
                                   Key Hint
                                 </div>
-                                <div className="font-mono text-sm">
+                                <div className="break-all font-mono text-sm">
                                   {fallback(selectedAnthropic.key_hint)}
                                 </div>
                               </div>
@@ -2567,7 +2567,7 @@ export function AuthPanel() {
                           </p>
                         </div>
                         <div className="max-w-full overflow-x-auto lg:shrink-0">
-                          <div className="join w-max">
+                          <div className="join join-vertical w-full sm:w-max sm:join-horizontal">
                             <button
                               className="btn btn-sm join-item"
                               onClick={handleStartAnthropicBrowserLogin}
@@ -2745,7 +2745,7 @@ export function AuthPanel() {
                     </div>
 
                     <div className="max-w-full overflow-x-auto lg:shrink-0">
-                      <div className="join w-max">
+                      <div className="join join-vertical w-full sm:w-max sm:join-horizontal">
                         <button
                           className="btn btn-sm join-item"
                           onClick={handleRefresh}
@@ -2973,7 +2973,7 @@ export function AuthPanel() {
                               <div className="text-xs uppercase tracking-wide text-base-content/50">
                                 Profile ID
                               </div>
-                              <div className="font-mono text-sm">
+                              <div className="break-all font-mono text-sm">
                                 {selectedOpenAI.profile_id}
                               </div>
                             </div>
@@ -3017,7 +3017,7 @@ export function AuthPanel() {
                           </p>
                         </div>
                         <div className="max-w-full overflow-x-auto lg:shrink-0">
-                          <div className="join w-max">
+                          <div className="join join-vertical w-full sm:w-max sm:join-horizontal">
                             <button
                               className="btn btn-sm join-item"
                               onClick={handleStartOpenAIBrowserLogin}
