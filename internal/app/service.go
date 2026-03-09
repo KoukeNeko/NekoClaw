@@ -2958,8 +2958,22 @@ func (s *Service) attemptSingleProvider(
 			logService.Warnf("final model trim: context_window=%d estimated=%d budget=%d dropped=%d kept=%d",
 				contextWindow, finalEstimated, finalBudget, len(dropped), len(modelMessages))
 		}
-		compressionMeta.CompressedTokens = contextwindow.EstimateMessagesTokens(modelMessages)
 	}
+	sanitizedModelMessages, orphanedToolMessages := core.SanitizeToolMessagePairs(modelMessages)
+	if len(orphanedToolMessages) > 0 {
+		modelMessages = sanitizedModelMessages
+		compressionMeta.DroppedMessages += len(orphanedToolMessages)
+		compressionMeta.SoftTrimmed += len(orphanedToolMessages)
+		compressed = true
+		logService.Warnf(
+			"sanitized tool history: provider=%s model=%s dropped=%d kept=%d",
+			providerID,
+			modelID,
+			len(orphanedToolMessages),
+			len(modelMessages),
+		)
+	}
+	compressionMeta.CompressedTokens = contextwindow.EstimateMessagesTokens(modelMessages)
 
 	attemptLimit := len(pool.Snapshot())
 	if attemptLimit < 1 {

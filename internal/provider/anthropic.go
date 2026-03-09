@@ -808,6 +808,7 @@ func buildAnthropicUserContent(text string, images []core.ImageData) []any {
 }
 
 func splitAnthropicToolMessages(messages []core.Message) (string, []anthropicToolMessage) {
+	messages, _ = core.SanitizeToolMessagePairs(messages)
 	systemParts := make([]string, 0, 4)
 	turns := make([]anthropicToolMessage, 0, len(messages))
 	for _, msg := range messages {

@@ -250,3 +250,48 @@ func TestAnthropicGenerateToolTurnParsesToolUse(t *testing.T) {
 		t.Fatalf("unexpected tool call: %+v", resp.ToolCalls[0])
 	}
 }
+
+func TestSplitAnthropicToolMessages_DropsOrphanedToolMessages(t *testing.T) {
+	system, turns := splitAnthropicToolMessages([]core.Message{
+		{Role: core.RoleSystem, Content: "system"},
+		{Role: core.RoleUser, Content: "question"},
+		{Role: core.RoleAssistant, ToolName: "search", ToolCallID: "tc-1", Content: `{"q":"a"}`},
+		{Role: core.RoleAssistant, Content: "reply after broken tool turn"},
+		{Role: core.RoleTool, ToolName: "search", ToolCallID: "tc-1", Content: `{"result":"late"}`},
+		{Role: core.RoleAssistant, ToolName: "fetch", ToolCallID: "tc-2", Content: `{"url":"https://example.com"}`},
+		{Role: core.RoleTool, ToolName: "fetch", ToolCallID: "tc-2", Content: `{"ok":true}`},
+	})
+
+	if system != "system" {
+		t.Fatalf("unexpected system prompt: %q", system)
+	}
+	if len(turns) != 4 {
+		t.Fatalf("expected 4 turns after sanitization, got %d", len(turns))
+	}
+	if turns[0].Role != "user" {
+		t.Fatalf("expected user turn first, got %+v", turns[0])
+	}
+	if turns[1].Role != "assistant" {
+		t.Fatalf("expected assistant text turn second, got %+v", turns[1])
+	}
+	if turns[2].Role != "assistant" {
+		t.Fatalf("expected assistant tool_use turn third, got %+v", turns[2])
+	}
+	block, ok := turns[2].Content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected tool_use content block, got %+v", turns[2].Content[0])
+	}
+	if block["type"] != "tool_use" || block["id"] != "tc-2" {
+		t.Fatalf("expected surviving tool_use tc-2, got %+v", block)
+	}
+	if turns[3].Role != "user" {
+		t.Fatalf("expected user tool_result turn fourth, got %+v", turns[3])
+	}
+	resultBlock, ok := turns[3].Content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected tool_result content block, got %+v", turns[3].Content[0])
+	}
+	if resultBlock["type"] != "tool_result" || resultBlock["tool_use_id"] != "tc-2" {
+		t.Fatalf("expected surviving tool_result tc-2, got %+v", resultBlock)
+	}
+}
