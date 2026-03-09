@@ -58,7 +58,7 @@ export function LoginPage() {
       <div className="mx-auto flex min-h-screen max-w-5xl items-center justify-center">
         <div className="grid w-full gap-6 lg:grid-cols-[minmax(0,0.95fr)_minmax(320px,1.05fr)]">
           <div className="card border border-base-300 bg-base-100 shadow-xl">
-            <div className="card-body gap-4">
+            <div className="card-body gap-6">
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
                   <div className="badge badge-outline badge-sm">Security</div>
@@ -72,17 +72,20 @@ export function LoginPage() {
                 </div>
               </div>
 
-              <form className="space-y-4" onSubmit={handleSubmit}>
-                <label className="form-control gap-2">
-                  <span className="label-text font-medium">管理員密碼</span>
+              <form className="space-y-5" onSubmit={handleSubmit}>
+                <label className="fieldset">
+                  <legend className="fieldset-legend">管理員密碼</legend>
                   <input
                     type="password"
-                    className="input input-bordered w-full"
+                    className="input input-bordered w-full outline-none focus:outline-none focus:ring-0 focus-visible:outline-none focus:shadow-none"
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                     autoComplete="current-password"
                     placeholder="請輸入密碼"
                   />
+                  <p className="label text-base-content/55">
+                    登入後才能使用聊天、設定與受保護的管理 API。
+                  </p>
                 </label>
 
                 {error ? (
@@ -91,10 +94,10 @@ export function LoginPage() {
                   </div>
                 ) : null}
 
-                <div className="card-actions justify-end">
+                <div className="pt-1">
                   <button
                     type="submit"
-                    className="btn btn-primary"
+                    className="btn btn-primary w-full sm:w-auto sm:min-w-28"
                     disabled={submitting}
                   >
                     {submitting ? (
