@@ -79,7 +79,7 @@ func NewGeminiOAuthManager(opts ManagerOptions) *GeminiOAuthManager {
 	}
 	host := strings.TrimSpace(opts.Host)
 	if host == "" {
-		host = "localhost"
+		host = "127.0.0.1"
 	}
 	port := opts.Port
 	if port <= 0 {
@@ -128,6 +128,11 @@ func (m *GeminiOAuthManager) Start(
 		return StartResult{}, err
 	}
 	challenge := pkceChallenge(verifier)
+	requestedMode, err := normalizeStartMode(req.Mode)
+	if err != nil {
+		return StartResult{}, err
+	}
+
 	redirectURI := strings.TrimSpace(req.RedirectURI)
 	if redirectURI == "" {
 		redirectURI = m.RedirectURI()
@@ -139,18 +144,17 @@ func (m *GeminiOAuthManager) Start(
 	if parsedRedirect.Scheme == "" || parsedRedirect.Host == "" {
 		return StartResult{}, fmt.Errorf("invalid redirect_uri: must be absolute URL")
 	}
+
+	mode := OAuthFlowManual
+	isLocalRedirect, host, port := parseRedirectHostPort(redirectURI)
+	if strings.TrimSpace(req.RedirectURI) != "" && !isLocalRedirect {
+		return StartResult{}, fmt.Errorf("invalid redirect_uri: gemini oauth only supports loopback redirect URIs")
+	}
+
 	authURL, err := buildAuthURL(challenge, state, redirectURI)
 	if err != nil {
 		return StartResult{}, err
 	}
-
-	requestedMode, err := normalizeStartMode(req.Mode)
-	if err != nil {
-		return StartResult{}, err
-	}
-
-	mode := OAuthFlowManual
-	isLocalRedirect, host, port := parseRedirectHostPort(redirectURI)
 	switch requestedMode {
 	case "local":
 		if isLocalRedirect && m.loopbackAvailableAt(ctx, host, port) {

@@ -59,7 +59,7 @@ func TestGeminiOAuthManualFlowEndToEnd(t *testing.T) {
 		t.Fatalf("expected manual mode in test, got %q", mode)
 	}
 
-	completeBody := `{"state":"` + state + `","callback_url_or_code":"http://localhost:8085/oauth2callback?code=code-1&state=` + state + `"}`
+	completeBody := `{"state":"` + state + `","callback_url_or_code":"http://127.0.0.1:8085/oauth2callback?code=code-1&state=` + state + `"}`
 	completeResp := performJSONRequest(t, handler, http.MethodPost, "/v1/auth/gemini/manual/complete", completeBody)
 	if completeResp.Code != http.StatusOK {
 		t.Fatalf("unexpected complete status: %d body=%s", completeResp.Code, completeResp.Body.String())
@@ -118,7 +118,47 @@ func TestOAuthCallbackStateMismatch(t *testing.T) {
 	}
 }
 
-func TestOAuthStartSupportsRemoteModeAndRedirectOverride(t *testing.T) {
+func TestOAuthStartSupportsRemoteModeAndLoopbackRedirectOverride(t *testing.T) {
+	svc := app.NewService(app.ServiceOptions{})
+	svc.RegisterProvider(fakeGeminiProvider{})
+	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
+
+	store, err := auth.NewStore(auth.StoreOptions{
+		BaseDir: t.TempDir(),
+		Keyring: newMemoryKeyring(),
+	})
+	if err != nil {
+		t.Fatalf("new auth store: %v", err)
+	}
+	manager := auth.NewGeminiOAuthManager(auth.ManagerOptions{
+		StateTTL: 5 * time.Minute,
+		IsRemote: func() bool { return false },
+	})
+	svc.SetAuthIntegration(manager, store)
+	server := NewServer(svc)
+	handler := server.Handler()
+
+	startBody := `{"mode":"remote","redirect_uri":"http://127.0.0.1:8787/oauth2callback"}`
+	startResp := performJSONRequest(t, handler, http.MethodPost, "/v1/auth/gemini/start", startBody)
+	if startResp.Code != http.StatusOK {
+		t.Fatalf("unexpected start status: %d body=%s", startResp.Code, startResp.Body.String())
+	}
+	var started map[string]any
+	if err := json.Unmarshal(startResp.Body.Bytes(), &started); err != nil {
+		t.Fatalf("decode start response: %v", err)
+	}
+	if mode, _ := started["mode"].(string); mode != "manual" {
+		t.Fatalf("expected manual mode, got %q", mode)
+	}
+	if oauthMode, _ := started["oauth_mode"].(string); oauthMode != "remote" {
+		t.Fatalf("expected oauth_mode remote, got %q", oauthMode)
+	}
+	if redirect, _ := started["redirect_uri"].(string); redirect != "http://127.0.0.1:8787/oauth2callback" {
+		t.Fatalf("unexpected redirect_uri: %q", redirect)
+	}
+}
+
+func TestOAuthStartRejectsNonLoopbackRedirectOverride(t *testing.T) {
 	svc := app.NewService(app.ServiceOptions{})
 	svc.RegisterProvider(fakeGeminiProvider{})
 	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
@@ -140,21 +180,11 @@ func TestOAuthStartSupportsRemoteModeAndRedirectOverride(t *testing.T) {
 
 	startBody := `{"mode":"remote","redirect_uri":"https://bot.example.com/oauth2callback"}`
 	startResp := performJSONRequest(t, handler, http.MethodPost, "/v1/auth/gemini/start", startBody)
-	if startResp.Code != http.StatusOK {
+	if startResp.Code != http.StatusBadGateway {
 		t.Fatalf("unexpected start status: %d body=%s", startResp.Code, startResp.Body.String())
 	}
-	var started map[string]any
-	if err := json.Unmarshal(startResp.Body.Bytes(), &started); err != nil {
-		t.Fatalf("decode start response: %v", err)
-	}
-	if mode, _ := started["mode"].(string); mode != "manual" {
-		t.Fatalf("expected manual mode, got %q", mode)
-	}
-	if oauthMode, _ := started["oauth_mode"].(string); oauthMode != "remote" {
-		t.Fatalf("expected oauth_mode remote, got %q", oauthMode)
-	}
-	if redirect, _ := started["redirect_uri"].(string); redirect != "https://bot.example.com/oauth2callback" {
-		t.Fatalf("unexpected redirect_uri: %q", redirect)
+	if !strings.Contains(startResp.Body.String(), "loopback redirect URIs") {
+		t.Fatalf("expected loopback redirect error, got body=%s", startResp.Body.String())
 	}
 }
 
@@ -189,7 +219,7 @@ func TestGeminiOAuthManualCompleteProjectDiscoveryFailure(t *testing.T) {
 	}
 	state, _ := started["state"].(string)
 
-	completeBody := `{"state":"` + state + `","callback_url_or_code":"http://localhost:8085/oauth2callback?code=code-1&state=` + state + `"}`
+	completeBody := `{"state":"` + state + `","callback_url_or_code":"http://127.0.0.1:8085/oauth2callback?code=code-1&state=` + state + `"}`
 	completeResp := performJSONRequest(t, handler, http.MethodPost, "/v1/auth/gemini/manual/complete", completeBody)
 	if completeResp.Code != http.StatusBadRequest {
 		t.Fatalf("unexpected complete status: %d body=%s", completeResp.Code, completeResp.Body.String())

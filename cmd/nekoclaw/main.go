@@ -52,7 +52,7 @@ func main() {
 		authDir            = flag.String("auth-dir", envOr("NEKOCLAW_AUTH_DIR", ""), "auth state directory (defaults to ~/.nekoclaw/auth)")
 		sessionsDir        = flag.String("sessions-dir", envOr("NEKOCLAW_SESSIONS_DIR", ""), "session persistence directory (defaults to ~/.nekoclaw/sessions)")
 		memoryDir          = flag.String("memory-dir", envOr("NEKOCLAW_MEMORY_DIR", ""), "memory directory for MEMORY.md and daily logs (defaults to ~/.nekoclaw/memory)")
-		callbackHost       = flag.String("oauth-callback-host", envOr("OPENCLAW_GEMINI_OAUTH_CALLBACK_HOST", "localhost"), "gemini oauth callback host")
+		callbackHost       = flag.String("oauth-callback-host", envOr("OPENCLAW_GEMINI_OAUTH_CALLBACK_HOST", "127.0.0.1"), "gemini oauth callback host")
 		callbackPort       = flag.Int("oauth-callback-port", envOrInt("OPENCLAW_GEMINI_OAUTH_CALLBACK_PORT", 8085), "gemini oauth callback port")
 	)
 	flag.Parse()

@@ -35,7 +35,7 @@ func TestGeminiOAuthManagerStartAndManualConsume(t *testing.T) {
 	}
 
 	callbackURL := fmt.Sprintf(
-		"http://localhost:8085/oauth2callback?code=auth-code&state=%s",
+		"http://127.0.0.1:8085/oauth2callback?code=auth-code&state=%s",
 		started.State,
 	)
 	pending, code, err := manager.ConsumeFromManual(started.State, callbackURL)
@@ -47,6 +47,9 @@ func TestGeminiOAuthManagerStartAndManualConsume(t *testing.T) {
 	}
 	if pending.ProfileID != "p1" {
 		t.Fatalf("expected profile id to survive pending state")
+	}
+	if started.RedirectURI != "http://127.0.0.1:8085/oauth2callback" {
+		t.Fatalf("unexpected default redirect uri: %q", started.RedirectURI)
 	}
 }
 
@@ -85,7 +88,7 @@ func TestGeminiOAuthManagerStateMismatch(t *testing.T) {
 		t.Fatalf("start oauth: %v", err)
 	}
 
-	_, _, err = manager.ConsumeFromManual(started.State, "http://localhost:8085/oauth2callback?code=abc&state=wrong")
+	_, _, err = manager.ConsumeFromManual(started.State, "http://127.0.0.1:8085/oauth2callback?code=abc&state=wrong")
 	if !errors.Is(err, ErrStateMismatch) {
 		t.Fatalf("expected ErrStateMismatch, got %v", err)
 	}

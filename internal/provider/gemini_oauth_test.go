@@ -125,7 +125,7 @@ func TestCompleteOAuthFailsWhenLoadCodeAssistUnavailable(t *testing.T) {
 	_, err := p.CompleteOAuth(context.Background(), OAuthCompleteRequest{
 		Code:               "code-1",
 		Verifier:           "verifier-1",
-		RedirectURI:        "http://localhost:8085/oauth2callback",
+		RedirectURI:        "http://127.0.0.1:8085/oauth2callback",
 		EndpointPreference: "",
 		ProjectID:          "",
 	})
@@ -171,7 +171,7 @@ func TestCompleteOAuthFailsWhenSecurityPolicyNeedsProvisionedProject(t *testing.
 	_, err := p.CompleteOAuth(context.Background(), OAuthCompleteRequest{
 		Code:               "code-1",
 		Verifier:           "verifier-1",
-		RedirectURI:        "http://localhost:8085/oauth2callback",
+		RedirectURI:        "http://127.0.0.1:8085/oauth2callback",
 		EndpointPreference: "",
 		ProjectID:          "",
 	})

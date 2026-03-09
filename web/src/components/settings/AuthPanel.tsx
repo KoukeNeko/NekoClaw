@@ -101,10 +101,13 @@ function buildGeminiOAuthRequest(): { mode: "auto" | "remote"; redirect_uri?: st
   if (isLocalBrowserHost(window.location.hostname)) {
     return { mode: "auto" };
   }
-  return {
-    mode: "remote",
-    redirect_uri: new URL("/oauth2callback", window.location.origin).toString(),
-  };
+  return { mode: "remote" };
+}
+
+function geminiCallbackExample(redirectURI?: string | null): string {
+  const trimmed = redirectURI?.trim();
+  const base = trimmed || "http://127.0.0.1:8085/oauth2callback";
+  return `${base}?code=...&state=...`;
 }
 
 function formatDateTime(value?: string | null): string {
@@ -974,20 +977,20 @@ export function AuthPanel() {
         setStatus({
           tone: "info",
           message: opened
-            ? "已開啟 Gemini 授權頁面，完成後可返回此頁重新整理或貼上 callback URL"
+            ? "已開啟 Gemini 授權頁面。若最後停在 127.0.0.1 callback，請把該網址或授權 code 貼回此頁。"
             : "Gemini OAuth 已啟動，請手動開啟授權網址完成登入",
         });
       } else if (request.mode === "remote") {
         setStatus({
           tone: "info",
           message: opened
-            ? "已開啟 Gemini 授權頁面，完成授權後會導回本站 callback"
+            ? "已開啟 Gemini 授權頁面。Gemini CLI OAuth 只接受 127.0.0.1 loopback callback；完成後請把瀏覽器最後的 callback URL 或 code 貼回此頁。"
             : "Gemini OAuth 已啟動，請手動開啟授權網址完成登入",
         });
       } else {
         setStatus({
           tone: "info",
-          message: "Gemini OAuth 已啟動，完成授權後貼上 callback URL 或 code",
+          message: "Gemini OAuth 已啟動，完成授權後貼上 127.0.0.1 callback URL 或 code",
         });
       }
     } catch {
@@ -1953,7 +1956,7 @@ export function AuthPanel() {
                             </legend>
                             <textarea
                               className="textarea textarea-bordered h-24 w-full"
-                              placeholder="貼上 callback URL 或授權 code"
+                              placeholder={geminiCallbackExample(geminiFlow.redirect_uri)}
                               value={geminiManualInput}
                               onChange={(event) =>
                                 setGeminiManualInput(event.target.value)
@@ -1961,8 +1964,12 @@ export function AuthPanel() {
                               disabled={busyAction !== ""}
                             />
                             <p className="label text-base-content/55">
-                              loopback 模式下若 popup 被阻擋，仍可用 manual
-                              complete 作為 fallback。
+                              <>
+                                Gemini CLI OAuth 目前只接受{" "}
+                                <code>127.0.0.1</code> loopback callback；遠端站點或
+                                popup 被阻擋時，請把最後的 callback URL 或授權 code
+                                貼回這裡。
+                              </>
                             </p>
                           </label>
 
@@ -1981,8 +1988,8 @@ export function AuthPanel() {
                         <div className="space-y-3">
                           <div className="alert alert-info">
                             <span>
-                              點擊「開始 OAuth」後，若為 loopback 模式會開新分頁；若為
-                              manual 模式則在此顯示 callback/manual fallback 表單。
+                              點擊「開始 OAuth」後會開啟 Gemini 授權頁。Gemini CLI OAuth
+                              只接受 <code>127.0.0.1</code> loopback callback；若從公網站點發起或無法自動回呼，請把最後的 callback URL 或 code 貼回這裡。
                             </span>
                           </div>
                           <ul className="list rounded-box border border-base-300 bg-base-100">
@@ -1990,7 +1997,7 @@ export function AuthPanel() {
                               <div>
                                 <div className="font-medium">Loopback callback</div>
                                 <div className="text-sm text-base-content/65">
-                                  預設導向 `/oauth2callback`，Vite dev server 已代理到後端。
+                                  預設使用 <code>http://127.0.0.1:8085/oauth2callback</code>，本機啟動時可直接完成回呼。
                                 </div>
                               </div>
                             </li>
@@ -1998,7 +2005,7 @@ export function AuthPanel() {
                               <div>
                                 <div className="font-medium">Manual fallback</div>
                                 <div className="text-sm text-base-content/65">
-                                  遠端或 popup 被阻擋時，可手動貼上 callback URL 或 code。
+                                  遠端站點或 popup 被阻擋時，請手動貼上最後的 <code>127.0.0.1</code> callback URL 或授權 code。
                                 </div>
                               </div>
                             </li>

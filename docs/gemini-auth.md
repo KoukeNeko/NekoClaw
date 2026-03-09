@@ -3,7 +3,7 @@
 ## 1) 前置條件
 
 - API 服務可由本機存取（預設 `127.0.0.1:8085`）
-- callback 預設 `http://localhost:8085/oauth2callback`
+- callback 預設 `http://127.0.0.1:8085/oauth2callback`
 - OAuth client 預設從已安裝的 `gemini` CLI 讀取
 - 容器或主機必須可執行 `gemini`
 
@@ -17,7 +17,7 @@
 `start` 可指定 `mode`：
 
 - `auto`（預設）：優先 loopback；Web UI 在 `localhost`/loopback host 會用這個模式
-- `local`：強制 localhost loopback callback
+- `local`：強制 `127.0.0.1` loopback callback
 - `remote`：使用指定的 `redirect_uri`，或走 manual/paste fallback
 
 ## 3) Manual 流程（fallback / remote）
@@ -30,7 +30,7 @@
    - `state`
    - `callback_url_or_code`
 
-`remote` 模式可搭配 `redirect_uri` 指到公網 callback（例如反向代理後、目前站點的 `/oauth2callback`）。
+`remote` 模式仍然是為了 manual/paste fallback。若指定 `redirect_uri`，請維持在本機 loopback host/port；Gemini CLI OAuth 不會使用公網 callback。
 
 ## 4) Web UI 操作
 
@@ -40,7 +40,7 @@ Web UI（Settings -> Auth）：
 - `開始 OAuth`
 - `重新整理`
 - `使用此 profile`
-- `完成 Gemini OAuth`（manual fallback 時貼 callback URL 或 code）
+- `完成 Gemini OAuth`（manual fallback 時貼 `127.0.0.1` callback URL 或 code）
 
 > 不再手動選 endpoint / project。  
 > endpoint 由系統自動 fallback；project 由 `loadCodeAssist/onboardUser` 自動決策。
@@ -48,7 +48,7 @@ Web UI（Settings -> Auth）：
 目前 Web UI 會依瀏覽器 host 自動選擇模式：
 
 - `localhost` / `127.0.0.1` / `::1`：優先 loopback callback
-- 公網或反向代理 host：送 `remote` 模式，並把 `redirect_uri` 設為目前站點的 `/oauth2callback`
+- 公網或反向代理 host：送 `remote` 模式，但仍使用 `127.0.0.1` loopback callback，完成後需手動貼回 callback URL 或 code
 
 若 profile 仍然缺少 project_id，請重新執行 Gemini OAuth，並確認 `gemini` CLI 端的 provisioning 已完成。
 

@@ -79,8 +79,8 @@ The project includes a `google-gemini-cli` provider that supports:
 
 Gemini OAuth flow supports:
 
-- localhost callback (default `http://localhost:8085/oauth2callback`)
-- browser-host aware startup (`localhost` keeps loopback flow; non-local origins use the current origin's `/oauth2callback`)
+- loopback callback (default `http://127.0.0.1:8085/oauth2callback`)
+- browser-host aware startup (`localhost`/`127.0.0.1` keeps loopback flow; non-local origins still use manual completion against the loopback callback)
 - manual fallback (paste callback URL or code)
 - PKCE/state verification
 - endpoint auto selection (`cloudcode-pa` -> `daily` -> `autopush`)
@@ -89,11 +89,11 @@ Gemini OAuth flow supports:
 
 Web UI flow (Settings -> Auth):
 
-- `開始 OAuth` starts the flow; on localhost it prefers loopback callback, while public deployments use the current origin's `/oauth2callback`
+- `開始 OAuth` starts the flow; Gemini CLI OAuth always uses the loopback callback, and public deployments finish via manual paste-back
 - `重新整理` reloads profile and flow state after browser auth returns
 - `Profiles` to inspect account availability and cooldown status
 - `使用此 profile` to switch runtime profile
-- `完成 Gemini OAuth` appears for manual fallback so you can paste a callback URL or auth code when loopback/popup flow is unavailable
+- `完成 Gemini OAuth` appears for manual fallback so you can paste the final `127.0.0.1` callback URL or auth code when loopback/popup flow is unavailable
 
 API endpoints:
 
@@ -106,7 +106,7 @@ API endpoints:
 `POST /v1/auth/gemini/start` request now also supports:
 
 - `mode`: `auto` (default), `local`, `remote`
-- `redirect_uri`: override callback URI (useful in `remote` mode)
+- `redirect_uri`: override the loopback callback URI when you need a custom local host/port
 
 OAuth client source:
 
@@ -114,7 +114,7 @@ OAuth client source:
 
 Runtime OAuth env:
 
-- `OPENCLAW_GEMINI_OAUTH_CALLBACK_HOST` (default: `localhost`)
+- `OPENCLAW_GEMINI_OAUTH_CALLBACK_HOST` (default: `127.0.0.1`)
 - `OPENCLAW_GEMINI_OAUTH_CALLBACK_PORT` (default: `8085`)
 - `NEKOCLAW_AUTH_DIR` (default: `~/.nekoclaw/auth`)
 - `NEKOCLAW_LOG_FILE` (optional; in `web` mode defaults to `~/.nekoclaw/logs/nekoclaw.log`)
