@@ -196,6 +196,9 @@ func (p *GoogleAIStudioProvider) GenerateToolTurn(ctx context.Context, req ToolT
 		if blocked := aiStudioBlockedFailure(body, p.baseURL, resp.StatusCode); blocked != nil {
 			return ToolTurnResponse{}, blocked
 		}
+		if empty := aiStudioEmptyCandidateFailure(body, p.baseURL, resp.StatusCode); empty != nil {
+			return ToolTurnResponse{}, empty
+		}
 		return ToolTurnResponse{}, &FailureError{
 			Reason:   core.FailureFormat,
 			Message:  "google ai studio tool response did not include text or tool calls: " + summarizeForError(body, 280),
@@ -284,6 +287,9 @@ func (p *GoogleAIStudioProvider) Generate(ctx context.Context, req GenerateReque
 	if !ok {
 		if blocked := aiStudioBlockedFailure(body, p.baseURL, resp.StatusCode); blocked != nil {
 			return GenerateResponse{}, blocked
+		}
+		if empty := aiStudioEmptyCandidateFailure(body, p.baseURL, resp.StatusCode); empty != nil {
+			return GenerateResponse{}, empty
 		}
 		return GenerateResponse{}, &FailureError{
 			Reason:   core.FailureFormat,
@@ -691,6 +697,19 @@ func aiStudioBlockedFailure(body []byte, endpoint string, status int) *FailureEr
 	}
 }
 
+func aiStudioEmptyCandidateFailure(body []byte, endpoint string, status int) *FailureError {
+	message, ok := detectAIStudioEmptyCandidateMessage(body)
+	if !ok {
+		return nil
+	}
+	return &FailureError{
+		Reason:   core.FailureUnknown,
+		Message:  message,
+		Endpoint: endpoint,
+		Status:   status,
+	}
+}
+
 func detectAIStudioBlockedMessage(body []byte) (string, bool) {
 	var payload aiStudioGenerateResponse
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -719,6 +738,36 @@ func detectAIStudioBlockedMessage(body []byte) (string, bool) {
 	}
 
 	return "", false
+}
+
+func detectAIStudioEmptyCandidateMessage(body []byte) (string, bool) {
+	var payload aiStudioGenerateResponse
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return "", false
+	}
+	if len(payload.Candidates) == 0 {
+		return "", false
+	}
+
+	for _, candidate := range payload.Candidates {
+		for _, part := range candidate.Content.Parts {
+			if strings.TrimSpace(part.Text) != "" {
+				return "", false
+			}
+		}
+	}
+
+	finishReason := ""
+	for _, candidate := range payload.Candidates {
+		if reason := strings.TrimSpace(candidate.FinishReason); reason != "" {
+			finishReason = reason
+			break
+		}
+	}
+	if finishReason == "" {
+		return "google ai studio returned an empty candidate response", true
+	}
+	return "google ai studio returned an empty candidate response with finishReason=" + finishReason, true
 }
 
 func formatAIStudioBlockMessage(reason string, detail string) string {

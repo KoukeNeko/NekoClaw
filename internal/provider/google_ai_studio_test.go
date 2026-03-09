@@ -397,6 +397,106 @@ func TestGoogleAIStudioGenerateToolTurnReturnsBlockedPromptError(t *testing.T) {
 	}
 }
 
+func TestGoogleAIStudioGenerateReturnsRetriableErrorForEmptyStopCandidate(t *testing.T) {
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return newHTTPResponse(http.StatusOK, `{
+				"candidates": [{
+					"content": {},
+					"finishReason": "STOP",
+					"index": 0
+				}],
+				"usageMetadata": {
+					"promptTokenCount": 24543,
+					"totalTokenCount": 24937
+				}
+			}`), nil
+		}),
+	}
+	p := NewGoogleAIStudioProvider(GoogleAIStudioOptions{
+		HTTPClient: client,
+	})
+
+	_, err := p.Generate(context.Background(), GenerateRequest{
+		Model: "gemini-2.5-pro",
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: "hi"},
+		},
+		Account: core.Account{
+			ID:       "k1",
+			Provider: "google-ai-studio",
+			Type:     core.AccountAPIKey,
+			Token:    "key-1",
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected generate error")
+	}
+	failure, ok := err.(*FailureError)
+	if !ok {
+		t.Fatalf("expected FailureError, got %T", err)
+	}
+	if failure.Reason != core.FailureUnknown {
+		t.Fatalf("unexpected reason: %s", failure.Reason)
+	}
+	if !strings.Contains(failure.Message, "finishReason=STOP") {
+		t.Fatalf("expected finishReason in message, got %q", failure.Message)
+	}
+	if strings.Contains(failure.Message, "did not include text") {
+		t.Fatalf("expected empty-candidate message, got %q", failure.Message)
+	}
+}
+
+func TestGoogleAIStudioGenerateToolTurnReturnsRetriableErrorForEmptyStopCandidate(t *testing.T) {
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return newHTTPResponse(http.StatusOK, `{
+				"candidates": [{
+					"content": {},
+					"finishReason": "STOP",
+					"index": 0
+				}],
+				"usageMetadata": {
+					"promptTokenCount": 24543,
+					"totalTokenCount": 24937
+				}
+			}`), nil
+		}),
+	}
+	p := NewGoogleAIStudioProvider(GoogleAIStudioOptions{
+		HTTPClient: client,
+	})
+
+	_, err := p.GenerateToolTurn(context.Background(), ToolTurnRequest{
+		Model: "gemini-2.5-pro",
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: "hi"},
+		},
+		Account: core.Account{
+			ID:       "k1",
+			Provider: "google-ai-studio",
+			Type:     core.AccountAPIKey,
+			Token:    "key-1",
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected generate tool turn error")
+	}
+	failure, ok := err.(*FailureError)
+	if !ok {
+		t.Fatalf("expected FailureError, got %T", err)
+	}
+	if failure.Reason != core.FailureUnknown {
+		t.Fatalf("unexpected reason: %s", failure.Reason)
+	}
+	if !strings.Contains(failure.Message, "finishReason=STOP") {
+		t.Fatalf("expected finishReason in message, got %q", failure.Message)
+	}
+	if strings.Contains(failure.Message, "did not include text or tool calls") {
+		t.Fatalf("expected empty-candidate message, got %q", failure.Message)
+	}
+}
+
 func TestGoogleAIStudioListModelsUsesCacheAndDefaultSelection(t *testing.T) {
 	modelCalls := 0
 	client := &http.Client{
