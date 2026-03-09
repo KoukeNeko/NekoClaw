@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -52,8 +53,14 @@ type aiStudioModelResponse struct {
 }
 
 type aiStudioGenerateResponse struct {
+	PromptFeedback struct {
+		BlockReason        string `json:"blockReason"`
+		BlockReasonMessage string `json:"blockReasonMessage"`
+	} `json:"promptFeedback"`
 	Candidates []struct {
-		Content struct {
+		FinishReason  string `json:"finishReason"`
+		FinishMessage string `json:"finishMessage"`
+		Content       struct {
 			Parts []struct {
 				Text string `json:"text"`
 			} `json:"parts"`
@@ -183,6 +190,9 @@ func (p *GoogleAIStudioProvider) GenerateToolTurn(ctx context.Context, req ToolT
 
 	result := extractToolCallsFromGeminiResponse(body)
 	if !result.OK {
+		if blocked := aiStudioBlockedFailure(body, p.baseURL, resp.StatusCode); blocked != nil {
+			return ToolTurnResponse{}, blocked
+		}
 		return ToolTurnResponse{}, &FailureError{
 			Reason:   core.FailureFormat,
 			Message:  "google ai studio tool response did not include text or tool calls: " + summarizeForError(body, 280),
@@ -269,6 +279,9 @@ func (p *GoogleAIStudioProvider) Generate(ctx context.Context, req GenerateReque
 
 	text, usage, ok := extractTextAndUsageFromAIStudio(body)
 	if !ok {
+		if blocked := aiStudioBlockedFailure(body, p.baseURL, resp.StatusCode); blocked != nil {
+			return GenerateResponse{}, blocked
+		}
 		return GenerateResponse{}, &FailureError{
 			Reason:   core.FailureFormat,
 			Message:  "google ai studio response did not include text: " + summarizeForError(body, 280),
@@ -656,6 +669,58 @@ func extractTextAndUsageFromAIStudio(body []byte) (string, core.UsageInfo, bool)
 		TotalTokens:  payload.UsageMetadata.TotalTokenCount,
 	}
 	return strings.Join(parts, "\n"), usage, true
+}
+
+func aiStudioBlockedFailure(body []byte, endpoint string, status int) *FailureError {
+	message, ok := detectAIStudioBlockedMessage(body)
+	if !ok {
+		return nil
+	}
+	return &FailureError{
+		Reason:   core.FailureFormat,
+		Message:  message,
+		Endpoint: endpoint,
+		Status:   status,
+	}
+}
+
+func detectAIStudioBlockedMessage(body []byte) (string, bool) {
+	var payload aiStudioGenerateResponse
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return "", false
+	}
+
+	if reason := strings.TrimSpace(payload.PromptFeedback.BlockReason); reason != "" &&
+		!strings.EqualFold(reason, "BLOCK_REASON_UNSPECIFIED") {
+		return formatAIStudioBlockMessage(reason, payload.PromptFeedback.BlockReasonMessage), true
+	}
+
+	for _, candidate := range payload.Candidates {
+		reason := strings.TrimSpace(candidate.FinishReason)
+		switch {
+		case reason == "":
+			continue
+		case strings.EqualFold(reason, "STOP"),
+			strings.EqualFold(reason, "MAX_TOKENS"):
+			continue
+		case strings.EqualFold(reason, "SAFETY"),
+			strings.EqualFold(reason, "PROHIBITED_CONTENT"),
+			strings.EqualFold(reason, "RECITATION"),
+			strings.EqualFold(reason, "SPII"):
+			return formatAIStudioBlockMessage(reason, candidate.FinishMessage), true
+		}
+	}
+
+	return "", false
+}
+
+func formatAIStudioBlockMessage(reason string, detail string) string {
+	reason = strings.TrimSpace(reason)
+	detail = strings.TrimSpace(detail)
+	if detail == "" || strings.EqualFold(detail, reason) {
+		return "google ai studio blocked request: " + reason
+	}
+	return fmt.Sprintf("google ai studio blocked request: %s (%s)", reason, detail)
 }
 
 func supportsGenerateContent(methods []string) bool {
