@@ -46,3 +46,27 @@ func TestLoadConfig_DefaultsSecurityConfigWhenMissing(t *testing.T) {
 		t.Fatalf("security defaults = %#v, want %#v", got.Security, DefaultSecurityConfig())
 	}
 }
+
+func TestLoadAndSaveConfig_RoundTripsDefaultSelection(t *testing.T) {
+	configDir := t.TempDir()
+	want := AppConfig{
+		DefaultProvider: "google-gemini-cli",
+		DefaultModel:    "gemini-2.5-pro",
+	}
+
+	if err := SaveConfig(configDir, want); err != nil {
+		t.Fatalf("SaveConfig failed: %v", err)
+	}
+
+	got, err := LoadConfig(configDir)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if got.DefaultProvider != want.DefaultProvider {
+		t.Fatalf("default_provider = %q, want %q", got.DefaultProvider, want.DefaultProvider)
+	}
+	if got.DefaultModel != want.DefaultModel {
+		t.Fatalf("default_model = %q, want %q", got.DefaultModel, want.DefaultModel)
+	}
+}

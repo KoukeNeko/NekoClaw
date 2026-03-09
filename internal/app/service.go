@@ -674,18 +674,41 @@ func (s *Service) GetDefaultModel() string {
 	return s.defaultModel
 }
 
+// SaveDefaultProviderConfig persists the default provider/model selection and
+// updates in-memory state.
+func (s *Service) SaveDefaultProviderConfig(providerID string, modelID string) error {
+	providerID = strings.TrimSpace(providerID)
+	modelID = strings.TrimSpace(modelID)
+	if providerID == "" {
+		modelID = ""
+	} else if modelID == "" {
+		modelID = "default"
+	}
+
+	s.mu.Lock()
+	configDir := s.configDir
+	s.defaultProvider = providerID
+	s.defaultModel = modelID
+	s.mu.Unlock()
+
+	appCfg, _ := core.LoadConfig(configDir)
+	appCfg.DefaultProvider = providerID
+	appCfg.DefaultModel = modelID
+	return core.SaveConfig(configDir, appCfg)
+}
+
 // SetDefaultProvider updates the current default provider ID.
 func (s *Service) SetDefaultProvider(p string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.defaultProvider = p
+	s.defaultProvider = strings.TrimSpace(p)
 }
 
 // SetDefaultModel updates the current default model ID.
 func (s *Service) SetDefaultModel(m string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.defaultModel = m
+	s.defaultModel = strings.TrimSpace(m)
 }
 
 func (s *Service) SetAuthIntegration(manager *auth.GeminiOAuthManager, store *auth.Store) {

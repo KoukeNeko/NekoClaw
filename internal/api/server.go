@@ -1373,11 +1373,17 @@ func (s *Server) handleDefaultProvider(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusBadRequest, "invalid json body")
 			return
 		}
+		providerID := s.svc.GetDefaultProvider()
+		modelID := s.svc.GetDefaultModel()
 		if p := strings.TrimSpace(body.Provider); p != "" {
-			s.svc.SetDefaultProvider(p)
+			providerID = p
 		}
 		if m := strings.TrimSpace(body.Model); m != "" {
-			s.svc.SetDefaultModel(m)
+			modelID = m
+		}
+		if err := s.svc.SaveDefaultProviderConfig(providerID, modelID); err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
 		}
 		respondJSON(w, http.StatusOK, map[string]string{
 			"provider": s.svc.GetDefaultProvider(),

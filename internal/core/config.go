@@ -55,12 +55,14 @@ type ToolsConfig struct {
 
 // AppConfig holds user-configurable settings persisted to config.json.
 type AppConfig struct {
-	Fallbacks []FallbackEntry `json:"fallbacks,omitempty"`
-	General   GeneralConfig   `json:"general,omitempty"`
-	Security  SecurityConfig  `json:"security,omitempty"`
-	Discord   DiscordConfig   `json:"discord,omitempty"`
-	Telegram  TelegramConfig  `json:"telegram,omitempty"`
-	Tools     ToolsConfig     `json:"tools,omitempty"`
+	DefaultProvider string          `json:"default_provider,omitempty"`
+	DefaultModel    string          `json:"default_model,omitempty"`
+	Fallbacks       []FallbackEntry `json:"fallbacks,omitempty"`
+	General         GeneralConfig   `json:"general,omitempty"`
+	Security        SecurityConfig  `json:"security,omitempty"`
+	Discord         DiscordConfig   `json:"discord,omitempty"`
+	Telegram        TelegramConfig  `json:"telegram,omitempty"`
+	Tools           ToolsConfig     `json:"tools,omitempty"`
 }
 
 // LoadConfig reads config.json from configDir.
@@ -81,6 +83,10 @@ func LoadConfig(configDir string) (AppConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return AppConfig{}, err
 	}
+	cfg.DefaultProvider, cfg.DefaultModel = sanitizeDefaultSelection(
+		cfg.DefaultProvider,
+		cfg.DefaultModel,
+	)
 	cfg.Fallbacks = sanitizeFallbacks(cfg.Fallbacks)
 	cfg.General = sanitizeGeneralConfig(cfg.General)
 	cfg.Security = sanitizeSecurityConfig(cfg.Security)
@@ -93,6 +99,10 @@ func SaveConfig(configDir string, cfg AppConfig) error {
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		return err
 	}
+	cfg.DefaultProvider, cfg.DefaultModel = sanitizeDefaultSelection(
+		cfg.DefaultProvider,
+		cfg.DefaultModel,
+	)
 	cfg.Fallbacks = sanitizeFallbacks(cfg.Fallbacks)
 	cfg.General = sanitizeGeneralConfig(cfg.General)
 	cfg.Security = sanitizeSecurityConfig(cfg.Security)
@@ -114,6 +124,18 @@ func resolveConfigDir(configDir string) string {
 		return defaultConfigDirName
 	}
 	return filepath.Join(home, defaultConfigDirName)
+}
+
+func sanitizeDefaultSelection(provider string, model string) (string, string) {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if provider == "" {
+		return "", ""
+	}
+	if model == "" {
+		model = "default"
+	}
+	return provider, model
 }
 
 // sanitizeFallbacks trims whitespace, removes entries with empty provider,

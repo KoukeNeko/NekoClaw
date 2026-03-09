@@ -76,6 +76,17 @@ func main() {
 		fatal(err)
 	}
 
+	providerExplicit := flagWasProvided("provider") || envIsSet("NEKOCLAW_PROVIDER")
+	modelExplicit := flagWasProvided("model") || envIsSet("NEKOCLAW_MODEL")
+	resolvedProvider, resolvedModel := resolveRuntimeDefaultSelection(
+		service.GetDefaultProvider(),
+		service.GetDefaultModel(),
+		*defaultProvider,
+		*defaultModel,
+		providerExplicit,
+		modelExplicit,
+	)
+
 	// Start MCP server connections (non-fatal on failure).
 	if err := service.StartMCP(context.Background()); err != nil {
 		logSystem.Errorf("mcp start: %v", err)
@@ -91,9 +102,10 @@ func main() {
 		}
 	}()
 
-	// Set initial default provider/model so Discord bot and other surfaces can read them.
-	service.SetDefaultProvider(*defaultProvider)
-	service.SetDefaultModel(*defaultModel)
+	// Apply startup defaults after config load so explicit flags/env can override
+	// saved settings while preserving persisted web UI selections by default.
+	service.SetDefaultProvider(resolvedProvider)
+	service.SetDefaultModel(resolvedModel)
 
 	// Start Discord bot if token is configured (runs in all modes).
 	discordBot, discordErr := startDiscordBot(service)
@@ -479,6 +491,10 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	svc.SetDiscordConfig(appConfig.Discord)
 	svc.SetTelegramConfig(appConfig.Telegram)
 	svc.SetToolsConfig(appConfig.Tools)
+	if appConfig.DefaultProvider != "" {
+		svc.SetDefaultProvider(appConfig.DefaultProvider)
+		svc.SetDefaultModel(appConfig.DefaultModel)
+	}
 
 	if len(appConfig.Fallbacks) > 0 {
 		svc.SetFallbacks(appConfig.Fallbacks)
@@ -1312,6 +1328,50 @@ func envOrDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return value
+}
+
+func resolveRuntimeDefaultSelection(
+	savedProvider string,
+	savedModel string,
+	fallbackProvider string,
+	fallbackModel string,
+	providerExplicit bool,
+	modelExplicit bool,
+) (string, string) {
+	providerID := strings.TrimSpace(fallbackProvider)
+	modelID := strings.TrimSpace(fallbackModel)
+	savedProvider = strings.TrimSpace(savedProvider)
+	savedModel = strings.TrimSpace(savedModel)
+
+	if !providerExplicit && savedProvider != "" {
+		providerID = savedProvider
+		if !modelExplicit {
+			modelID = savedModel
+		}
+	}
+
+	if providerID == "" {
+		providerID = "google-gemini-cli"
+	}
+	if modelID == "" {
+		modelID = "default"
+	}
+	return providerID, modelID
+}
+
+func flagWasProvided(name string) bool {
+	provided := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			provided = true
+		}
+	})
+	return provided
+}
+
+func envIsSet(key string) bool {
+	_, ok := os.LookupEnv(key)
+	return ok
 }
 
 func ensureGeminiOAuthEnvAliases() {

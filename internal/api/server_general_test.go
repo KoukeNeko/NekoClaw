@@ -77,3 +77,46 @@ func TestGeneralConfigEndpoint_RejectsInvalidTimezone(t *testing.T) {
 		t.Fatalf("expected invalid timezone error, got %s", resp.Body.String())
 	}
 }
+
+func TestDefaultProviderEndpoint_PersistsSelection(t *testing.T) {
+	svc := app.NewService(app.ServiceOptions{})
+	configDir := t.TempDir()
+	svc.SetConfigDir(configDir)
+
+	handler := NewServer(svc).Handler()
+	resp := performJSONRequest(
+		t,
+		handler,
+		http.MethodPut,
+		"/v1/default-provider",
+		`{"provider":"google-gemini-cli","model":"gemini-2.5-pro"}`,
+	)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected PUT status: %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var saved struct {
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &saved); err != nil {
+		t.Fatalf("decode saved default provider: %v", err)
+	}
+	if saved.Provider != "google-gemini-cli" {
+		t.Fatalf("saved provider = %q, want %q", saved.Provider, "google-gemini-cli")
+	}
+	if saved.Model != "gemini-2.5-pro" {
+		t.Fatalf("saved model = %q, want %q", saved.Model, "gemini-2.5-pro")
+	}
+
+	config, err := core.LoadConfig(configDir)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if config.DefaultProvider != "google-gemini-cli" {
+		t.Fatalf("config default_provider = %q, want %q", config.DefaultProvider, "google-gemini-cli")
+	}
+	if config.DefaultModel != "gemini-2.5-pro" {
+		t.Fatalf("config default_model = %q, want %q", config.DefaultModel, "gemini-2.5-pro")
+	}
+}

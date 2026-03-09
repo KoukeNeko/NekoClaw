@@ -99,6 +99,67 @@ func TestHydrateAIStudioProfilesLoadsCredentials(t *testing.T) {
 	}
 }
 
+func TestResolveRuntimeDefaultSelection_PrefersSavedValuesWhenNotExplicit(t *testing.T) {
+	providerID, modelID := resolveRuntimeDefaultSelection(
+		"google-ai-studio",
+		"gemini-2.5-flash",
+		"google-gemini-cli",
+		"default",
+		false,
+		false,
+	)
+
+	if providerID != "google-ai-studio" {
+		t.Fatalf("provider = %q, want %q", providerID, "google-ai-studio")
+	}
+	if modelID != "gemini-2.5-flash" {
+		t.Fatalf("model = %q, want %q", modelID, "gemini-2.5-flash")
+	}
+}
+
+func TestResolveRuntimeDefaultSelection_DoesNotReuseSavedModelWhenProviderExplicit(t *testing.T) {
+	providerID, modelID := resolveRuntimeDefaultSelection(
+		"google-ai-studio",
+		"gemini-2.5-flash",
+		"anthropic",
+		"default",
+		true,
+		false,
+	)
+
+	if providerID != "anthropic" {
+		t.Fatalf("provider = %q, want %q", providerID, "anthropic")
+	}
+	if modelID != "default" {
+		t.Fatalf("model = %q, want %q", modelID, "default")
+	}
+}
+
+func TestBuildService_LoadsSavedDefaultSelectionFromConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configDir := filepath.Join(home, ".nekoclaw")
+	if err := core.SaveConfig(configDir, core.AppConfig{
+		DefaultProvider: "openai",
+		DefaultModel:    "gpt-5",
+	}); err != nil {
+		t.Fatalf("SaveConfig failed: %v", err)
+	}
+
+	svc, err := buildService(buildServiceOptions{})
+	if err != nil {
+		t.Fatalf("buildService failed: %v", err)
+	}
+
+	if svc.GetDefaultProvider() != "openai" {
+		t.Fatalf("default provider = %q, want %q", svc.GetDefaultProvider(), "openai")
+	}
+	if svc.GetDefaultModel() != "gpt-5" {
+		t.Fatalf("default model = %q, want %q", svc.GetDefaultModel(), "gpt-5")
+	}
+}
+
 func TestLoadAnthropicAccountsFromEnv_MergesAndDedupes(t *testing.T) {
 	token1 := "sk-ant-oat01-" + strings.Repeat("a", 80)
 	token2 := "sk-ant-oat01-" + strings.Repeat("b", 80)
