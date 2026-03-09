@@ -9,6 +9,7 @@ import {
   restoreBackup,
 } from "@/api/client";
 import type { BackupEntry } from "@/api/types";
+import { SelectionList, SelectionListItem } from "@/components/settings/SelectionList";
 import { formatDateTime, formatRelativeTime } from "@/utils/format";
 
 type StatusTone = "success" | "error" | "info";
@@ -32,6 +33,12 @@ type ImportDialogState = {
   phase: ImportPhase;
   imported: BackupEntry | null;
   error: ImportErrorState | null;
+};
+type ImportStepStatus = "pending" | "active" | "done" | "error";
+type ImportStep = {
+  title: string;
+  detail: string;
+  status: ImportStepStatus;
 };
 
 function sortBackups(backups: BackupEntry[]): BackupEntry[] {
@@ -160,6 +167,77 @@ function importPhaseDescription(phase: ImportPhase): string {
       return "備份檔已通過驗證並寫入備份庫。";
     case "error":
       return "匯入在驗證或寫入階段失敗。";
+  }
+}
+
+function importStageIndex(progress: number): number {
+  if (progress >= 82) return 3;
+  if (progress >= 56) return 2;
+  if (progress >= 28) return 1;
+  return 0;
+}
+
+function buildImportSteps(
+  phase: ImportPhase,
+  progress: number,
+  hasImportedEntry: boolean,
+): ImportStep[] {
+  const steps = [
+    {
+      title: "建立匯入請求",
+      detail: "鎖定目前視窗、準備把選取的 zip 送往 /v1/backups/import。",
+    },
+    {
+      title: "上傳備份檔",
+      detail: "將 archive 內容送到 server，等待 multipart upload 完成。",
+    },
+    {
+      title: "驗證 archive",
+      detail: "Server 會解壓、檢查 manifest.json，並確認 payload 結構可匯入。",
+    },
+    {
+      title: "寫入備份庫",
+      detail: "把驗證成功的內容寫進 backups library，然後回傳新的 backup entry。",
+    },
+  ];
+
+  if (phase === "success" && hasImportedEntry) {
+    return steps.map((step) => ({ ...step, status: "done" as const }));
+  }
+
+  const activeIndex = importStageIndex(progress);
+  return steps.map((step, index) => {
+    let status: ImportStepStatus = "pending";
+    if (index < activeIndex) status = "done";
+    if (index === activeIndex) status = phase === "error" ? "error" : "active";
+    if (phase === "ready" && index === 0) status = "active";
+    return { ...step, status };
+  });
+}
+
+function importStepBadgeClass(status: ImportStepStatus): string {
+  switch (status) {
+    case "done":
+      return "badge-success";
+    case "active":
+      return "badge-warning";
+    case "error":
+      return "badge-error";
+    default:
+      return "badge-ghost";
+  }
+}
+
+function importStepLabel(status: ImportStepStatus): string {
+  switch (status) {
+    case "done":
+      return "完成";
+    case "active":
+      return "進行中";
+    case "error":
+      return "中斷";
+    default:
+      return "待命";
   }
 }
 
@@ -324,6 +402,12 @@ export function BackupPanel() {
     filteredBackups[0] ??
     null;
   const latestBackup = backups[0] ?? null;
+  const importSteps = importDialog
+    ? buildImportSteps(importDialog.phase, importProgress, !!importDialog.imported)
+    : [];
+  const activeImportStep =
+    importSteps.find((step) => step.status === "active" || step.status === "error") ??
+    null;
 
   async function handleReload() {
     setBusyAction("reload");
@@ -665,15 +749,15 @@ export function BackupPanel() {
                 </div>
               </div>
             ) : (
-              <ul className="menu rounded-box border border-base-300 bg-base-100 p-2">
+              <SelectionList>
                 {filteredBackups.map((backup) => {
                   const isSelected = selectedBackup?.backup_id === backup.backup_id;
                   return (
-                    <li key={backup.backup_id}>
-                      <button
-                        className={isSelected ? "active" : ""}
-                        onClick={() => setSelectedBackupID(backup.backup_id)}
-                      >
+                    <SelectionListItem
+                      key={backup.backup_id}
+                      selected={isSelected}
+                      onClick={() => setSelectedBackupID(backup.backup_id)}
+                    >
                         <div className="min-w-0 flex-1 text-left">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="truncate font-semibold">
@@ -692,11 +776,10 @@ export function BackupPanel() {
                             <span>{backup.components.length} 個 component</span>
                           </div>
                         </div>
-                      </button>
-                    </li>
+                    </SelectionListItem>
                   );
                 })}
-              </ul>
+              </SelectionList>
             )}
           </div>
         </div>
@@ -942,7 +1025,11 @@ export function BackupPanel() {
                   </h4>
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-3 text-xs text-base-content/60">
-                      <span>{importPhaseDescription(importDialog.phase)}</span>
+                      <span>
+                        {activeImportStep?.title
+                          ? `目前步驟：${activeImportStep.title}`
+                          : importPhaseDescription(importDialog.phase)}
+                      </span>
                       <span className="font-mono">{importProgress}%</span>
                     </div>
                     <progress
@@ -950,6 +1037,9 @@ export function BackupPanel() {
                       value={importProgress}
                       max="100"
                     />
+                  </div>
+                  <div className="text-xs text-base-content/60">
+                    {activeImportStep?.detail ?? importPhaseDescription(importDialog.phase)}
                   </div>
                   {importDialog.phase === "running" || importDialog.phase === "ready" ? (
                     <div className="alert alert-warning">
@@ -967,6 +1057,33 @@ export function BackupPanel() {
                       <span>匯入未完成，備份庫沒有套用這次上傳結果。</span>
                     </div>
                   ) : null}
+
+                  <div className="card border border-base-300 bg-base-200/60 shadow-sm">
+                    <div className="card-body gap-3 p-4">
+                      <div className="text-sm font-semibold">目前在做什麼</div>
+                      <ul className="space-y-3">
+                        {importSteps.map((step, index) => (
+                          <li
+                            key={step.title}
+                            className="flex items-start gap-3 rounded-box border border-base-300 bg-base-100 px-3 py-3"
+                          >
+                            <div className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full border border-base-300 text-xs font-semibold text-base-content/70">
+                              {index + 1}
+                            </div>
+                            <div className="min-w-0 flex-1 space-y-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <div className="font-medium">{step.title}</div>
+                                <div className={`badge badge-xs ${importStepBadgeClass(step.status)}`}>
+                                  {importStepLabel(step.status)}
+                                </div>
+                              </div>
+                              <div className="text-sm text-base-content/65">{step.detail}</div>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
                 </div>
               </div>
 
