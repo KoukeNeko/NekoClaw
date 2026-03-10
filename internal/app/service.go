@@ -1579,7 +1579,7 @@ func fallbackModels(providerID string) []string {
 	case "google-ai-studio":
 		return []string{"gemini-2.5-pro", "gemini-2.5-flash"}
 	case "google-gemini-cli":
-		return []string{"gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"}
+		return []string{"gemini-3.1-pro-preview", "gemini-3-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"}
 	default:
 		return nil
 	}
@@ -3067,6 +3067,18 @@ func (s *Service) attemptSingleProvider(
 				lastErr = err
 				break
 			}
+			resolvedModel, source := s.resolveRuntimeModel(ctx, prov, providerID, account, attemptModelID)
+			if resolvedModel != attemptModelID {
+				logService.Logf(
+					"runtime model resolved: provider=%s profile_id=%s source=%s requested_model=%s resolved_model=%s",
+					providerID,
+					account.ID,
+					source,
+					attemptModelID,
+					resolvedModel,
+				)
+				attemptModelID = resolvedModel
+			}
 		}
 
 		attemptGenerationParams := withThinkingMode(baseGenerationParams, effectiveThinkingMode)
@@ -3969,6 +3981,41 @@ func (s *Service) resolveDefaultModel(
 	return strings.TrimSpace(modelID), chooseFirstNonEmpty(source, "discovery")
 }
 
+func (s *Service) resolveRuntimeModel(
+	ctx context.Context,
+	prov provider.Provider,
+	providerID string,
+	account core.Account,
+	requestedModel string,
+) (string, string) {
+	requestedModel = strings.TrimSpace(requestedModel)
+	if providerID != "google-gemini-cli" || !matchesModelID(requestedModel, "gemini-3.1-pro-preview") {
+		return requestedModel, ""
+	}
+	catalogProvider, ok := prov.(provider.ModelCatalogProvider)
+	if !ok {
+		return requestedModel, ""
+	}
+	models, err := catalogProvider.ListModels(ctx, account)
+	if err != nil {
+		return requestedModel, ""
+	}
+	has31 := false
+	hasLegacy3Pro := false
+	for _, modelID := range models {
+		switch {
+		case matchesModelID(modelID, "gemini-3.1-pro-preview"):
+			has31 = true
+		case matchesModelID(modelID, "gemini-3-pro-preview"):
+			hasLegacy3Pro = true
+		}
+	}
+	if !has31 && hasLegacy3Pro {
+		return "gemini-3-pro-preview", "models.list"
+	}
+	return requestedModel, ""
+}
+
 func fallbackDefaultModel(providerID string) string {
 	switch strings.TrimSpace(providerID) {
 	case "google-gemini-cli":
@@ -3984,6 +4031,12 @@ func fallbackDefaultModel(providerID string) string {
 	default:
 		return "default"
 	}
+}
+
+func matchesModelID(candidate string, target string) bool {
+	candidate = strings.TrimSpace(strings.TrimPrefix(candidate, "models/"))
+	target = strings.TrimSpace(strings.TrimPrefix(target, "models/"))
+	return strings.EqualFold(candidate, target)
 }
 
 func chooseFirstNonEmpty(values ...string) string {

@@ -128,7 +128,7 @@ func TestDefaultProviderEndpoint_PersistsSelection(t *testing.T) {
 	}
 }
 
-func TestDefaultProviderEndpoint_UpgradesLegacyGeminiCLIModel(t *testing.T) {
+func TestDefaultProviderEndpoint_PreservesGeminiCLIModel(t *testing.T) {
 	svc := app.NewService(app.ServiceOptions{})
 	configDir := t.TempDir()
 	svc.SetConfigDir(configDir)
@@ -151,8 +151,8 @@ func TestDefaultProviderEndpoint_UpgradesLegacyGeminiCLIModel(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &saved); err != nil {
 		t.Fatalf("decode saved default provider: %v", err)
 	}
-	if saved.Model != "gemini-3.1-pro-preview" {
-		t.Fatalf("saved model = %q, want %q", saved.Model, "gemini-3.1-pro-preview")
+	if saved.Model != "gemini-3-pro-preview" {
+		t.Fatalf("saved model = %q, want %q", saved.Model, "gemini-3-pro-preview")
 	}
 }
 
@@ -204,7 +204,7 @@ func TestFallbacksEndpoint_PersistsThinkingMode(t *testing.T) {
 	}
 }
 
-func TestFallbacksEndpoint_UpgradesLegacyGeminiCLIModel(t *testing.T) {
+func TestFallbacksEndpoint_PreservesGeminiCLIModel(t *testing.T) {
 	svc := app.NewService(app.ServiceOptions{})
 	configDir := t.TempDir()
 	svc.SetConfigDir(configDir)
@@ -230,7 +230,7 @@ func TestFallbacksEndpoint_UpgradesLegacyGeminiCLIModel(t *testing.T) {
 	if len(saved.Fallbacks) != 1 {
 		t.Fatalf("fallbacks len = %d, want 1", len(saved.Fallbacks))
 	}
-	if saved.Fallbacks[0].Model != "gemini-3.1-pro-preview" {
-		t.Fatalf("fallback model = %q, want %q", saved.Fallbacks[0].Model, "gemini-3.1-pro-preview")
+	if saved.Fallbacks[0].Model != "gemini-3-pro-preview" {
+		t.Fatalf("fallback model = %q, want %q", saved.Fallbacks[0].Model, "gemini-3-pro-preview")
 	}
 }

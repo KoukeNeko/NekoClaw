@@ -121,7 +121,7 @@ func TestLoadConfig_SanitizesInvalidThinkingModeToAuto(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_UpgradesLegacyGeminiCLIModelSelection(t *testing.T) {
+func TestLoadConfig_PreservesGeminiCLIModelSelection(t *testing.T) {
 	configDir := t.TempDir()
 	if err := SaveConfig(configDir, AppConfig{
 		DefaultProvider: "google-gemini-cli",
@@ -141,13 +141,13 @@ func TestLoadConfig_UpgradesLegacyGeminiCLIModelSelection(t *testing.T) {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
 
-	if got.DefaultModel != "gemini-3.1-pro-preview" {
-		t.Fatalf("default_model = %q, want %q", got.DefaultModel, "gemini-3.1-pro-preview")
+	if got.DefaultModel != "gemini-3-pro-preview" {
+		t.Fatalf("default_model = %q, want %q", got.DefaultModel, "gemini-3-pro-preview")
 	}
 	if len(got.Fallbacks) != 1 {
 		t.Fatalf("fallbacks len = %d, want 1", len(got.Fallbacks))
 	}
-	if got.Fallbacks[0].Model != "gemini-3.1-pro-preview" {
-		t.Fatalf("fallback model = %q, want %q", got.Fallbacks[0].Model, "gemini-3.1-pro-preview")
+	if got.Fallbacks[0].Model != "gemini-3-pro-preview" {
+		t.Fatalf("fallback model = %q, want %q", got.Fallbacks[0].Model, "gemini-3-pro-preview")
 	}
 }

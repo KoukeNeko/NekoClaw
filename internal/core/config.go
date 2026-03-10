@@ -168,9 +168,6 @@ func NormalizeProviderModelSelection(provider string, model string) (string, str
 	if model == "" {
 		model = "default"
 	}
-	if provider == "google-gemini-cli" && strings.EqualFold(model, "gemini-3-pro-preview") {
-		model = "gemini-3.1-pro-preview"
-	}
 	return provider, model
 }
 
