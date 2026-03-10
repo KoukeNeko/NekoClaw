@@ -446,9 +446,9 @@ func geminiModelSupportsPenalty(model string) bool {
 	if normalized == "" {
 		return true
 	}
-	// Flash-lite variants reject presence/frequency penalty fields outright
-	// with "Penalty is not enabled for this model".
-	return !strings.Contains(normalized, "flash-lite")
+	// Gemini Flash-family models reject presence/frequency penalty fields
+	// outright with "Penalty is not enabled for this model".
+	return !strings.Contains(normalized, "flash")
 }
 
 func buildGeminiThinkingConfig(providerID string, model string, gen *GenerationParams) map[string]any {
