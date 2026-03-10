@@ -376,7 +376,7 @@ func (s *Server) handleGeminiQuota(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	quota, err := geminiProvider.RetrieveQuota(r.Context(), account.Token)
+	quota, err := geminiProvider.RetrieveQuota(r.Context(), account)
 	if err != nil {
 		respondError(w, http.StatusBadGateway, err.Error())
 		return
