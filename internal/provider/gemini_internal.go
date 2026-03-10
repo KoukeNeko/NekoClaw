@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +32,8 @@ const (
 	discoveryPollInterval    = 5 * time.Second
 	modelDiscoveryTTL        = 10 * time.Minute
 )
+
+var geminiQuotaResetHintPattern = regexp.MustCompile(`(?i)\breset after (\d+)s\b`)
 
 type GeminiInternalOptions struct {
 	Endpoints     []string
@@ -207,7 +211,7 @@ func (p *GeminiInternalProvider) GenerateToolTurn(ctx context.Context, req ToolT
 				Message:    strings.TrimSpace(string(respBody)),
 				Endpoint:   endpoint,
 				Status:     resp.StatusCode,
-				RetryAfter: parseRetryAfter(resp),
+				RetryAfter: parseGeminiRetryAfter(resp, respBody),
 			}
 			if shouldFallbackEndpoint(resp.StatusCode, respBody) {
 				// Only overwrite lastErr when no earlier, more meaningful error
@@ -286,9 +290,37 @@ func (p *GeminiInternalProvider) DiscoverPreferredModel(
 // ModelCatalogProvider — dynamic model listing
 // ---------------------------------------------------------------------------
 
-// ListModels returns all available model IDs by querying the fetchAvailableModels
-// and quota endpoints. Results are cached for 10 minutes.
+// ListModels returns the UI-facing Gemini catalog. It intentionally includes
+// a small set of well-known preview IDs even when the live endpoints omit them.
 func (p *GeminiInternalProvider) ListModels(ctx context.Context, account core.Account) ([]string, error) {
+	models, err := p.listLiveModels(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(models))
+	out := make([]string, 0, len(models)+len(geminiInternalWellKnownModels()))
+	for _, modelID := range models {
+		trimmed := strings.TrimSpace(modelID)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	out = appendUniqueModelIDs(out, seen, geminiInternalWellKnownModels()...)
+	sort.Strings(out)
+	return out, nil
+}
+
+// ListRuntimeModels returns only the model IDs observed from runtime sources.
+func (p *GeminiInternalProvider) ListRuntimeModels(ctx context.Context, account core.Account) ([]string, error) {
+	return p.listLiveModels(ctx, account)
+}
+
+func (p *GeminiInternalProvider) listLiveModels(ctx context.Context, account core.Account) ([]string, error) {
 	token := strings.TrimSpace(account.Token)
 	if token == "" {
 		return nil, fmt.Errorf("missing account token")
@@ -301,7 +333,7 @@ func (p *GeminiInternalProvider) ListModels(ctx context.Context, account core.Ac
 		}
 	}
 
-	models := p.fetchAllModels(ctx, account)
+	models := p.fetchLiveModels(ctx, account)
 	if len(models) == 0 {
 		return nil, fmt.Errorf("no models available from gemini internal endpoints")
 	}
@@ -312,9 +344,9 @@ func (p *GeminiInternalProvider) ListModels(ctx context.Context, account core.Ac
 	return models, nil
 }
 
-// fetchAllModels collects all available model IDs from fetchAvailableModels
-// and quota endpoints, returning a deduplicated sorted list.
-func (p *GeminiInternalProvider) fetchAllModels(ctx context.Context, account core.Account) []string {
+// fetchLiveModels collects all available model IDs from fetchAvailableModels
+// and quota endpoints, returning only runtime-observed model IDs.
+func (p *GeminiInternalProvider) fetchLiveModels(ctx context.Context, account core.Account) []string {
 	seen := map[string]struct{}{}
 	var models []string
 
@@ -362,10 +394,6 @@ func (p *GeminiInternalProvider) fetchAllModels(ctx context.Context, account cor
 			}
 		}
 	}
-
-	// Keep the UI aligned with Gemini CLI's model picker even when the
-	// internal APIs omit some generally-usable Gemini 2.5 / 3 preview IDs.
-	models = appendUniqueModelIDs(models, seen, geminiInternalWellKnownModels()...)
 
 	sort.Strings(models)
 	return models
@@ -442,7 +470,7 @@ func (p *GeminiInternalProvider) Generate(ctx context.Context, req GenerateReque
 				Message:    strings.TrimSpace(string(respBody)),
 				Endpoint:   endpoint,
 				Status:     resp.StatusCode,
-				RetryAfter: parseRetryAfter(resp),
+				RetryAfter: parseGeminiRetryAfter(resp, respBody),
 			}
 			if shouldFallbackEndpoint(resp.StatusCode, respBody) {
 				// Only overwrite lastErr when no earlier, more meaningful error
@@ -529,7 +557,7 @@ func (p *GeminiInternalProvider) GenerateStream(ctx context.Context, req Generat
 				Message:    strings.TrimSpace(string(respBody)),
 				Endpoint:   endpoint,
 				Status:     resp.StatusCode,
-				RetryAfter: parseRetryAfter(resp),
+				RetryAfter: parseGeminiRetryAfter(resp, respBody),
 			}
 			if shouldFallbackEndpoint(resp.StatusCode, respBody) {
 				if lastErr == nil {
@@ -662,10 +690,11 @@ func (p *GeminiInternalProvider) RetrieveQuota(ctx context.Context, account core
 		_ = resp.Body.Close()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			lastErr = &FailureError{
-				Reason:   classifyStatus(resp.StatusCode, string(body)),
-				Message:  strings.TrimSpace(string(body)),
-				Endpoint: endpoint,
-				Status:   resp.StatusCode,
+				Reason:     classifyStatus(resp.StatusCode, string(body)),
+				Message:    strings.TrimSpace(string(body)),
+				Endpoint:   endpoint,
+				Status:     resp.StatusCode,
+				RetryAfter: parseGeminiRetryAfter(resp, body),
 			}
 			continue
 		}
@@ -1059,6 +1088,25 @@ func appendUniqueModelIDs(models []string, seen map[string]struct{}, modelIDs ..
 		models = append(models, trimmed)
 	}
 	return models
+}
+
+func parseGeminiRetryAfter(resp *http.Response, body []byte) time.Duration {
+	if retryAfter := parseRetryAfter(resp); retryAfter > 0 {
+		return retryAfter
+	}
+	match := geminiQuotaResetHintPattern.FindSubmatch(body)
+	if len(match) != 2 {
+		return 0
+	}
+	seconds, err := strconv.Atoi(string(match[1]))
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	retryAfter := time.Duration(seconds) * time.Second
+	if retryAfter > retryAfterCap {
+		return retryAfterCap
+	}
+	return retryAfter
 }
 
 func geminiInternalWellKnownModels() []string {

@@ -3,11 +3,13 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/doeshing/nekoclaw/internal/core"
 )
@@ -419,5 +421,42 @@ func TestGenerateFallsBackFromServiceDisabledSandboxEndpoint(t *testing.T) {
 	}
 	if prodCalls == 0 {
 		t.Fatalf("expected fallback to prod endpoint")
+	}
+}
+
+func TestGenerateParsesRetryHintFromQuotaResetBodyWhenHeaderMissing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"You have exhausted your capacity on this model. Your quota will reset after 46s."}}`))
+	}))
+	defer srv.Close()
+
+	p := NewGeminiInternalProvider(GeminiInternalOptions{
+		Endpoints: []string{srv.URL},
+	})
+	_, err := p.Generate(context.Background(), GenerateRequest{
+		Model: "gemini-3.1-pro-preview",
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: "hi"},
+		},
+		Account: core.Account{
+			ID:       "a1",
+			Provider: "google-gemini-cli",
+			Type:     core.AccountOAuth,
+			Token:    "token-1",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected rate-limit error")
+	}
+	var failureErr *FailureError
+	if !errors.As(err, &failureErr) {
+		t.Fatalf("expected FailureError, got %T", err)
+	}
+	if failureErr.Reason != core.FailureRateLimit {
+		t.Fatalf("Reason = %q, want %q", failureErr.Reason, core.FailureRateLimit)
+	}
+	if failureErr.RetryAfter != 46*time.Second {
+		t.Fatalf("RetryAfter = %v, want 46s", failureErr.RetryAfter)
 	}
 }

@@ -101,6 +101,10 @@ func (p *AccountPool) Provider() string {
 }
 
 func (p *AccountPool) Acquire(preferredID string) (Account, bool) {
+	return p.AcquireExcluding(preferredID, nil)
+}
+
+func (p *AccountPool) AcquireExcluding(preferredID string, excludeIDs map[string]struct{}) (Account, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -109,6 +113,9 @@ func (p *AccountPool) Acquire(preferredID string) (Account, bool) {
 	ordered := p.resolveOrderLocked(preferredID, now)
 	for _, id := range ordered {
 		if id == "" {
+			continue
+		}
+		if _, excluded := excludeIDs[id]; excluded {
 			continue
 		}
 		account, ok := p.accounts[id]
@@ -151,17 +158,26 @@ func (p *AccountPool) HasAlternativeAvailable(currentID string) bool {
 // Returns (Account, true) on success, or (Account{}, false) if nothing becomes
 // available within the deadline or the context is cancelled.
 func (p *AccountPool) AcquireOrWait(ctx context.Context, preferredID string, maxWait time.Duration) (Account, bool) {
+	return p.AcquireOrWaitExcluding(ctx, preferredID, maxWait, nil)
+}
+
+func (p *AccountPool) AcquireOrWaitExcluding(
+	ctx context.Context,
+	preferredID string,
+	maxWait time.Duration,
+	excludeIDs map[string]struct{},
+) (Account, bool) {
 	// Fast path: an account is ready right now.
-	if account, ok := p.Acquire(preferredID); ok {
+	if account, ok := p.AcquireExcluding(preferredID, excludeIDs); ok {
 		return account, true
 	}
 
-	soonest := p.SoonestAvailableAt()
+	soonest := p.SoonestAvailableAtExcluding(excludeIDs)
 
 	// Already past the cooldown (race with Acquire above) — try again.
 	wait := time.Until(soonest)
 	if wait <= 0 {
-		return p.Acquire(preferredID)
+		return p.AcquireExcluding(preferredID, excludeIDs)
 	}
 
 	// No recoverable cooldown or wait exceeds our tolerance.
@@ -403,6 +419,10 @@ func (p *AccountPool) SetPreferred(accountID string) bool {
 }
 
 func (p *AccountPool) SoonestAvailableAt() time.Time {
+	return p.SoonestAvailableAtExcluding(nil)
+}
+
+func (p *AccountPool) SoonestAvailableAtExcluding(excludeIDs map[string]struct{}) time.Time {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -416,6 +436,9 @@ func (p *AccountPool) SoonestAvailableAt() time.Time {
 
 	var soonest time.Time
 	for id := range p.accounts {
+		if _, excluded := excludeIDs[id]; excluded {
+			continue
+		}
 		until := p.unusableUntilLocked(id)
 		if until.IsZero() || !now.Before(until) {
 			return time.Time{}

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -13,6 +14,7 @@ import (
 type geminiResolutionProvider struct {
 	mu             sync.Mutex
 	models         []string
+	runtimeModels  []string
 	listErr        error
 	generateReqs   []provider.GenerateRequest
 	streamReqs     []provider.GenerateRequest
@@ -78,6 +80,16 @@ func (p *geminiResolutionProvider) GenerateToolTurn(_ context.Context, req provi
 func (p *geminiResolutionProvider) ListModels(_ context.Context, _ core.Account) ([]string, error) {
 	if p.listErr != nil {
 		return nil, p.listErr
+	}
+	return append([]string(nil), p.models...), nil
+}
+
+func (p *geminiResolutionProvider) ListRuntimeModels(_ context.Context, _ core.Account) ([]string, error) {
+	if p.listErr != nil {
+		return nil, p.listErr
+	}
+	if p.runtimeModels != nil {
+		return append([]string(nil), p.runtimeModels...), nil
 	}
 	return append([]string(nil), p.models...), nil
 }
@@ -210,7 +222,7 @@ func TestHandleChatKeepsExplicitGemini31WhenLegacy3ProUnavailable(t *testing.T) 
 		models: []string{"gemini-2.5-pro"},
 	})
 
-	resp, err := svc.HandleChat(context.Background(), core.ChatRequest{
+	_, err := svc.HandleChat(context.Background(), core.ChatRequest{
 		SessionID:      "gemini-runtime-no-legacy",
 		DisableSession: true,
 		Surface:        core.SurfaceWeb,
@@ -218,16 +230,17 @@ func TestHandleChatKeepsExplicitGemini31WhenLegacy3ProUnavailable(t *testing.T) 
 		Model:          "gemini-3.1-pro-preview",
 		Message:        "hello",
 	})
-	if err != nil {
-		t.Fatalf("HandleChat() error = %v", err)
+	if err == nil {
+		t.Fatal("expected model-unavailable error")
 	}
-	if resp.Model != "gemini-3.1-pro-preview" {
-		t.Fatalf("ChatResponse.Model = %q, want %q", resp.Model, "gemini-3.1-pro-preview")
+	var failureErr *provider.FailureError
+	if !errors.As(err, &failureErr) || failureErr.Reason != core.FailureModelNotFound {
+		t.Fatalf("expected model_not_found failure, got %v", err)
 	}
 
 	prov := svc.providers["google-gemini-cli"].(*geminiResolutionProvider)
-	if got := prov.lastGenerateRequest().Model; got != "gemini-3.1-pro-preview" {
-		t.Fatalf("GenerateRequest.Model = %q, want %q", got, "gemini-3.1-pro-preview")
+	if got := prov.lastGenerateRequest().Model; got != "" {
+		t.Fatalf("expected no generation request, got %q", got)
 	}
 }
 

@@ -72,6 +72,7 @@ type Service struct {
 	titleGenPending   sync.Map // sessionID -> bool; dedup concurrent title generation
 	activeToolStatus  sync.Map // sessionID -> string (current tool name being executed)
 	activeRetryStatus sync.Map // sessionID -> string (failback status message)
+	modelNegativeTTL  sync.Map // provider/account/model -> expiry for account-scoped model_not_found
 }
 
 type ServiceOptions struct {
@@ -2994,9 +2995,10 @@ func (s *Service) attemptSingleProvider(
 
 	preferredProfile := s.preferredProfile(providerID)
 	inlineRetried := map[string]int{} // tracks per-account inline retry count for exponential backoff
+	excludedAccounts := map[string]struct{}{}
 	var lastErr error
 	for attempt := 0; attempt < attemptLimit; attempt++ {
-		account, ok := pool.Acquire(preferredProfile)
+		account, ok := pool.AcquireExcluding(preferredProfile, excludedAccounts)
 		if !ok {
 			if inferred := s.inferOpenAIMissingAPIKey(providerID, pool); inferred != nil {
 				lastErr = inferred
@@ -3009,7 +3011,7 @@ func (s *Service) attemptSingleProvider(
 			if params.onStreamRetry != nil {
 				params.onStreamRetry(cooldownStatus)
 			}
-			account, ok = pool.AcquireOrWait(ctx, preferredProfile, transientWaitThreshold)
+			account, ok = pool.AcquireOrWaitExcluding(ctx, preferredProfile, transientWaitThreshold, excludedAccounts)
 			if ok {
 				logService.Logf("transient wait recovered: provider=%s profile_id=%s", providerID, account.ID)
 			} else {
@@ -3067,7 +3069,19 @@ func (s *Service) attemptSingleProvider(
 				lastErr = err
 				break
 			}
-			resolvedModel, source := s.resolveRuntimeModel(ctx, prov, providerID, account, attemptModelID)
+			requestedModelID := attemptModelID
+			resolvedModel, source, usable := s.resolveRuntimeModel(ctx, prov, providerID, account, attemptModelID)
+			if !usable {
+				s.handleGeminiModelNotFound(pool, account, requestedModelID, false)
+				lastErr = &provider.FailureError{
+					Reason:   core.FailureModelNotFound,
+					Message:  fmt.Sprintf("gemini runtime model unavailable: profile=%s model=%s", account.ID, requestedModelID),
+					Endpoint: strings.TrimSpace(account.Metadata["endpoint"]),
+				}
+				preferredProfile = ""
+				excludedAccounts[account.ID] = struct{}{}
+				continue
+			}
 			if resolvedModel != attemptModelID {
 				logService.Logf(
 					"runtime model resolved: provider=%s profile_id=%s source=%s requested_model=%s resolved_model=%s",
@@ -3207,15 +3221,24 @@ func (s *Service) attemptSingleProvider(
 				continue
 			}
 
-			pool.MarkFailureWithRetryHint(account.ID, reason, retryHint)
-			logFailureEvent(providerID, account.ID, reason, pool)
-			s.syncProfileState(providerID, account.ID)
+			if s.shouldRotateGeminiAccount(providerID, reason) {
+				s.handleGeminiModelNotFound(pool, account, attemptModelID, true)
+			} else {
+				pool.MarkFailureWithRetryHint(account.ID, reason, retryHint)
+				logFailureEvent(providerID, account.ID, reason, pool)
+				s.syncProfileState(providerID, account.ID)
+			}
 			toolFailStatus := fmt.Sprintf("⚠️ %s/%s 失敗（%s），嘗試下一個帳號...", providerID, attemptModelID, reason)
 			s.activeRetryStatus.Store(sessionID, toolFailStatus)
 			if params.onStreamRetry != nil {
 				params.onStreamRetry(toolFailStatus)
 			}
 			lastErr = runErr
+			if s.shouldRotateGeminiAccount(providerID, reason) {
+				preferredProfile = ""
+				excludedAccounts[account.ID] = struct{}{}
+				continue
+			}
 			if !core.IsRetriable(reason) {
 				break
 			}
@@ -3324,9 +3347,18 @@ func (s *Service) attemptSingleProvider(
 						// Stream failed mid-way: handle like a generation failure.
 						reason := deriveFailureReason(lastErr)
 						retryHint := extractRetryHint(lastErr)
-						pool.MarkFailureWithRetryHint(account.ID, reason, retryHint)
-						logFailureEvent(providerID, account.ID, reason, pool)
-						s.syncProfileState(providerID, account.ID)
+						if s.shouldRotateGeminiAccount(providerID, reason) {
+							s.handleGeminiModelNotFound(pool, account, attemptModelID, true)
+						} else {
+							pool.MarkFailureWithRetryHint(account.ID, reason, retryHint)
+							logFailureEvent(providerID, account.ID, reason, pool)
+							s.syncProfileState(providerID, account.ID)
+						}
+						if s.shouldRotateGeminiAccount(providerID, reason) {
+							preferredProfile = ""
+							excludedAccounts[account.ID] = struct{}{}
+							continue
+						}
 						if !core.IsRetriable(reason) {
 							break
 						}
@@ -3438,15 +3470,24 @@ func (s *Service) attemptSingleProvider(
 			continue
 		}
 
-		pool.MarkFailureWithRetryHint(account.ID, reason, retryHint)
-		logFailureEvent(providerID, account.ID, reason, pool)
-		s.syncProfileState(providerID, account.ID)
+		if s.shouldRotateGeminiAccount(providerID, reason) {
+			s.handleGeminiModelNotFound(pool, account, attemptModelID, true)
+		} else {
+			pool.MarkFailureWithRetryHint(account.ID, reason, retryHint)
+			logFailureEvent(providerID, account.ID, reason, pool)
+			s.syncProfileState(providerID, account.ID)
+		}
 		genFailStatus := fmt.Sprintf("⚠️ %s/%s 失敗（%s），嘗試下一個帳號...", providerID, attemptModelID, reason)
 		s.activeRetryStatus.Store(sessionID, genFailStatus)
 		if params.onStreamRetry != nil {
 			params.onStreamRetry(genFailStatus)
 		}
 		lastErr = err
+		if s.shouldRotateGeminiAccount(providerID, reason) {
+			preferredProfile = ""
+			excludedAccounts[account.ID] = struct{}{}
+			continue
+		}
 		if !core.IsRetriable(reason) {
 			break
 		}
@@ -3832,6 +3873,64 @@ func (s *Service) syncProfileState(providerID string, profileID string) {
 	}
 }
 
+const geminiModelNegativeCacheTTL = 5 * time.Minute
+
+func (s *Service) modelNegativeCacheKey(providerID, accountID, modelID string) string {
+	providerID = strings.TrimSpace(providerID)
+	accountID = strings.TrimSpace(accountID)
+	modelID = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(modelID, "models/")))
+	if providerID == "" || accountID == "" || modelID == "" {
+		return ""
+	}
+	return providerID + "\x00" + accountID + "\x00" + modelID
+}
+
+func (s *Service) markModelUnavailable(providerID, accountID, modelID string, ttl time.Duration) {
+	if ttl <= 0 {
+		ttl = geminiModelNegativeCacheTTL
+	}
+	key := s.modelNegativeCacheKey(providerID, accountID, modelID)
+	if key == "" {
+		return
+	}
+	s.modelNegativeTTL.Store(key, time.Now().Add(ttl))
+}
+
+func (s *Service) isModelUnavailable(providerID, accountID, modelID string) bool {
+	key := s.modelNegativeCacheKey(providerID, accountID, modelID)
+	if key == "" {
+		return false
+	}
+	value, ok := s.modelNegativeTTL.Load(key)
+	if !ok {
+		return false
+	}
+	expiresAt, ok := value.(time.Time)
+	if !ok || expiresAt.IsZero() {
+		s.modelNegativeTTL.Delete(key)
+		return false
+	}
+	if time.Now().After(expiresAt) {
+		s.modelNegativeTTL.Delete(key)
+		return false
+	}
+	return true
+}
+
+func (s *Service) shouldRotateGeminiAccount(providerID string, reason core.FailureReason) bool {
+	return providerID == "google-gemini-cli" && reason == core.FailureModelNotFound
+}
+
+func (s *Service) handleGeminiModelNotFound(pool *core.AccountPool, account core.Account, modelID string, recordFailure bool) {
+	s.markModelUnavailable(account.Provider, account.ID, modelID, geminiModelNegativeCacheTTL)
+	if pool == nil || !recordFailure {
+		return
+	}
+	pool.MarkFailureWithRetryHint(account.ID, core.FailureModelNotFound, 0)
+	logFailureEvent(account.Provider, account.ID, core.FailureModelNotFound, pool)
+	s.syncProfileState(account.Provider, account.ID)
+}
+
 func (s *Service) adjustCompressionPolicy(providerID, _ string, policy contextwindow.Policy) contextwindow.Policy {
 	if providerID == "google-gemini-cli" {
 		// OpenClaw-style headroom: keep a large reserve so long contexts have
@@ -3958,6 +4057,10 @@ type geminiProjectDiscoveryProvider interface {
 	DiscoverProject(ctx context.Context, req provider.DiscoverProjectRequest) (provider.DiscoverProjectResult, error)
 }
 
+type geminiRuntimeModelCatalogProvider interface {
+	ListRuntimeModels(ctx context.Context, account core.Account) ([]string, error)
+}
+
 type aiStudioModelCatalogProvider interface {
 	provider.ModelCatalogProvider
 	ListModelsWithSource(ctx context.Context, account core.Account) (models []string, source string, cachedUntil time.Time, err error)
@@ -3987,33 +4090,48 @@ func (s *Service) resolveRuntimeModel(
 	providerID string,
 	account core.Account,
 	requestedModel string,
-) (string, string) {
+) (string, string, bool) {
 	requestedModel = strings.TrimSpace(requestedModel)
 	if providerID != "google-gemini-cli" || !matchesModelID(requestedModel, "gemini-3.1-pro-preview") {
-		return requestedModel, ""
+		return requestedModel, "", true
 	}
-	catalogProvider, ok := prov.(provider.ModelCatalogProvider)
+	catalogProvider, ok := prov.(geminiRuntimeModelCatalogProvider)
 	if !ok {
-		return requestedModel, ""
+		if s.isModelUnavailable(providerID, account.ID, requestedModel) {
+			return requestedModel, "negative_cache", false
+		}
+		return requestedModel, "", true
 	}
-	models, err := catalogProvider.ListModels(ctx, account)
+	models, err := catalogProvider.ListRuntimeModels(ctx, account)
 	if err != nil {
-		return requestedModel, ""
+		if s.isModelUnavailable(providerID, account.ID, requestedModel) {
+			return requestedModel, "negative_cache", false
+		}
+		return requestedModel, "", true
 	}
+	requestedUnavailable := s.isModelUnavailable(providerID, account.ID, "gemini-3.1-pro-preview")
+	legacyUnavailable := s.isModelUnavailable(providerID, account.ID, "gemini-3-pro-preview")
 	has31 := false
 	hasLegacy3Pro := false
 	for _, modelID := range models {
 		switch {
 		case matchesModelID(modelID, "gemini-3.1-pro-preview"):
-			has31 = true
+			if !requestedUnavailable {
+				has31 = true
+			}
 		case matchesModelID(modelID, "gemini-3-pro-preview"):
-			hasLegacy3Pro = true
+			if !legacyUnavailable {
+				hasLegacy3Pro = true
+			}
 		}
 	}
 	if !has31 && hasLegacy3Pro {
-		return "gemini-3-pro-preview", "models.list"
+		return "gemini-3-pro-preview", "runtime_models", true
 	}
-	return requestedModel, ""
+	if !has31 {
+		return requestedModel, "runtime_models", false
+	}
+	return requestedModel, "runtime_models", true
 }
 
 func fallbackDefaultModel(providerID string) string {
@@ -4430,8 +4548,8 @@ func (s *Service) generateSessionTitleAsync(
 		return
 	}
 
-	prov, _, err := s.resolveProviderPool(providerID)
-	if err != nil {
+	prov, titleModelID, titleAccount, ok := s.resolveTitleGenerationTarget(providerID, modelID, account)
+	if !ok {
 		s.titleGenPending.Delete(sessionID)
 		return
 	}
@@ -4447,12 +4565,12 @@ func (s *Service) generateSessionTitleAsync(
 		prompt := fmt.Sprintf("User: %s\nAssistant: %s", userSnippet, assistantSnippet)
 
 		resp, err := prov.Generate(ctx, provider.GenerateRequest{
-			Model: modelID,
+			Model: titleModelID,
 			Messages: []core.Message{
 				{Role: core.RoleSystem, Content: titleGenSystemPrompt},
 				{Role: core.RoleUser, Content: prompt},
 			},
-			Account: account,
+			Account: titleAccount,
 		})
 		if err != nil {
 			logService.Errorf("title gen: session_id=%s error=%q", sessionID, err)
@@ -4471,6 +4589,41 @@ func (s *Service) generateSessionTitleAsync(
 		s.sessions.SetTitle(sessionID, title)
 		logService.Logf("title generated: session_id=%s title=%q", sessionID, title)
 	}()
+}
+
+func (s *Service) resolveTitleGenerationTarget(
+	providerID, modelID string,
+	account core.Account,
+) (provider.Provider, string, core.Account, bool) {
+	if strings.TrimSpace(providerID) != "google-gemini-cli" {
+		prov, _, err := s.resolveProviderPool(providerID)
+		if err != nil {
+			return nil, "", core.Account{}, false
+		}
+		return prov, modelID, account, true
+	}
+
+	for _, fallback := range s.GetFallbacks() {
+		fallbackProviderID := strings.TrimSpace(fallback.Provider)
+		if fallbackProviderID == "" || fallbackProviderID == "google-gemini-cli" {
+			continue
+		}
+		prov, pool, err := s.resolveProviderPool(fallbackProviderID)
+		if err != nil || pool == nil {
+			continue
+		}
+		titleAccount, ok := pool.Acquire(s.preferredProfile(fallbackProviderID))
+		if !ok {
+			continue
+		}
+		titleModelID := strings.TrimSpace(fallback.Model)
+		if titleModelID == "" {
+			titleModelID = "default"
+		}
+		return prov, titleModelID, titleAccount, true
+	}
+
+	return nil, "", core.Account{}, false
 }
 
 func truncateRunes(s string, maxRunes int) string {

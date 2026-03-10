@@ -220,3 +220,36 @@ func TestListModelsIncludesCLIManageDefaultsAndUsesPreferredEndpointForQuota(t *
 		t.Fatalf("quota hosts = %#v, want [preferred.test]", quotaHosts)
 	}
 }
+
+func TestListRuntimeModelsExcludesSyntheticWellKnownEntries(t *testing.T) {
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.Path {
+			case "/v1internal:fetchAvailableModels":
+				return newHTTPResponse(http.StatusOK, `{"models":{"gemini-2.5-pro":{},"gemini-3-pro-preview":{}}}`), nil
+			case "/v1internal:retrieveUserQuota":
+				return newHTTPResponse(http.StatusOK, `{"buckets":[]}`), nil
+			default:
+				return newHTTPResponse(http.StatusNotFound, `{"error":"not found"}`), nil
+			}
+		}),
+	}
+	p := NewGeminiInternalProvider(GeminiInternalOptions{
+		Endpoints:  []string{"https://endpoint-a.test"},
+		HTTPClient: client,
+	})
+
+	models, err := p.ListRuntimeModels(context.Background(), core.Account{
+		ID:       "runtime-1",
+		Provider: "google-gemini-cli",
+		Token:    "token-1",
+	})
+	if err != nil {
+		t.Fatalf("ListRuntimeModels failed: %v", err)
+	}
+
+	want := []string{"gemini-2.5-pro", "gemini-3-pro-preview"}
+	if !reflect.DeepEqual(models, want) {
+		t.Fatalf("models = %#v, want %#v", models, want)
+	}
+}
