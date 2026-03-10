@@ -2545,6 +2545,22 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		candidateModel := candidate.model
 		candidateIsDefault := strings.EqualFold(candidateModel, "default")
 
+		// Skip fallback candidates whose provider pool is fully cooling
+		// down. The AccountPool's cooldown state persists across requests,
+		// so this check naturally prevents retrying the same exhausted pool
+		// both within a single request and across consecutive requests.
+		if isFallback {
+			if _, fbPool, resolveErr := s.resolveProviderPool(candidate.provider); resolveErr == nil {
+				if soonest := fbPool.SoonestAvailableAt(); !soonest.IsZero() && time.Now().Before(soonest) {
+					logService.Warnf(
+						"fallback skipped: provider=%s model=%s reason=pool_cooling_down until=%s",
+						candidate.provider, candidateModel, soonest.Format(time.RFC3339),
+					)
+					continue
+				}
+			}
+		}
+
 		if isFallback {
 			s.activeRetryStatus.Store(sessionID,
 				fmt.Sprintf("⚠️ %s 失敗，切換到 %s/%s", providerID, candidate.provider, candidateModel))
@@ -2684,6 +2700,19 @@ func (s *Service) HandleChatStream(ctx context.Context, req core.ChatRequest) <-
 			isFallback := i > 0
 			candidateModel := candidate.model
 			candidateIsDefault := strings.EqualFold(candidateModel, "default")
+
+			// Skip fallback candidates whose provider pool is fully cooling down.
+			if isFallback {
+				if _, fbPool, resolveErr := s.resolveProviderPool(candidate.provider); resolveErr == nil {
+					if soonest := fbPool.SoonestAvailableAt(); !soonest.IsZero() && time.Now().Before(soonest) {
+						logService.Warnf(
+							"fallback skipped: provider=%s model=%s reason=pool_cooling_down until=%s",
+							candidate.provider, candidateModel, soonest.Format(time.RFC3339),
+						)
+						continue
+					}
+				}
+			}
 
 			if isFallback {
 				status := fmt.Sprintf("⚠️ %s 失敗，切換到 %s/%s", providerID, candidate.provider, candidateModel)
