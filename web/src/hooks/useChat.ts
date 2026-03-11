@@ -240,6 +240,7 @@ export function useChat() {
             model: resp.model,
             elapsed,
             toolEvents: resp.tool_events,
+            reminders: resp.reminders,
           }));
 
           // Track usage

@@ -69,6 +69,7 @@ type Service struct {
 	defaultThinking   core.ThinkingMode // current default Gemini thinking mode
 	configDir         string            // directory for config.json persistence
 	toolRuntime       *tooling.Runtime
+	reminders         *ReminderEngine
 	mcpManager        *mcp.Manager
 	personaManager    *persona.Manager
 	backupManager     *backup.Manager
@@ -115,6 +116,7 @@ func NewService(opts ServiceOptions) *Service {
 		preferredProfiles: map[string]string{},
 		defaultThinking:   core.ThinkingModeAuto,
 		compactionConfig:  core.DefaultCompactionConfig(),
+		reminders:         NewReminderEngine(),
 		compactionQueue:   make(chan string, 256),
 		compactionQueued:  map[string]struct{}{},
 		compactionRunning: map[string]struct{}{},
@@ -485,15 +487,16 @@ func (s *Service) RenameSession(sessionID, title string) error {
 // TranscriptMessage is a lightweight message for display (no base64 image data).
 // Assistant messages include per-message metadata (provider, model, usage, tool events).
 type TranscriptMessage struct {
-	Role       string           `json:"role"`
-	Content    string           `json:"content"`
-	ImageNames []string         `json:"image_names,omitempty"`
-	CreatedAt  string           `json:"created_at"`
-	Provider   string           `json:"provider,omitempty"`
-	Model      string           `json:"model,omitempty"`
-	Usage      *core.UsageInfo  `json:"usage,omitempty"`
-	ToolEvents []core.ToolEvent `json:"tool_events,omitempty"`
-	ElapsedMs  int64            `json:"elapsed_ms,omitempty"`
+	Role       string               `json:"role"`
+	Content    string               `json:"content"`
+	ImageNames []string             `json:"image_names,omitempty"`
+	CreatedAt  string               `json:"created_at"`
+	Provider   string               `json:"provider,omitempty"`
+	Model      string               `json:"model,omitempty"`
+	Usage      *core.UsageInfo      `json:"usage,omitempty"`
+	ToolEvents []core.ToolEvent     `json:"tool_events,omitempty"`
+	ElapsedMs  int64                `json:"elapsed_ms,omitempty"`
+	Reminders  []core.ReminderEvent `json:"reminders,omitempty"`
 }
 
 // GetSessionTranscript returns user and assistant messages for display.
@@ -526,6 +529,9 @@ func (s *Service) GetSessionTranscript(sessionID string) []TranscriptMessage {
 				tm.ElapsedMs = e.MsgElapsedMs
 				if len(e.MsgToolEvents) > 0 {
 					tm.ToolEvents = e.MsgToolEvents
+				}
+				if len(e.MsgReminders) > 0 {
+					tm.Reminders = append([]core.ReminderEvent(nil), e.MsgReminders...)
 				}
 			}
 			display = append(display, tm)
@@ -2538,6 +2544,7 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 	if prompt == "" && runID == "" {
 		return core.ChatResponse{}, fmt.Errorf("message is required")
 	}
+	requestReminders := s.requestReminders(sessionID, req.ToolMode)
 
 	// Build provider+model chain: primary first, then configured fallbacks.
 	type fallbackCandidate struct {
@@ -2610,6 +2617,7 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 			toolMode:          req.ToolMode,
 			runID:             runID,
 			toolApprovals:     req.ToolApprovals,
+			reminders:         requestReminders,
 		})
 		if err == nil {
 			if isFallback {
@@ -2618,6 +2626,7 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 					providerID, candidate.provider, candidateModel, resp.Model,
 				)
 			}
+			s.recordReminderCompletion(sessionID, req.ToolMode, resp)
 			return resp, nil
 		}
 		lastErr = err
@@ -2638,6 +2647,7 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 	if lastErr == nil {
 		lastErr = ErrNoAvailableAccount
 	}
+	s.recordReminderFailure(sessionID, req.ToolMode, lastErr)
 	return core.ChatResponse{}, lastErr
 }
 
@@ -2695,6 +2705,7 @@ func (s *Service) HandleChatStream(ctx context.Context, req core.ChatRequest) <-
 			emit(core.StreamChunk{Type: core.ChunkError, Error: "message is required"})
 			return
 		}
+		requestReminders := s.requestReminders(sessionID, req.ToolMode)
 
 		// Provider chain.
 		type fallbackCandidate struct {
@@ -2765,6 +2776,7 @@ func (s *Service) HandleChatStream(ctx context.Context, req core.ChatRequest) <-
 				toolMode:          req.ToolMode,
 				runID:             runID,
 				toolApprovals:     req.ToolApprovals,
+				reminders:         requestReminders,
 				onStreamRetry: func(status string) {
 					emit(core.StreamChunk{Type: core.ChunkRetryStatus, RetryStatus: status})
 				},
@@ -2786,6 +2798,7 @@ func (s *Service) HandleChatStream(ctx context.Context, req core.ChatRequest) <-
 						providerID, candidate.provider, candidateModel, resp.Model,
 					)
 				}
+				s.recordReminderCompletion(sessionID, req.ToolMode, resp)
 				// For tool-path responses the text was not streamed; emit the
 				// full reply so the frontend receives the content.
 				if len(resp.ToolEvents) > 0 && strings.TrimSpace(resp.Reply) != "" {
@@ -2810,6 +2823,7 @@ func (s *Service) HandleChatStream(ctx context.Context, req core.ChatRequest) <-
 		if lastErr == nil {
 			lastErr = ErrNoAvailableAccount
 		}
+		s.recordReminderFailure(sessionID, req.ToolMode, lastErr)
 		emit(core.StreamChunk{Type: core.ChunkError, Error: lastErr.Error()})
 	}()
 	return ch
@@ -2833,6 +2847,7 @@ type attemptSingleProviderParams struct {
 	toolMode          core.ToolMode
 	runID             string
 	toolApprovals     []core.ToolApprovalDecision
+	reminders         []core.ReminderEvent
 	// Streaming callbacks (all optional, nil = disabled).
 	onStreamRetry func(status string)
 	onStreamTool  func(evt core.ToolEvent)
@@ -2978,6 +2993,7 @@ func (s *Service) attemptSingleProvider(
 		}
 		compressedMessages = append([]core.Message{systemMsg}, compressedMessages...)
 	}
+	compressedMessages = injectReminderMessages(compressedMessages, params.reminders)
 
 	modelMessages := decorateModelMessagesWithSentAt(compressedMessages, time.Now(), effectiveLocation)
 	if len(modelMessages) > 0 && contextWindow > 0 {
@@ -3179,6 +3195,7 @@ func (s *Service) attemptSingleProvider(
 						Usage:      runResult.Response.Usage,
 						ToolEvents: runResult.Response.ToolEvents,
 						ElapsedMs:  responseElapsedMs,
+						Reminders:  cloneReminderEvents(params.reminders),
 					}
 					entries := make([]core.SessionEntry, 0, len(runResult.SessionMessages))
 					for _, msg := range runResult.SessionMessages {
@@ -3222,6 +3239,7 @@ func (s *Service) attemptSingleProvider(
 					resp.Status = core.ChatStatusCompleted
 				}
 				resp.ElapsedMs = responseElapsedMs
+				resp.Reminders = cloneReminderEvents(params.reminders)
 				return resp, nil
 			}
 			reason := deriveFailureReason(runErr)
@@ -3319,6 +3337,7 @@ func (s *Service) attemptSingleProvider(
 								Model:     attemptModelID,
 								Usage:     streamUsage,
 								ElapsedMs: responseElapsedMs,
+								Reminders: cloneReminderEvents(params.reminders),
 							})
 							if !params.disableSession {
 								sessionEntries := make([]core.SessionEntry, 0, 2)
@@ -3365,6 +3384,7 @@ func (s *Service) attemptSingleProvider(
 								Usage:       streamUsage,
 								ElapsedMs:   responseElapsedMs,
 								Status:      core.ChatStatusCompleted,
+								Reminders:   cloneReminderEvents(params.reminders),
 							}, nil
 						}
 						// Empty stream with no error: fall through to non-streaming Generate.
@@ -3411,6 +3431,7 @@ func (s *Service) attemptSingleProvider(
 				Model:     attemptModelID,
 				Usage:     resp.Usage,
 				ElapsedMs: responseElapsedMs,
+				Reminders: cloneReminderEvents(params.reminders),
 			})
 			if !params.disableSession {
 				sessionEntries := make([]core.SessionEntry, 0, 2)
@@ -3458,6 +3479,7 @@ func (s *Service) attemptSingleProvider(
 				Usage:       resp.Usage,
 				ElapsedMs:   responseElapsedMs,
 				Status:      core.ChatStatusCompleted,
+				Reminders:   cloneReminderEvents(params.reminders),
 			}, nil
 		}
 
@@ -3553,6 +3575,83 @@ func cloneMessages(messages []core.Message) []core.Message {
 		cloned = append(cloned, dup)
 	}
 	return cloned
+}
+
+func cloneReminderEvents(reminders []core.ReminderEvent) []core.ReminderEvent {
+	if len(reminders) == 0 {
+		return nil
+	}
+	return append([]core.ReminderEvent(nil), reminders...)
+}
+
+func injectReminderMessages(messages []core.Message, reminders []core.ReminderEvent) []core.Message {
+	reminderMessages := reminderSystemMessages(reminders)
+	if len(reminderMessages) == 0 {
+		return messages
+	}
+	insertAt := 0
+	if len(messages) > 0 && messages[0].Role == core.RoleSystem {
+		insertAt = 1
+	}
+	injected := make([]core.Message, 0, len(messages)+len(reminderMessages))
+	injected = append(injected, messages[:insertAt]...)
+	injected = append(injected, reminderMessages...)
+	injected = append(injected, messages[insertAt:]...)
+	return injected
+}
+
+func (s *Service) requestReminders(sessionID string, toolMode core.ToolMode) []core.ReminderEvent {
+	if s.reminders == nil || toolMode == core.ToolModePlanner {
+		return nil
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	return s.reminders.Evaluate(sessionID, ReminderEvalOptions{
+		ActivePlanInProgress: s.hasActivePlanInProgress(sessionID),
+	})
+}
+
+func (s *Service) hasActivePlanInProgress(sessionID string) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || s.plans == nil {
+		return false
+	}
+	for _, plan := range s.plans.List(sessionID) {
+		if plan.Status == core.PlanStatusApproved || plan.Status == core.PlanStatusExecuting {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) recordReminderCompletion(sessionID string, toolMode core.ToolMode, resp core.ChatResponse) {
+	if s.reminders == nil || toolMode == core.ToolModePlanner || resp.Status == core.ChatStatusApprovalRequired {
+		return
+	}
+	s.reminders.RecordCompleted(sessionID, resp)
+}
+
+func (s *Service) recordReminderFailure(sessionID string, toolMode core.ToolMode, err error) {
+	if s.reminders == nil || toolMode == core.ToolModePlanner || err == nil {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	s.reminders.RecordFailure(sessionID, normalizeReminderFailureSignature(err))
+}
+
+func normalizeReminderFailureSignature(err error) string {
+	if err == nil {
+		return ""
+	}
+	if reason := strings.TrimSpace(string(deriveFailureReason(err))); reason != "" {
+		return reason
+	}
+	return "unknown"
 }
 
 func (s *Service) completeGeminiOAuth(

@@ -100,6 +100,22 @@ type ToolEvent struct {
 	Error         string    `json:"error,omitempty"`
 }
 
+type ReminderKind string
+
+const (
+	ReminderKindRespectToolDenial           ReminderKind = "respect_tool_denial"
+	ReminderKindActivePlanInProgress        ReminderKind = "active_plan_in_progress"
+	ReminderKindRepeatFailureChangeStrategy ReminderKind = "repeat_failure_change_strategy"
+	ReminderKindReadOnlyLoopBreakout        ReminderKind = "read_only_loop_breakout"
+)
+
+type ReminderEvent struct {
+	Kind    ReminderKind `json:"kind"`
+	Message string       `json:"message"`
+	Count   int          `json:"count"`
+	At      time.Time    `json:"at"`
+}
+
 type ThinkingMode string
 
 const (
@@ -168,6 +184,7 @@ type ChatResponse struct {
 	RunID            string                `json:"run_id,omitempty"`
 	PendingApprovals []PendingToolApproval `json:"pending_approvals,omitempty"`
 	ToolEvents       []ToolEvent           `json:"tool_events,omitempty"`
+	Reminders        []ReminderEvent       `json:"reminders,omitempty"`
 }
 
 // UsageInfo holds token usage from a single API call.
@@ -284,11 +301,12 @@ type SessionEntry struct {
 	ToolCallID string      `json:"tool_call_id,omitempty"`
 
 	// type=message (assistant response metadata — populated for role=assistant)
-	MsgProvider   string      `json:"msg_provider,omitempty"`
-	MsgModel      string      `json:"msg_model,omitempty"`
-	MsgUsage      *UsageInfo  `json:"msg_usage,omitempty"`
-	MsgToolEvents []ToolEvent `json:"msg_tool_events,omitempty"`
-	MsgElapsedMs  int64       `json:"msg_elapsed_ms,omitempty"`
+	MsgProvider   string          `json:"msg_provider,omitempty"`
+	MsgModel      string          `json:"msg_model,omitempty"`
+	MsgUsage      *UsageInfo      `json:"msg_usage,omitempty"`
+	MsgToolEvents []ToolEvent     `json:"msg_tool_events,omitempty"`
+	MsgElapsedMs  int64           `json:"msg_elapsed_ms,omitempty"`
+	MsgReminders  []ReminderEvent `json:"msg_reminders,omitempty"`
 
 	// type=compaction
 	Summary          string `json:"summary,omitempty"`
@@ -395,6 +413,7 @@ type AssistantResponseMeta struct {
 	Usage      UsageInfo
 	ToolEvents []ToolEvent
 	ElapsedMs  int64
+	Reminders  []ReminderEvent
 }
 
 // NewAssistantEntryWithMeta creates an assistant message entry with response metadata.
@@ -407,5 +426,8 @@ func NewAssistantEntryWithMeta(content string, meta AssistantResponseMeta) Sessi
 		e.MsgToolEvents = meta.ToolEvents
 	}
 	e.MsgElapsedMs = meta.ElapsedMs
+	if len(meta.Reminders) > 0 {
+		e.MsgReminders = append([]ReminderEvent(nil), meta.Reminders...)
+	}
 	return e
 }

@@ -6,6 +6,7 @@ import type {
   ToolEvent,
   PendingToolApproval,
   PlanRecord,
+  ReminderEvent,
   SecurityStatus,
 } from "@/api/types";
 import {
@@ -28,6 +29,7 @@ export interface ChatMessage {
   model?: string;
   elapsed?: number; // ms
   toolEvents?: ToolEvent[];
+  reminders?: ReminderEvent[];
   createdAt: string;
 }
 

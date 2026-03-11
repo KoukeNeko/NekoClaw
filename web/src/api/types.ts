@@ -6,6 +6,11 @@ export type MessageRole = "system" | "user" | "assistant" | "tool";
 export type Surface = "discord" | "telegram" | "web";
 export type AccountType = "oauth" | "token" | "api_key";
 export type ChatStatus = "completed" | "approval_required";
+export type ReminderKind =
+  | "respect_tool_denial"
+  | "active_plan_in_progress"
+  | "repeat_failure_change_strategy"
+  | "read_only_loop_breakout";
 export type PlanStatus =
   | "pending_approval"
   | "approved"
@@ -53,6 +58,13 @@ export interface ToolEvent {
   decision?: string;
   output_preview?: string;
   error?: string;
+}
+
+export interface ReminderEvent {
+  kind: ReminderKind;
+  message: string;
+  count: number;
+  at: string;
 }
 
 export interface FallbackEntry {
@@ -120,6 +132,7 @@ export interface ChatResponse {
   run_id?: string;
   pending_approvals?: PendingToolApproval[];
   tool_events?: ToolEvent[];
+  reminders?: ReminderEvent[];
 }
 
 export interface CreatePlanRequest {
@@ -903,4 +916,5 @@ export interface TranscriptEntry {
   usage?: UsageInfo;
   tool_events?: ToolEvent[];
   elapsed_ms?: number;
+  reminders?: ReminderEvent[];
 }

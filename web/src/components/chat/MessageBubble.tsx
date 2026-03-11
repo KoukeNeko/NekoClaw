@@ -7,6 +7,13 @@ interface Props {
   message: ChatMessage;
 }
 
+const reminderLabels: Record<string, string> = {
+  respect_tool_denial: "遵守工具拒絕",
+  active_plan_in_progress: "Plan 仍在進行",
+  repeat_failure_change_strategy: "改變策略",
+  read_only_loop_breakout: "停止只讀迴圈",
+};
+
 /**
  * Single message bubble. User messages use chat-end, assistant uses chat-start.
  * Renders markdown for assistant messages. Shows metadata footer for responses.
@@ -19,6 +26,13 @@ interface Props {
 export function MessageBubble({ message }: Props) {
   const isUser = message.role === "user";
   const isError = message.role === "error";
+  const hasFooter =
+    message.role === "assistant" &&
+    (Boolean(message.usage) ||
+      (message.toolEvents?.length ?? 0) > 0 ||
+      (message.reminders?.length ?? 0) > 0 ||
+      message.elapsed != null ||
+      Boolean(message.provider && message.model));
 
   const htmlContent = useMemo(() => {
     if (isUser || isError) return null;
@@ -66,37 +80,62 @@ export function MessageBubble({ message }: Props) {
       </div>
 
       {/* Metadata footer for assistant messages */}
-      {message.role === "assistant" && message.usage && (
+      {hasFooter && (
         <div className="chat-footer text-xs text-base-content/40 mt-1 space-y-0.5 flex-col">
-          <div className="flex flex-wrap items-center gap-x-1">
-            {message.elapsed != null && (
-              <>
-                <span>⏱ {formatDuration(message.elapsed)}</span>
-                <span className="opacity-40">·</span>
-              </>
-            )}
-            <span>
-              ↑{formatTokens(message.usage.input_tokens)} ↓
-              {formatTokens(message.usage.output_tokens)}
-              {message.usage.total_tokens > 0 && (
-                <> ({formatTokens(message.usage.total_tokens)})</>
+          {(message.elapsed != null || message.usage || (message.provider && message.model)) && (
+            <div className="flex flex-wrap items-center gap-x-1">
+              {message.elapsed != null && (
+                <>
+                  <span>⏱ {formatDuration(message.elapsed)}</span>
+                  {(message.usage || (message.provider && message.model)) && (
+                    <span className="opacity-40">·</span>
+                  )}
+                </>
               )}
-            </span>
-            {message.elapsed != null && message.elapsed > 0 && (
-              <>
-                <span className="opacity-40">·</span>
-                <span>
-                  {Math.round(message.usage.output_tokens / (message.elapsed / 1000))} tok/s
-                </span>
-              </>
-            )}
-            {message.provider && message.model && (
-              <>
-                <span className="opacity-40">·</span>
+              {message.usage && (
+                <>
+                  <span>
+                    ↑{formatTokens(message.usage.input_tokens)} ↓
+                    {formatTokens(message.usage.output_tokens)}
+                    {message.usage.total_tokens > 0 && (
+                      <> ({formatTokens(message.usage.total_tokens)})</>
+                    )}
+                  </span>
+                  {message.elapsed != null && message.elapsed > 0 && (
+                    <>
+                      <span className="opacity-40">·</span>
+                      <span>
+                        {Math.round(message.usage.output_tokens / (message.elapsed / 1000))} tok/s
+                      </span>
+                    </>
+                  )}
+                  {message.provider && message.model && (
+                    <span className="opacity-40">·</span>
+                  )}
+                </>
+              )}
+              {message.provider && message.model && (
                 <span>{message.provider}/{message.model}</span>
-              </>
-            )}
-          </div>
+              )}
+            </div>
+          )}
+          {message.reminders && message.reminders.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1">
+              {message.reminders.map((reminder) => {
+                const label = reminderLabels[reminder.kind] ?? reminder.kind;
+                const countSuffix = reminder.count > 1 ? ` x${reminder.count}` : "";
+                return (
+                  <span
+                    key={`${reminder.kind}-${reminder.at}`}
+                    className="badge badge-outline badge-xs"
+                    title={reminder.message}
+                  >
+                    {label}{countSuffix}
+                  </span>
+                );
+              })}
+            </div>
+          )}
           {message.toolEvents && message.toolEvents.length > 0 && (() => {
             const executedTools = message.toolEvents
               .filter((e) => e.phase === "executed")
