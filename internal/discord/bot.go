@@ -54,6 +54,13 @@ const (
 	emojiDone       = "✅"
 )
 
+const (
+	discordPlanApprovePrefix = "plan:approve:"
+	discordPlanRejectPrefix  = "plan:reject:"
+	discordToolAllowPrefix   = "tool:allow:"
+	discordToolDenyPrefix    = "tool:deny:"
+)
+
 // messageJob represents a queued message to be processed.
 type messageJob struct {
 	s *discordgo.Session
@@ -610,6 +617,10 @@ func (b *Bot) handleApplicationCommandInteraction(s *discordgo.Session, ic *disc
 	if !ok {
 		return
 	}
+	if inv.Name == botcmd.CommandPlan {
+		b.handlePlanCommandInteraction(s, ic, inv)
+		return
+	}
 
 	result, event, handled := b.dispatchCommand(ic.ChannelID, inv)
 	if !handled {
@@ -632,6 +643,10 @@ func (b *Bot) handleApplicationCommandInteraction(s *discordgo.Session, ic *disc
 }
 
 func (b *Bot) handleMessageComponentInteraction(s *discordgo.Session, ic *discordgo.InteractionCreate) {
+	if b.handlePlannerComponentInteraction(s, ic) {
+		return
+	}
+
 	inv, ok := parseDiscordComponentInvocation(ic)
 	if !ok {
 		return
@@ -672,6 +687,12 @@ func parseDiscordApplicationCommandInvocation(ic *discordgo.InteractionCreate) (
 			botcmd.OptionPersonaName: option.StringValue(),
 		}
 	}
+	if option := data.GetOption(botcmd.OptionPlanPrompt); option != nil {
+		if inv.StringOptions == nil {
+			inv.StringOptions = map[string]string{}
+		}
+		inv.StringOptions[botcmd.OptionPlanPrompt] = option.StringValue()
+	}
 	return inv, true
 }
 
@@ -688,6 +709,295 @@ func parseDiscordComponentInvocation(ic *discordgo.InteractionCreate) (botcmd.In
 		ComponentAction: botcmd.ActionPersonaSelect,
 		ComponentValue:  data.Values[0],
 	}, true
+}
+
+func (b *Bot) handlePlanCommandInteraction(s *discordgo.Session, ic *discordgo.InteractionCreate, inv botcmd.Invocation) {
+	prompt := strings.TrimSpace(inv.StringOption(botcmd.OptionPlanPrompt))
+	if prompt == "" {
+		_ = s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "⚠️ 缺少計畫內容。",
+			},
+		})
+		return
+	}
+
+	plan, err := b.svc.CreatePlan(b.ctx, core.CreatePlanRequest{
+		SessionID: b.getSessionID(ic.ChannelID),
+		Surface:   core.SurfaceDiscord,
+		Provider:  b.svc.GetDefaultProvider(),
+		Model:     b.svc.GetDefaultModel(),
+		Prompt:    prompt,
+	})
+	if err != nil {
+		logDiscord.Errorf("create plan error: channel=%s error=%v", ic.ChannelID, err)
+		_ = s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "⚠️ " + err.Error(),
+			},
+		})
+		return
+	}
+
+	_ = s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content:    buildDiscordPlanContent(plan),
+			Components: buildDiscordPlanComponents(plan),
+		},
+	})
+}
+
+func (b *Bot) handlePlannerComponentInteraction(s *discordgo.Session, ic *discordgo.InteractionCreate) bool {
+	if ic == nil {
+		return false
+	}
+	data := ic.MessageComponentData()
+	customID := strings.TrimSpace(data.CustomID)
+	if customID == "" {
+		return false
+	}
+
+	switch {
+	case strings.HasPrefix(customID, discordPlanApprovePrefix):
+		planID := strings.TrimPrefix(customID, discordPlanApprovePrefix)
+		plan, err := b.svc.ApprovePlan(planID)
+		if err != nil {
+			_ = s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "⚠️ " + err.Error(),
+					Flags:   discordgo.MessageFlagsEphemeral,
+				},
+			})
+			return true
+		}
+		if err := s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseUpdateMessage,
+			Data: &discordgo.InteractionResponseData{
+				Content:    buildDiscordPlanContent(plan),
+				Components: nil,
+			},
+		}); err != nil {
+			logDiscord.Errorf("approve plan respond: %v", err)
+			return true
+		}
+		go b.streamPlanExecution(s, ic.ChannelID, plan.ID)
+		return true
+	case strings.HasPrefix(customID, discordPlanRejectPrefix):
+		planID := strings.TrimPrefix(customID, discordPlanRejectPrefix)
+		plan, err := b.svc.RejectPlan(planID)
+		if err != nil {
+			_ = s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "⚠️ " + err.Error(),
+					Flags:   discordgo.MessageFlagsEphemeral,
+				},
+			})
+			return true
+		}
+		_ = s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseUpdateMessage,
+			Data: &discordgo.InteractionResponseData{
+				Content:    buildDiscordPlanContent(plan),
+				Components: nil,
+			},
+		})
+		return true
+	case strings.HasPrefix(customID, discordToolAllowPrefix), strings.HasPrefix(customID, discordToolDenyPrefix):
+		decision := "allow"
+		prefix := discordToolAllowPrefix
+		if strings.HasPrefix(customID, discordToolDenyPrefix) {
+			decision = "deny"
+			prefix = discordToolDenyPrefix
+		}
+		payload := strings.SplitN(strings.TrimPrefix(customID, prefix), ":", 2)
+		if len(payload) != 2 {
+			return false
+		}
+		runID := payload[0]
+		approvalID := payload[1]
+		if err := s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseUpdateMessage,
+			Data: &discordgo.InteractionResponseData{
+				Content: fmt.Sprintf("已%s工具請求 `%s`。", map[string]string{"allow": "核准", "deny": "拒絕"}[decision], approvalID),
+			},
+		}); err != nil {
+			logDiscord.Errorf("tool approval respond: %v", err)
+			return true
+		}
+		go b.streamPendingToolRun(s, ic.ChannelID, runID, approvalID, decision)
+		return true
+	default:
+		return false
+	}
+}
+
+func buildDiscordPlanContent(plan core.PlanRecord) string {
+	status := map[core.PlanStatus]string{
+		core.PlanStatusPendingApproval: "待核准",
+		core.PlanStatusApproved:        "已核准",
+		core.PlanStatusRejected:        "已拒絕",
+		core.PlanStatusExecuting:       "執行中",
+		core.PlanStatusCompleted:       "已完成",
+		core.PlanStatusFailed:          "失敗",
+		core.PlanStatusSuperseded:      "已取代",
+	}[plan.Status]
+	content := fmt.Sprintf("## Plan\n狀態：%s\n\n%s", status, strings.TrimSpace(plan.PlanMarkdown))
+	if strings.TrimSpace(plan.LastError) != "" {
+		content += "\n\n錯誤：" + strings.TrimSpace(plan.LastError)
+	}
+	return limitDiscordContent(content)
+}
+
+func buildDiscordPlanComponents(plan core.PlanRecord) []discordgo.MessageComponent {
+	if plan.Status != core.PlanStatusPendingApproval {
+		return nil
+	}
+	return []discordgo.MessageComponent{
+		discordgo.ActionsRow{
+			Components: []discordgo.MessageComponent{
+				discordgo.Button{
+					CustomID: discordPlanApprovePrefix + plan.ID,
+					Label:    "Approve",
+					Style:    discordgo.SuccessButton,
+				},
+				discordgo.Button{
+					CustomID: discordPlanRejectPrefix + plan.ID,
+					Label:    "Reject",
+					Style:    discordgo.SecondaryButton,
+				},
+			},
+		},
+	}
+}
+
+func buildDiscordToolApprovalComponents(runID string, approvals []core.PendingToolApproval) []discordgo.MessageComponent {
+	rows := make([]discordgo.MessageComponent, 0, len(approvals))
+	for _, approval := range approvals {
+		label := truncateRunesWithEllipsis(approval.ToolName, 40)
+		rows = append(rows, discordgo.ActionsRow{
+			Components: []discordgo.MessageComponent{
+				discordgo.Button{
+					CustomID: discordToolAllowPrefix + runID + ":" + approval.ApprovalID,
+					Label:    "Allow " + label,
+					Style:    discordgo.SuccessButton,
+				},
+				discordgo.Button{
+					CustomID: discordToolDenyPrefix + runID + ":" + approval.ApprovalID,
+					Label:    "Deny " + label,
+					Style:    discordgo.DangerButton,
+				},
+			},
+		})
+	}
+	return rows
+}
+
+func (b *Bot) streamPlanExecution(s *discordgo.Session, channelID, planID string) {
+	ch, err := b.svc.RunApprovedPlan(b.ctx, planID)
+	if err != nil {
+		_, _ = s.ChannelMessageSend(channelID, "⚠️ "+err.Error())
+		return
+	}
+	b.streamDiscordExecution(s, channelID, ch)
+}
+
+func (b *Bot) streamPendingToolRun(s *discordgo.Session, channelID, runID, approvalID, decision string) {
+	ch, err := b.svc.ContinuePendingToolRunStream(b.ctx, runID, []core.ToolApprovalDecision{
+		{ApprovalID: approvalID, Decision: decision},
+	})
+	if err != nil {
+		_, _ = s.ChannelMessageSend(channelID, "⚠️ "+err.Error())
+		return
+	}
+	b.streamDiscordExecution(s, channelID, ch)
+}
+
+func (b *Bot) streamDiscordExecution(s *discordgo.Session, channelID string, streamCh <-chan core.StreamChunk) {
+	placeholderMsg, placeholderErr := s.ChannelMessageSend(channelID, "🔄 處理中...")
+
+	var (
+		fullText     strings.Builder
+		lastEditTime time.Time
+		editInterval = 1500 * time.Millisecond
+		streamResp   *core.ChatResponse
+		streamErr    string
+	)
+
+	for chunk := range streamCh {
+		switch chunk.Type {
+		case core.ChunkToolStatus:
+			displayName := chunk.ToolName
+			if serverName, toolName, isMCP := mcp.ParseNamespacedTool(chunk.ToolName); isMCP {
+				displayName = serverName + "/" + toolName
+			}
+			if placeholderErr == nil {
+				_, _ = s.ChannelMessageEdit(channelID, placeholderMsg.ID, "🔧 正在使用 "+displayName+"...")
+			}
+		case core.ChunkRetryStatus:
+			if placeholderErr == nil {
+				_, _ = s.ChannelMessageEdit(channelID, placeholderMsg.ID, "🔄 處理中...（"+chunk.RetryStatus+"）")
+			}
+		case core.ChunkText:
+			fullText.WriteString(chunk.Content)
+			if time.Since(lastEditTime) >= editInterval && placeholderErr == nil {
+				preview := fullText.String()
+				if len(preview) > 1900 {
+					preview = preview[:1900] + "..."
+				}
+				_, _ = s.ChannelMessageEdit(channelID, placeholderMsg.ID, preview)
+				lastEditTime = time.Now()
+			}
+		case core.ChunkError:
+			streamErr = chunk.Error
+		case core.ChunkDone:
+			streamResp = chunk.Response
+		}
+	}
+
+	if streamErr != "" {
+		if placeholderErr == nil {
+			_, _ = s.ChannelMessageEdit(channelID, placeholderMsg.ID, "⚠️ "+streamErr)
+		} else {
+			_, _ = s.ChannelMessageSend(channelID, "⚠️ "+streamErr)
+		}
+		return
+	}
+	if streamResp == nil {
+		if placeholderErr == nil {
+			_, _ = s.ChannelMessageEdit(channelID, placeholderMsg.ID, "⚠️ 未收到回應")
+		}
+		return
+	}
+	if streamResp.Status == core.ChatStatusApprovalRequired && len(streamResp.PendingApprovals) > 0 {
+		if placeholderErr == nil {
+			_, _ = s.ChannelMessageEdit(channelID, placeholderMsg.ID, "⏸️ 需要工具核准。")
+		}
+		_, _ = s.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+			Content:    "請核准或拒絕以下工具操作：",
+			Components: buildDiscordToolApprovalComponents(streamResp.RunID, streamResp.PendingApprovals),
+		})
+		return
+	}
+
+	reply := strings.TrimSpace(fullText.String())
+	if reply == "" {
+		reply = strings.TrimSpace(streamResp.Reply)
+	}
+	if reply == "" {
+		reply = "（無回應）"
+	}
+	if placeholderErr == nil {
+		_ = s.ChannelMessageDelete(channelID, placeholderMsg.ID)
+	}
+	chunks := splitMessage(reply, discordMessageLimit)
+	for _, chunk := range chunks {
+		_, _ = s.ChannelMessageSend(channelID, chunk)
+	}
 }
 
 func (b *Bot) dispatchCommand(channelID string, inv botcmd.Invocation) (botcmd.Result, *botcmd.Event, bool) {

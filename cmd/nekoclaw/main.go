@@ -354,6 +354,14 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	}
 	workspaceRoot, _ := os.Getwd()
 	stateDir := resolveStateDir()
+	var planStore *core.PlanStore
+	if stateDir != "" {
+		var err error
+		planStore, err = core.NewPlanStore(filepath.Join(stateDir, "plans"))
+		if err != nil {
+			return nil, fmt.Errorf("init plan store: %w", err)
+		}
+	}
 
 	// Resolve MCP config directory (default: ~/.nekoclaw/mcp/).
 	mcpDir := ""
@@ -385,6 +393,7 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 
 	svc := app.NewService(app.ServiceOptions{
 		SessionStore:     sessionStore,
+		PlanStore:        planStore,
 		Lifecycle:        lifecycle,
 		MemoryDir:        memoryDir,
 		SearchIndex:      searchIndex,

@@ -64,6 +64,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/accounts", s.handleAccounts)
 	mux.HandleFunc("/v1/chat", s.handleChat)
 	mux.HandleFunc("/v1/chat/stream", s.handleChatStream)
+	mux.HandleFunc("/v1/plans", s.handlePlans)
+	mux.HandleFunc("/v1/plans/", s.handlePlanRoute)
 	mux.HandleFunc("/v1/integrations/discord/events", s.handleDiscordEvent)
 	mux.HandleFunc("/v1/gemini/quota", s.handleGeminiQuota)
 	mux.HandleFunc("/v1/gemini/discover-project", s.handleGeminiDiscoverProject)
@@ -267,6 +269,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		respondChatError(w, err)
 		return
 	}
+	if strings.TrimSpace(req.RunID) != "" {
+		if _, finalizeErr := s.svc.FinalizePendingPlanRun(req.RunID, resp); finalizeErr != nil && !errors.Is(finalizeErr, app.ErrPlanNotFound) {
+			respondChatError(w, finalizeErr)
+			return
+		}
+	}
 	respondJSON(w, http.StatusOK, resp)
 }
 
@@ -296,9 +304,138 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 
 	ch := s.svc.HandleChatStream(r.Context(), req)
 	for chunk := range ch {
+		if strings.TrimSpace(req.RunID) != "" {
+			if chunk.Type == core.ChunkDone && chunk.Response != nil {
+				if _, finalizeErr := s.svc.FinalizePendingPlanRun(req.RunID, *chunk.Response); finalizeErr != nil && !errors.Is(finalizeErr, app.ErrPlanNotFound) {
+					chunk = core.StreamChunk{Type: core.ChunkError, Error: finalizeErr.Error()}
+				}
+			}
+			if chunk.Type == core.ChunkError {
+				if _, finalizeErr := s.svc.FailPendingPlanRun(req.RunID, chunk.Error); finalizeErr != nil && !errors.Is(finalizeErr, app.ErrPlanNotFound) {
+					chunk = core.StreamChunk{Type: core.ChunkError, Error: finalizeErr.Error()}
+				}
+			}
+		}
 		data, _ := json.Marshal(chunk)
 		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
+	}
+}
+
+func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		sessionID := strings.TrimSpace(r.URL.Query().Get("session_id"))
+		respondJSON(w, http.StatusOK, map[string]any{
+			"plans": s.svc.ListPlans(sessionID),
+		})
+	case http.MethodPost:
+		var req core.CreatePlanRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		if req.Surface == "" {
+			req.Surface = core.SurfaceWeb
+		}
+		record, err := s.svc.CreatePlan(r.Context(), req)
+		if err != nil {
+			respondChatError(w, err)
+			return
+		}
+		respondJSON(w, http.StatusOK, record)
+	default:
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handlePlanRoute(w http.ResponseWriter, r *http.Request) {
+	trimmed := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/plans/"), "/")
+	if trimmed == "" {
+		respondError(w, http.StatusNotFound, "plan id is required")
+		return
+	}
+	parts := strings.Split(trimmed, "/")
+	planID := strings.TrimSpace(parts[0])
+	if planID == "" {
+		respondError(w, http.StatusNotFound, "plan id is required")
+		return
+	}
+
+	if len(parts) == 1 {
+		if r.Method != http.MethodGet {
+			respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		record, err := s.svc.GetPlan(planID)
+		if err != nil {
+			s.respondPlanError(w, err)
+			return
+		}
+		respondJSON(w, http.StatusOK, record)
+		return
+	}
+
+	action := strings.Join(parts[1:], "/")
+	switch action {
+	case "approve":
+		if r.Method != http.MethodPost {
+			respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		record, err := s.svc.ApprovePlan(planID)
+		if err != nil {
+			s.respondPlanError(w, err)
+			return
+		}
+		respondJSON(w, http.StatusOK, record)
+	case "reject":
+		if r.Method != http.MethodPost {
+			respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		record, err := s.svc.RejectPlan(planID)
+		if err != nil {
+			s.respondPlanError(w, err)
+			return
+		}
+		respondJSON(w, http.StatusOK, record)
+	case "execute/stream":
+		if r.Method != http.MethodPost {
+			respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			respondError(w, http.StatusInternalServerError, "streaming not supported")
+			return
+		}
+		ch, err := s.svc.RunApprovedPlan(r.Context(), planID)
+		if err != nil {
+			s.respondPlanError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		for chunk := range ch {
+			data, _ := json.Marshal(chunk)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	default:
+		respondError(w, http.StatusNotFound, "plan route not found")
+	}
+}
+
+func (s *Server) respondPlanError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, app.ErrPlanNotFound):
+		respondError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, app.ErrPlanInvalidState):
+		respondError(w, http.StatusConflict, err.Error())
+	default:
+		respondChatError(w, err)
 	}
 }
 

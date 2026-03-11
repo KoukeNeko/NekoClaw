@@ -48,6 +48,7 @@ type Service struct {
 	providers         map[string]provider.Provider
 	pools             map[string]*core.AccountPool
 	sessions          *core.SessionStore
+	plans             *core.PlanStore
 	lifecycle         *core.SessionLifecycle
 	oauthManager      *auth.GeminiOAuthManager
 	anthropicLoginMgr *auth.AnthropicLoginManager
@@ -75,6 +76,7 @@ type Service struct {
 	activeToolStatus  sync.Map // sessionID -> string (current tool name being executed)
 	activeRetryStatus sync.Map // sessionID -> string (failback status message)
 	modelNegativeTTL  sync.Map // provider/account/model -> expiry for account-scoped model_not_found
+	planRunBindings   sync.Map // runID -> planID for paused plan executions awaiting tool approval
 	compactionStart   sync.Once
 	compactionActive  bool
 	compactionQueue   chan string
@@ -85,6 +87,7 @@ type Service struct {
 
 type ServiceOptions struct {
 	SessionStore     *core.SessionStore
+	PlanStore        *core.PlanStore
 	Lifecycle        *core.SessionLifecycle
 	MemoryDir        string
 	SearchIndex      *memory.SearchIndex
@@ -105,6 +108,7 @@ func NewService(opts ServiceOptions) *Service {
 		providers:         map[string]provider.Provider{},
 		pools:             map[string]*core.AccountPool{},
 		sessions:          sessions,
+		plans:             opts.PlanStore,
 		lifecycle:         opts.Lifecycle,
 		memoryDir:         opts.MemoryDir,
 		searchIndex:       opts.SearchIndex,
@@ -114,6 +118,9 @@ func NewService(opts ServiceOptions) *Service {
 		compactionQueue:   make(chan string, 256),
 		compactionQueued:  map[string]struct{}{},
 		compactionRunning: map[string]struct{}{},
+	}
+	if svc.plans == nil {
+		svc.plans, _ = core.NewPlanStore("")
 	}
 	if opts.CompactionConfig != (core.CompactionConfig{}) {
 		cfg := normalizeCompactionConfig(opts.CompactionConfig)
@@ -2600,6 +2607,7 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 			clientSentAt:      req.ClientSentAt,
 			surface:           surface,
 			enableTools:       req.EnableTools,
+			toolMode:          req.ToolMode,
 			runID:             runID,
 			toolApprovals:     req.ToolApprovals,
 		})
@@ -2754,6 +2762,7 @@ func (s *Service) HandleChatStream(ctx context.Context, req core.ChatRequest) <-
 				clientSentAt:      req.ClientSentAt,
 				surface:           surface,
 				enableTools:       req.EnableTools,
+				toolMode:          req.ToolMode,
 				runID:             runID,
 				toolApprovals:     req.ToolApprovals,
 				onStreamRetry: func(status string) {
@@ -2821,6 +2830,7 @@ type attemptSingleProviderParams struct {
 	clientSentAt      string
 	surface           core.Surface
 	enableTools       bool
+	toolMode          core.ToolMode
 	runID             string
 	toolApprovals     []core.ToolApprovalDecision
 	// Streaming callbacks (all optional, nil = disabled).
@@ -3127,6 +3137,10 @@ func (s *Service) attemptSingleProvider(
 			if !ok || !toolProv.ToolCapabilities().SupportsTools {
 				return core.ChatResponse{}, fmt.Errorf("%w: provider=%s", ErrToolsNotSupported, providerID)
 			}
+			allowedTools := []string(nil)
+			if params.toolMode == core.ToolModePlanner {
+				allowedTools = s.toolRuntime.ReadOnlyToolNames()
+			}
 			runResult, runErr := s.toolRuntime.Run(ctx, tooling.RunRequest{
 				SessionID:    sessionID,
 				Surface:      params.surface,
@@ -3137,6 +3151,7 @@ func (s *Service) attemptSingleProvider(
 				Messages:     modelMessages,
 				UserMessage:  userMessage,
 				EnableTools:  true,
+				AllowedTools: allowedTools,
 				RunID:        params.runID,
 				Approvals:    params.toolApprovals,
 				Compressed:   compressed,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -28,6 +29,23 @@ func NewRuntime(executor Executor, approvals *ApprovalStore) *Runtime {
 		executor:  executor,
 		approvals: approvals,
 	}
+}
+
+func (r *Runtime) ReadOnlyToolNames() []string {
+	defs := r.executor.Definitions()
+	names := make([]string, 0, len(defs))
+	for _, def := range defs {
+		if r.executor.IsMutating(def.Name) {
+			continue
+		}
+		names = append(names, def.Name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (r *Runtime) GetPendingRun(runID string) (PendingRun, error) {
+	return r.approvals.Get(runID)
 }
 
 // emitToolEvent invokes the OnToolEvent callback if configured.
@@ -87,6 +105,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		modelID = run.ModelID
 		account = run.Account
 		messages = append([]core.Message(nil), run.Messages...)
+		req.AllowedTools = append([]string(nil), run.AllowedTools...)
 		pending = append([]provider.ToolCall(nil), run.PendingCalls...)
 		events = append([]core.ToolEvent(nil), run.PendingEvents...)
 		sessionMsgs = append([]core.Message(nil), run.PendingMessage...)
@@ -99,11 +118,12 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	lastReply := ""
 	for round := 0; round < maxToolRounds; round++ {
 		if len(pending) == 0 {
+			toolDefs := r.filterDefinitions(req.AllowedTools)
 			turnResp, err := req.ToolProvider.GenerateToolTurn(ctx, provider.ToolTurnRequest{
 				Model:      modelID,
 				Messages:   messages,
 				Account:    account,
-				Tools:      r.executor.Definitions(),
+				Tools:      toolDefs,
 				Generation: req.Generation,
 			})
 			if err != nil {
@@ -154,10 +174,10 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			if !r.executor.HasTool(call.Name) {
 				continue
 			}
-			if !r.executor.IsCallMutating(call) {
+			if !r.toolAllowed(req.AllowedTools, call.Name) {
 				continue
 			}
-			if req.Surface != core.SurfaceWeb {
+			if !r.executor.IsCallMutating(call) {
 				continue
 			}
 			if _, ok := decisions[call.ID]; !ok {
@@ -180,6 +200,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 				ModelID:        modelID,
 				Account:        account,
 				Messages:       messages,
+				AllowedTools:   append([]string(nil), req.AllowedTools...),
 				Compressed:     req.Compressed,
 				Compression:    req.Compression,
 				Usage:          usage,
@@ -245,21 +266,13 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 				sessionMsgs = append(sessionMsgs, assistantTool, toolMsg)
 				continue
 			}
-
-			mutating := r.executor.IsCallMutating(call)
-			reqEvt := newToolEvent(call.ID, call.Name, "requested", mutating)
-			events = append(events, reqEvt)
-			emitToolEvent(&req, reqEvt)
-
-			if mutating && req.Surface != core.SurfaceWeb {
-				errMsg := "approval_not_supported_for_surface"
+			if !r.toolAllowed(req.AllowedTools, call.Name) {
+				errMsg := fmt.Sprintf("tool not allowed for current run: %s", call.Name)
 				events = append(events, core.ToolEvent{
 					At:         time.Now(),
 					ToolCallID: call.ID,
 					ToolName:   call.Name,
-					Phase:      "denied",
-					Mutating:   true,
-					Decision:   "deny",
+					Phase:      "failed",
 					Error:      errMsg,
 				})
 				assistantTool := core.Message{
@@ -281,6 +294,11 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 				sessionMsgs = append(sessionMsgs, assistantTool, toolMsg)
 				continue
 			}
+
+			mutating := r.executor.IsCallMutating(call)
+			reqEvt := newToolEvent(call.ID, call.Name, "requested", mutating)
+			events = append(events, reqEvt)
+			emitToolEvent(&req, reqEvt)
 
 			if mutating {
 				switch decisions[call.ID] {
@@ -359,10 +377,10 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 				emitToolEvent(&req, execEvt)
 			}
 			// Head+tail truncate tool output to prevent oversized context.
-		// Preserves both initial context and final results/errors.
-		content = truncateHeadTail(content, maxToolResultBytes)
+			// Preserves both initial context and final results/errors.
+			content = truncateHeadTail(content, maxToolResultBytes)
 
-		toolMsg := core.Message{
+			toolMsg := core.Message{
 				Role:       core.RoleTool,
 				ToolName:   call.Name,
 				ToolCallID: call.ID,
@@ -390,4 +408,39 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		},
 		SessionMessages: sessionMsgs,
 	}, nil
+}
+
+func (r *Runtime) filterDefinitions(allowed []string) []provider.ToolDefinition {
+	defs := r.executor.Definitions()
+	if len(allowed) == 0 {
+		return defs
+	}
+	allow := make(map[string]struct{}, len(allowed))
+	for _, name := range allowed {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		allow[name] = struct{}{}
+	}
+	filtered := make([]provider.ToolDefinition, 0, len(defs))
+	for _, def := range defs {
+		if _, ok := allow[def.Name]; ok {
+			filtered = append(filtered, def)
+		}
+	}
+	return filtered
+}
+
+func (r *Runtime) toolAllowed(allowed []string, toolName string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	toolName = strings.TrimSpace(toolName)
+	for _, name := range allowed {
+		if strings.TrimSpace(name) == toolName {
+			return true
+		}
+	}
+	return false
 }

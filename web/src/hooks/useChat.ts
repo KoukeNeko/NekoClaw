@@ -1,6 +1,7 @@
 import { useCallback, useRef } from "react";
 import { useAppStore, nextMessageID } from "@/store/appStore";
-import { chatStream } from "@/api/sse";
+import { approvePlan as approvePlanRequest, createPlan as createPlanRequest, getPlan, listPlans, rejectPlan as rejectPlanRequest } from "@/api/client";
+import { chatStream, planExecuteStream } from "@/api/sse";
 import type { ChatRequest, StreamChunk } from "@/api/types";
 import { calculateCost } from "@/utils/pricing";
 
@@ -24,6 +25,10 @@ export function useChat() {
   const setActiveToolName = useAppStore((s) => s.setActiveToolName);
   const setRetryStatus = useAppStore((s) => s.setRetryStatus);
   const setPendingApprovals = useAppStore((s) => s.setPendingApprovals);
+  const setPlans = useAppStore((s) => s.setPlans);
+  const upsertPlan = useAppStore((s) => s.upsertPlan);
+  const currentRunProvider = useAppStore((s) => s.currentRunProvider);
+  const currentRunModel = useAppStore((s) => s.currentRunModel);
   const addUsage = useAppStore((s) => s.addUsage);
 
   /** Send a user message and start streaming the response. */
@@ -102,8 +107,8 @@ export function useChat() {
       const req: ChatRequest = {
         session_id: sessionID,
         surface: "web",
-        provider,
-        model,
+        provider: currentRunProvider || provider,
+        model: currentRunModel || model,
         message: "",
         client_timezone: effectiveTimezone,
         enable_tools: true,
@@ -115,10 +120,64 @@ export function useChat() {
         handleChunk(chunk);
       });
     },
-    [sessionID, provider, model, effectiveTimezone, setStreaming, addMessage],
+    [sessionID, provider, model, currentRunProvider, currentRunModel, effectiveTimezone, setStreaming, addMessage],
   );
 
-  function handleChunk(chunk: StreamChunk) {
+  const createPlan = useCallback(
+    async (text: string) => {
+      if (!text.trim() || isStreaming) return;
+      const plan = await createPlanRequest({
+        session_id: sessionID,
+        surface: "web",
+        provider,
+        model,
+        prompt: text.trim(),
+      });
+      upsertPlan(plan);
+    },
+    [sessionID, provider, model, isStreaming, upsertPlan],
+  );
+
+  const approvePlan = useCallback(
+    async (planID: string) => {
+      if (isStreaming) return;
+      const approved = await approvePlanRequest(planID);
+      upsertPlan(approved);
+      addMessage({
+        id: nextMessageID(),
+        role: "thinking",
+        content: "",
+        createdAt: new Date().toISOString(),
+      });
+      setStreaming(true);
+      setActiveToolName("");
+      setRetryStatus("");
+      startTimeRef.current = Date.now();
+      accumulatedTextRef.current = "";
+      abortRef.current = planExecuteStream(planID, (chunk) => {
+        handleChunk(chunk, planID);
+      });
+    },
+    [isStreaming, upsertPlan, addMessage, setStreaming, setActiveToolName, setRetryStatus],
+  );
+
+  const rejectPlan = useCallback(
+    async (planID: string) => {
+      const rejected = await rejectPlanRequest(planID);
+      upsertPlan(rejected);
+    },
+    [upsertPlan],
+  );
+
+  const loadPlans = useCallback(
+    async (targetSessionID: string) => {
+      const plans = await listPlans(targetSessionID);
+      setPlans(plans);
+    },
+    [setPlans],
+  );
+
+  function handleChunk(chunk: StreamChunk, planID?: string) {
     switch (chunk.type) {
       case "text": {
         const delta = chunk.content ?? "";
@@ -165,14 +224,17 @@ export function useChat() {
             resp.pending_approvals &&
             resp.pending_approvals.length > 0
           ) {
-            setPendingApprovals(resp.pending_approvals, resp.run_id ?? "");
+            setPendingApprovals(resp.pending_approvals, resp.run_id ?? "", resp.provider, resp.model);
           }
 
           // Update the last assistant message with metadata
           updateLastAssistant((msg) => ({
             ...msg,
             role: "assistant",
-            content: accumulatedTextRef.current || resp.reply || msg.content,
+            content:
+              accumulatedTextRef.current ||
+              resp.reply ||
+              (resp.status === "approval_required" ? "等待工具核准..." : msg.content),
             usage: resp.usage,
             provider: resp.provider,
             model: resp.model,
@@ -190,6 +252,11 @@ export function useChat() {
             addUsage(resp.usage, cost);
           }
         }
+        if (planID) {
+          void getPlan(planID).then(upsertPlan).catch(() => {
+            /* ignore */
+          });
+        }
         break;
       }
     }
@@ -203,5 +270,5 @@ export function useChat() {
     setRetryStatus("");
   }, [setStreaming, setActiveToolName, setRetryStatus]);
 
-  return { sendMessage, sendApprovals, cancelStream, isStreaming };
+  return { sendMessage, sendApprovals, cancelStream, isStreaming, createPlan, approvePlan, rejectPlan, loadPlans };
 }

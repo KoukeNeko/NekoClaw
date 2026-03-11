@@ -44,6 +44,7 @@ type RunRequest struct {
 	EnableTools  bool
 	RunID        string
 	Approvals    []core.ToolApprovalDecision
+	AllowedTools []string
 	Compressed   bool
 	Compression  core.CompressionMeta
 	Generation   *provider.GenerationParams // optional persona-driven sampling overrides

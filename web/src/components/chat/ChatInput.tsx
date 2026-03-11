@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 
 interface Props {
   onSend: (text: string, images?: { mime_type: string; data: string; file_name?: string }[]) => void;
+  onPlan: (text: string) => void;
   onCancel: () => void;
   isStreaming: boolean;
 }
@@ -11,7 +12,7 @@ interface Props {
  * Supports Enter to send, Shift+Enter for newline.
  * Supports image paste (Ctrl+V) and drag-and-drop.
  */
-export function ChatInput({ onSend, onCancel, isStreaming }: Props) {
+export function ChatInput({ onSend, onPlan, onCancel, isStreaming }: Props) {
   const [text, setText] = useState("");
   const [images, setImages] = useState<{ mime_type: string; data: string; file_name: string }[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -40,6 +41,13 @@ export function ChatInput({ onSend, onCancel, isStreaming }: Props) {
       textareaRef.current.style.height = "auto";
     }
   }, [text, images, isStreaming, onSend]);
+
+  const handlePlan = useCallback(() => {
+    if (isStreaming) return;
+    if (!text.trim()) return;
+    onPlan(text.trim());
+    setText("");
+  }, [text, isStreaming, onPlan]);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey && !e.altKey && !e.metaKey) {
@@ -151,27 +159,37 @@ export function ChatInput({ onSend, onCancel, isStreaming }: Props) {
               </svg>
             </button>
           ) : (
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={handleSend}
-              disabled={!text.trim() && images.length === 0}
-              title="送出 (Enter)"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-                strokeWidth={2}
-                stroke="currentColor"
-                className="w-4 h-4"
+            <>
+              <button
+                className="btn btn-outline btn-sm"
+                onClick={handlePlan}
+                disabled={!text.trim() || images.length > 0}
+                title="先產生計畫"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5"
-                />
-              </svg>
-            </button>
+                Plan
+              </button>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={handleSend}
+                disabled={!text.trim() && images.length === 0}
+                title="送出 (Enter)"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  strokeWidth={2}
+                  stroke="currentColor"
+                  className="w-4 h-4"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M6 12 3.269 3.125A59.769 59.769 0 0 1 21.485 12 59.768 59.768 0 0 1 3.27 20.875L5.999 12Zm0 0h7.5"
+                  />
+                </svg>
+              </button>
+            </>
           )}
         </div>
       </div>

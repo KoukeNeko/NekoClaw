@@ -15,9 +15,19 @@ export function ChatPage() {
   const setProvider = useAppStore((s) => s.setProvider);
   const setModel = useAppStore((s) => s.setModel);
   const setThinkingMode = useAppStore((s) => s.setThinkingMode);
+  const sessionID = useAppStore((s) => s.sessionID);
   const pendingApprovals = useAppStore((s) => s.pendingApprovals);
 
-  const { sendMessage, sendApprovals, cancelStream, isStreaming } = useChat();
+  const {
+    sendMessage,
+    sendApprovals,
+    cancelStream,
+    isStreaming,
+    createPlan,
+    approvePlan,
+    rejectPlan,
+    loadPlans,
+  } = useChat();
 
   // Load default provider/model on mount
   useEffect(() => {
@@ -34,16 +44,21 @@ export function ChatPage() {
     }
   }, [provider, setProvider, setModel, setThinkingMode]);
 
+  useEffect(() => {
+    loadPlans(sessionID);
+  }, [sessionID, loadPlans]);
+
   return (
     <div className="flex flex-col h-full">
       <ChatHeader />
 
       <div className="flex-1 overflow-hidden">
-        <MessageList />
+        <MessageList onApprovePlan={approvePlan} onRejectPlan={rejectPlan} />
       </div>
 
       <ChatInput
         onSend={sendMessage}
+        onPlan={createPlan}
         onCancel={cancelStream}
         isStreaming={isStreaming}
       />

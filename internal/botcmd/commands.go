@@ -10,8 +10,10 @@ import (
 const (
 	CommandReset   = "reset"
 	CommandPersona = "persona"
+	CommandPlan    = "plan"
 
 	OptionPersonaName = "name"
+	OptionPlanPrompt  = "prompt"
 
 	ActionPersonaSelect = "persona_select"
 	PersonaOffValue     = "__off__"
@@ -103,6 +105,17 @@ func Specs() []CommandSpec {
 					Name:        OptionPersonaName,
 					Description: "角色名稱；留空會顯示選單",
 					Required:    false,
+				},
+			},
+		},
+		{
+			Name:        CommandPlan,
+			Description: "為目前對話建立執行計畫",
+			Options: []CommandOption{
+				{
+					Name:        OptionPlanPrompt,
+					Description: "要規劃的任務",
+					Required:    true,
 				},
 			},
 		},

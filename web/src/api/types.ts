@@ -6,6 +6,14 @@ export type MessageRole = "system" | "user" | "assistant" | "tool";
 export type Surface = "discord" | "telegram" | "web";
 export type AccountType = "oauth" | "token" | "api_key";
 export type ChatStatus = "completed" | "approval_required";
+export type PlanStatus =
+  | "pending_approval"
+  | "approved"
+  | "rejected"
+  | "executing"
+  | "completed"
+  | "failed"
+  | "superseded";
 
 export interface ImageData {
   mime_type: string;
@@ -112,6 +120,33 @@ export interface ChatResponse {
   run_id?: string;
   pending_approvals?: PendingToolApproval[];
   tool_events?: ToolEvent[];
+}
+
+export interface CreatePlanRequest {
+  session_id: string;
+  surface: Surface;
+  provider: string;
+  model: string;
+  prompt: string;
+}
+
+export interface PlanRecord {
+  id: string;
+  session_id: string;
+  surface: Surface;
+  provider: string;
+  model: string;
+  status: PlanStatus;
+  request_prompt: string;
+  plan_markdown: string;
+  plan_summary: string;
+  created_at: string;
+  updated_at: string;
+  approved_at?: string;
+  rejected_at?: string;
+  execution_started_at?: string;
+  execution_finished_at?: string;
+  last_error?: string;
 }
 
 // ---------------------------------------------------------------------------

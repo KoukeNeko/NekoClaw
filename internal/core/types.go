@@ -66,6 +66,13 @@ type ToolApprovalDecision struct {
 	Decision   string `json:"decision"` // allow | deny
 }
 
+type ToolMode string
+
+const (
+	ToolModeDefault ToolMode = "default"
+	ToolModePlanner ToolMode = "planner"
+)
+
 type ChatStatus string
 
 const (
@@ -142,6 +149,7 @@ type ChatRequest struct {
 	ClientTimezone    string                 `json:"client_timezone,omitempty"`
 	ClientSentAt      string                 `json:"client_sent_at,omitempty"`
 	EnableTools       bool                   `json:"enable_tools,omitempty"`
+	ToolMode          ToolMode               `json:"tool_mode,omitempty"`
 	RunID             string                 `json:"run_id,omitempty"`
 	ToolApprovals     []ToolApprovalDecision `json:"tool_approvals,omitempty"`
 }

@@ -63,6 +63,8 @@ import type {
   ToolsConfig,
   ToolStatusResult,
   TranscriptEntry,
+  CreatePlanRequest,
+  PlanRecord,
 } from "./types";
 import { dispatchBrowserAuthEvent } from "./authEvents";
 
@@ -225,6 +227,29 @@ function del<T>(path: string, body?: unknown): Promise<T> {
 
 export function chat(req: ChatRequest): Promise<ChatResponse> {
   return post("/v1/chat", req);
+}
+
+export function createPlan(req: CreatePlanRequest): Promise<PlanRecord> {
+  return post("/v1/plans", req);
+}
+
+export async function listPlans(sessionID: string): Promise<PlanRecord[]> {
+  const resp = await get<{ plans: PlanRecord[] }>(
+    `/v1/plans?session_id=${encodeURIComponent(sessionID)}`,
+  );
+  return resp.plans ?? [];
+}
+
+export function getPlan(planID: string): Promise<PlanRecord> {
+  return get(`/v1/plans/${encodeURIComponent(planID)}`);
+}
+
+export function approvePlan(planID: string): Promise<PlanRecord> {
+  return post(`/v1/plans/${encodeURIComponent(planID)}/approve`);
+}
+
+export function rejectPlan(planID: string): Promise<PlanRecord> {
+  return post(`/v1/plans/${encodeURIComponent(planID)}/reject`);
 }
 
 // Streaming is handled separately in sse.ts

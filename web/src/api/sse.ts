@@ -17,18 +17,33 @@ export function chatStream(
   req: ChatRequest,
   onChunk: StreamCallback,
 ): AbortController {
+  return postEventStream("/v1/chat/stream", req, onChunk);
+}
+
+export function planExecuteStream(
+  planID: string,
+  onChunk: StreamCallback,
+): AbortController {
+  return postEventStream(`/v1/plans/${encodeURIComponent(planID)}/execute/stream`, undefined, onChunk);
+}
+
+function postEventStream(
+  path: string,
+  body: unknown,
+  onChunk: StreamCallback,
+): AbortController {
   const controller = new AbortController();
 
   (async () => {
     try {
-      const resp = await fetch("/v1/chat/stream", {
+      const resp = await fetch(path, {
         method: "POST",
         credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
           Accept: "text/event-stream",
         },
-        body: JSON.stringify(req),
+        body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal,
       });
 

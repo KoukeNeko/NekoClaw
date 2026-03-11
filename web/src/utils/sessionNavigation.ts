@@ -1,4 +1,4 @@
-import { getTranscript } from "@/api/client";
+import { getTranscript, listPlans } from "@/api/client";
 import type { TranscriptEntry } from "@/api/types";
 import type { ChatMessage } from "@/store/appStore";
 import { useAppStore } from "@/store/appStore";
@@ -41,6 +41,7 @@ export async function openSessionConversation(sessionID: string): Promise<void> 
   state.setSessionID(sessionID);
   state.resetUsage();
   state.setMessages(messages);
+  state.setPlans(await listPlans(sessionID));
   recomputeUsageFromTranscript(entries);
   state.setRoute("chat");
 

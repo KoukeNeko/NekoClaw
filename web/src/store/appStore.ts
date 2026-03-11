@@ -5,6 +5,7 @@ import type {
   UsageInfo,
   ToolEvent,
   PendingToolApproval,
+  PlanRecord,
   SecurityStatus,
 } from "@/api/types";
 import {
@@ -88,7 +89,10 @@ interface AppState {
 
   // Chat messages for current session
   messages: ChatMessage[];
+  plans: PlanRecord[];
   setMessages: (msgs: ChatMessage[]) => void;
+  setPlans: (plans: PlanRecord[]) => void;
+  upsertPlan: (plan: PlanRecord) => void;
   addMessage: (msg: ChatMessage) => void;
   updateLastAssistant: (updater: (msg: ChatMessage) => ChatMessage) => void;
   clearMessages: () => void;
@@ -106,7 +110,9 @@ interface AppState {
   // Tool approval
   pendingApprovals: PendingToolApproval[];
   currentRunID: string;
-  setPendingApprovals: (approvals: PendingToolApproval[], runID: string) => void;
+  currentRunProvider: string;
+  currentRunModel: string;
+  setPendingApprovals: (approvals: PendingToolApproval[], runID: string, provider: string, model: string) => void;
   clearApprovals: () => void;
 
   // Persona
@@ -149,11 +155,14 @@ export const useAppStore = create<AppState>((set) => ({
       sessionID: "main",
       sessions: [],
       messages: [],
+      plans: [],
       isStreaming: false,
       activeToolName: "",
       retryStatus: "",
       pendingApprovals: [],
       currentRunID: "",
+      currentRunProvider: "",
+      currentRunModel: "",
       activePersona: "",
       thinkingMode: "auto",
       totalUsage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
@@ -182,7 +191,19 @@ export const useAppStore = create<AppState>((set) => ({
 
   // Messages
   messages: [],
+  plans: [],
   setMessages: (msgs) => set({ messages: msgs }),
+  setPlans: (plans) => set({ plans }),
+  upsertPlan: (plan) =>
+    set((s) => {
+      const existing = s.plans.findIndex((item) => item.id === plan.id);
+      if (existing === -1) {
+        return { plans: [plan, ...s.plans] };
+      }
+      const next = [...s.plans];
+      next[existing] = plan;
+      return { plans: next };
+    }),
   addMessage: (msg) =>
     set((s) => ({ messages: [...s.messages, msg] })),
   updateLastAssistant: (updater) =>
@@ -211,10 +232,22 @@ export const useAppStore = create<AppState>((set) => ({
   // Tool approval
   pendingApprovals: [],
   currentRunID: "",
-  setPendingApprovals: (approvals, runID) =>
-    set({ pendingApprovals: approvals, currentRunID: runID }),
+  currentRunProvider: "",
+  currentRunModel: "",
+  setPendingApprovals: (approvals, runID, provider, model) =>
+    set({
+      pendingApprovals: approvals,
+      currentRunID: runID,
+      currentRunProvider: provider,
+      currentRunModel: model,
+    }),
   clearApprovals: () =>
-    set({ pendingApprovals: [], currentRunID: "" }),
+    set({
+      pendingApprovals: [],
+      currentRunID: "",
+      currentRunProvider: "",
+      currentRunModel: "",
+    }),
 
   browserTimezone: detectBrowserTimeZone(),
   generalTimezoneOverride: "",

@@ -29,6 +29,13 @@ const telegramMessageLimit = 4096
 
 const telegramCallbackPrefix = "cmd:"
 
+const (
+	telegramActionPlanApprove = "plan_approve"
+	telegramActionPlanReject  = "plan_reject"
+	telegramActionToolAllow   = "tool_allow"
+	telegramActionToolDeny    = "tool_deny"
+)
+
 // Group context buffer settings.
 const (
 	maxGroupHistoryMessages = 50
@@ -764,6 +771,29 @@ func buildTelegramPersonaKeyboard(selector *botcmd.PersonaSelector) [][]tgbotapi
 	return rows
 }
 
+func buildTelegramPlanKeyboard(plan core.PlanRecord) [][]tgbotapi.InlineKeyboardButton {
+	if plan.Status != core.PlanStatusPendingApproval {
+		return nil
+	}
+	return [][]tgbotapi.InlineKeyboardButton{
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Approve", encodeTelegramCallbackData(telegramActionPlanApprove, plan.ID)),
+			tgbotapi.NewInlineKeyboardButtonData("Reject", encodeTelegramCallbackData(telegramActionPlanReject, plan.ID)),
+		),
+	}
+}
+
+func buildTelegramToolApprovalKeyboard(runID string, approvals []core.PendingToolApproval) [][]tgbotapi.InlineKeyboardButton {
+	rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(approvals))
+	for _, approval := range approvals {
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Allow "+approval.ToolName, encodeTelegramCallbackData(telegramActionToolAllow, runID+":"+approval.ApprovalID)),
+			tgbotapi.NewInlineKeyboardButtonData("Deny "+approval.ToolName, encodeTelegramCallbackData(telegramActionToolDeny, runID+":"+approval.ApprovalID)),
+		))
+	}
+	return rows
+}
+
 func encodeTelegramCallbackData(action, value string) string {
 	return telegramCallbackPrefix + action + ":" + value
 }
@@ -791,8 +821,29 @@ func parseTelegramCallbackInvocation(data string) (botcmd.Invocation, bool) {
 	}
 }
 
+func renderTelegramPlanMessage(plan core.PlanRecord) string {
+	status := map[core.PlanStatus]string{
+		core.PlanStatusPendingApproval: "待核准",
+		core.PlanStatusApproved:        "已核准",
+		core.PlanStatusRejected:        "已拒絕",
+		core.PlanStatusExecuting:       "執行中",
+		core.PlanStatusCompleted:       "已完成",
+		core.PlanStatusFailed:          "失敗",
+		core.PlanStatusSuperseded:      "已取代",
+	}[plan.Status]
+	text := "Plan\n狀態：" + status + "\n\n" + strings.TrimSpace(plan.PlanMarkdown)
+	if strings.TrimSpace(plan.LastError) != "" {
+		text += "\n\n錯誤：" + strings.TrimSpace(plan.LastError)
+	}
+	return text
+}
+
 // handleCommand processes bot commands (/reset, /persona, etc.).
 func (b *Bot) handleCommand(msg *tgbotapi.Message) {
+	if msg.Command() == botcmd.CommandPlan {
+		b.handlePlanCommand(msg)
+		return
+	}
 	inv := botcmd.Invocation{
 		Name: msg.Command(),
 	}
@@ -815,8 +866,38 @@ func (b *Bot) handleCommand(msg *tgbotapi.Message) {
 	b.sendReply(msg.Chat.ID, msg.MessageID, result.Message)
 }
 
+func (b *Bot) handlePlanCommand(msg *tgbotapi.Message) {
+	prompt := strings.TrimSpace(msg.CommandArguments())
+	if prompt == "" {
+		b.sendReply(msg.Chat.ID, msg.MessageID, "⚠️ 缺少計畫內容。")
+		return
+	}
+	plan, err := b.svc.CreatePlan(b.ctx, core.CreatePlanRequest{
+		SessionID: b.getSessionID(msg.Chat.ID),
+		Surface:   core.SurfaceTelegram,
+		Provider:  b.svc.GetDefaultProvider(),
+		Model:     b.svc.GetDefaultModel(),
+		Prompt:    prompt,
+	})
+	if err != nil {
+		b.sendReply(msg.Chat.ID, msg.MessageID, "⚠️ "+err.Error())
+		return
+	}
+	reply := tgbotapi.NewMessage(msg.Chat.ID, RenderMarkdownV2(renderTelegramPlanMessage(plan)))
+	reply.ReplyToMessageID = msg.MessageID
+	reply.ParseMode = tgbotapi.ModeMarkdownV2
+	reply.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(buildTelegramPlanKeyboard(plan)...)
+	if _, err := b.api.Send(reply); err != nil {
+		logTelegram.Errorf("send plan: chat=%d error=%v", msg.Chat.ID, err)
+	}
+}
+
 // handleCallbackQuery processes inline keyboard button presses.
 func (b *Bot) handleCallbackQuery(cq *tgbotapi.CallbackQuery) {
+	if b.handlePlannerCallbackQuery(cq) {
+		return
+	}
+
 	callback := tgbotapi.NewCallback(cq.ID, "")
 	inv, ok := parseTelegramCallbackInvocation(cq.Data)
 	if !ok {
@@ -842,6 +923,179 @@ func (b *Bot) handleCallbackQuery(cq *tgbotapi.CallbackQuery) {
 	if result.UpdateExisting && result.Selector != nil {
 		b.editTelegramSelector(cq, result)
 	}
+}
+
+func (b *Bot) handlePlannerCallbackQuery(cq *tgbotapi.CallbackQuery) bool {
+	if cq == nil {
+		return false
+	}
+	if !strings.HasPrefix(cq.Data, telegramCallbackPrefix) {
+		return false
+	}
+	payload := strings.TrimPrefix(cq.Data, telegramCallbackPrefix)
+	parts := strings.SplitN(payload, ":", 2)
+	if len(parts) != 2 {
+		return false
+	}
+
+	chatID := int64(0)
+	messageID := 0
+	if cq.Message != nil {
+		chatID = cq.Message.Chat.ID
+		messageID = cq.Message.MessageID
+	}
+
+	switch parts[0] {
+	case telegramActionPlanApprove:
+		plan, err := b.svc.ApprovePlan(parts[1])
+		callback := tgbotapi.NewCallback(cq.ID, "")
+		if err != nil {
+			callback.Text = "⚠️ " + err.Error()
+			_, _ = b.api.Request(callback)
+			return true
+		}
+		callback.Text = "已核准，開始執行。"
+		_, _ = b.api.Request(callback)
+		text := RenderMarkdownV2(renderTelegramPlanMessage(plan))
+		edit := tgbotapi.NewEditMessageText(chatID, messageID, text)
+		edit.ParseMode = tgbotapi.ModeMarkdownV2
+		_, _ = b.api.Send(edit)
+		go b.streamPlanExecution(chatID, messageID, plan.ID)
+		return true
+	case telegramActionPlanReject:
+		plan, err := b.svc.RejectPlan(parts[1])
+		callback := tgbotapi.NewCallback(cq.ID, "")
+		if err != nil {
+			callback.Text = "⚠️ " + err.Error()
+			_, _ = b.api.Request(callback)
+			return true
+		}
+		callback.Text = "已拒絕。"
+		_, _ = b.api.Request(callback)
+		edit := tgbotapi.NewEditMessageText(chatID, messageID, RenderMarkdownV2(renderTelegramPlanMessage(plan)))
+		edit.ParseMode = tgbotapi.ModeMarkdownV2
+		_, _ = b.api.Send(edit)
+		return true
+	case telegramActionToolAllow, telegramActionToolDeny:
+		payload := strings.SplitN(parts[1], ":", 2)
+		if len(payload) != 2 {
+			return false
+		}
+		decision := "allow"
+		if parts[0] == telegramActionToolDeny {
+			decision = "deny"
+		}
+		callback := tgbotapi.NewCallback(cq.ID, "")
+		callback.Text = "收到工具核准結果。"
+		_, _ = b.api.Request(callback)
+		go b.streamPendingToolRun(chatID, messageID, payload[0], payload[1], decision)
+		return true
+	default:
+		return false
+	}
+}
+
+func (b *Bot) streamPlanExecution(chatID int64, replyToID int, planID string) {
+	ch, err := b.svc.RunApprovedPlan(b.ctx, planID)
+	if err != nil {
+		b.sendReply(chatID, replyToID, "⚠️ "+err.Error())
+		return
+	}
+	b.streamTelegramExecution(chatID, replyToID, ch)
+}
+
+func (b *Bot) streamPendingToolRun(chatID int64, replyToID int, runID, approvalID, decision string) {
+	ch, err := b.svc.ContinuePendingToolRunStream(b.ctx, runID, []core.ToolApprovalDecision{
+		{ApprovalID: approvalID, Decision: decision},
+	})
+	if err != nil {
+		b.sendReply(chatID, replyToID, "⚠️ "+err.Error())
+		return
+	}
+	b.streamTelegramExecution(chatID, replyToID, ch)
+}
+
+func (b *Bot) streamTelegramExecution(chatID int64, replyToID int, streamCh <-chan core.StreamChunk) {
+	placeholder := tgbotapi.NewMessage(chatID, "🔄 處理中...")
+	placeholder.ReplyToMessageID = replyToID
+	placeholderMsg, placeholderErr := b.api.Send(placeholder)
+
+	var (
+		fullText     strings.Builder
+		lastEditTime time.Time
+		editInterval = 2 * time.Second
+		streamResp   *core.ChatResponse
+		streamErr    string
+	)
+
+	for chunk := range streamCh {
+		switch chunk.Type {
+		case core.ChunkToolStatus:
+			if placeholderErr == nil {
+				displayName := chunk.ToolName
+				if serverName, tn, isMCP := mcp.ParseNamespacedTool(chunk.ToolName); isMCP {
+					displayName = serverName + "/" + tn
+				}
+				b.editMessage(chatID, placeholderMsg.MessageID, "🔧 正在使用 "+displayName+"...")
+			}
+		case core.ChunkRetryStatus:
+			if placeholderErr == nil {
+				b.editMessage(chatID, placeholderMsg.MessageID, "🔄 處理中...（"+chunk.RetryStatus+"）")
+			}
+		case core.ChunkText:
+			fullText.WriteString(chunk.Content)
+			if placeholderErr == nil && time.Since(lastEditTime) >= editInterval {
+				preview := fullText.String()
+				if len(preview) > 4000 {
+					preview = preview[:4000] + "..."
+				}
+				b.editMessage(chatID, placeholderMsg.MessageID, preview)
+				lastEditTime = time.Now()
+			}
+		case core.ChunkError:
+			streamErr = chunk.Error
+		case core.ChunkDone:
+			streamResp = chunk.Response
+		}
+	}
+
+	if streamErr != "" {
+		if placeholderErr == nil {
+			b.editMessage(chatID, placeholderMsg.MessageID, "⚠️ "+streamErr)
+		} else {
+			b.sendReply(chatID, replyToID, "⚠️ "+streamErr)
+		}
+		return
+	}
+	if streamResp == nil {
+		if placeholderErr == nil {
+			b.editMessage(chatID, placeholderMsg.MessageID, "⚠️ 未收到回應")
+		}
+		return
+	}
+	if streamResp.Status == core.ChatStatusApprovalRequired && len(streamResp.PendingApprovals) > 0 {
+		if placeholderErr == nil {
+			b.editMessage(chatID, placeholderMsg.MessageID, "⏸️ 需要工具核准。")
+		}
+		msg := tgbotapi.NewMessage(chatID, "請核准或拒絕以下工具操作：")
+		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(buildTelegramToolApprovalKeyboard(streamResp.RunID, streamResp.PendingApprovals)...)
+		msg.ReplyToMessageID = replyToID
+		_, _ = b.api.Send(msg)
+		return
+	}
+
+	reply := strings.TrimSpace(fullText.String())
+	if reply == "" {
+		reply = strings.TrimSpace(streamResp.Reply)
+	}
+	if reply == "" {
+		reply = "（無回應）"
+	}
+	if placeholderErr == nil {
+		del := tgbotapi.NewDeleteMessage(chatID, placeholderMsg.MessageID)
+		_, _ = b.api.Send(del)
+	}
+	b.sendReply(chatID, replyToID, reply)
 }
 
 func (b *Bot) dispatchCommand(chatID int64, inv botcmd.Invocation) (botcmd.Result, *botcmd.Event, bool) {

@@ -10,10 +10,11 @@ import (
 )
 
 type fakeToolProvider struct {
-	id      string
-	turns   []provider.ToolTurnResponse
-	calls   int
-	support bool
+	id        string
+	turns     []provider.ToolTurnResponse
+	calls     int
+	support   bool
+	lastTools []provider.ToolDefinition
 }
 
 func (f *fakeToolProvider) ID() string { return f.id }
@@ -28,7 +29,8 @@ func (f *fakeToolProvider) ToolCapabilities() provider.ToolCapabilities {
 	return provider.ToolCapabilities{SupportsTools: f.support}
 }
 
-func (f *fakeToolProvider) GenerateToolTurn(_ context.Context, _ provider.ToolTurnRequest) (provider.ToolTurnResponse, error) {
+func (f *fakeToolProvider) GenerateToolTurn(_ context.Context, req provider.ToolTurnRequest) (provider.ToolTurnResponse, error) {
+	f.lastTools = append([]provider.ToolDefinition(nil), req.Tools...)
 	if f.calls >= len(f.turns) {
 		return provider.ToolTurnResponse{Text: "done"}, nil
 	}
@@ -208,5 +210,70 @@ func TestRuntimeReturnsToolsNotSupported(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected tools_not_supported error")
+	}
+}
+
+func TestRuntimeAllowedToolsFiltersMutatingSchemas(t *testing.T) {
+	executor := &fakeExecutor{mutating: map[string]bool{
+		"providers_list": false,
+		"file_write":     true,
+	}}
+	store := NewApprovalStore(0)
+	rt := NewRuntime(executor, store)
+	fakeProv := &fakeToolProvider{id: "anthropic", support: true}
+
+	_, err := rt.Run(context.Background(), RunRequest{
+		SessionID:    "planner-1",
+		Surface:      core.SurfaceWeb,
+		ProviderID:   "anthropic",
+		ModelID:      "claude-sonnet-4-5",
+		Account:      core.Account{ID: "a1"},
+		ToolProvider: fakeProv,
+		Messages:     []core.Message{{Role: core.RoleUser, Content: "plan"}},
+		UserMessage:  core.Message{Role: core.RoleUser, Content: "plan"},
+		EnableTools:  true,
+		AllowedTools: []string{"providers_list"},
+	})
+	if err != nil {
+		t.Fatalf("planner run failed: %v", err)
+	}
+	if len(fakeProv.lastTools) != 1 || fakeProv.lastTools[0].Name != "providers_list" {
+		t.Fatalf("unexpected filtered tool definitions: %#v", fakeProv.lastTools)
+	}
+}
+
+func TestRuntimeMutatingToolRequiresApprovalOnDiscord(t *testing.T) {
+	executor := &fakeExecutor{mutating: map[string]bool{
+		"file_write": true,
+	}}
+	store := NewApprovalStore(0)
+	rt := NewRuntime(executor, store)
+	fakeProv := &fakeToolProvider{
+		id:      "anthropic",
+		support: true,
+		turns: []provider.ToolTurnResponse{
+			{
+				ToolCalls: []provider.ToolCall{
+					{ID: "call-1", Name: "file_write", Arguments: json.RawMessage(`{"path":"a.txt","content":"x"}`)},
+				},
+			},
+		},
+	}
+	result, err := rt.Run(context.Background(), RunRequest{
+		SessionID:    "discord-1",
+		Surface:      core.SurfaceDiscord,
+		ProviderID:   "anthropic",
+		ModelID:      "claude-sonnet-4-5",
+		Account:      core.Account{ID: "a1"},
+		ToolProvider: fakeProv,
+		Messages:     []core.Message{{Role: core.RoleUser, Content: "write"}},
+		UserMessage:  core.Message{Role: core.RoleUser, Content: "write"},
+		EnableTools:  true,
+	})
+	if err != nil {
+		t.Fatalf("discord run failed: %v", err)
+	}
+	if !result.Pending || result.Response.Status != core.ChatStatusApprovalRequired {
+		t.Fatalf("expected discord approval_required, got pending=%v status=%s", result.Pending, result.Response.Status)
 	}
 }

@@ -73,10 +73,10 @@ func TestFormatReplyWithFooterUsesQuotedBlock(t *testing.T) {
 
 func TestTelegramBotCommandsComeFromSharedSpecs(t *testing.T) {
 	commands := telegramBotCommands()
-	if len(commands) != 2 {
-		t.Fatalf("expected 2 telegram commands, got %d", len(commands))
+	if len(commands) != 3 {
+		t.Fatalf("expected 3 telegram commands, got %d", len(commands))
 	}
-	if commands[0].Command != botcmd.CommandReset || commands[1].Command != botcmd.CommandPersona {
+	if commands[0].Command != botcmd.CommandReset || commands[1].Command != botcmd.CommandPersona || commands[2].Command != botcmd.CommandPlan {
 		t.Fatalf("unexpected command list: %#v", commands)
 	}
 }

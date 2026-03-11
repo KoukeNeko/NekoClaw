@@ -25,6 +25,7 @@ type PendingRun struct {
 	ModelID        string
 	Account        core.Account
 	Messages       []core.Message
+	AllowedTools   []string
 	Compressed     bool
 	Compression    core.CompressionMeta
 	Usage          core.UsageInfo

@@ -196,15 +196,18 @@ func TestResponseElapsedFallsBackWhenMissing(t *testing.T) {
 
 func TestBuildDiscordApplicationCommands(t *testing.T) {
 	commands := buildDiscordApplicationCommands()
-	if len(commands) != 2 {
-		t.Fatalf("expected 2 commands, got %d", len(commands))
+	if len(commands) != 3 {
+		t.Fatalf("expected 3 commands, got %d", len(commands))
 	}
 
 	var persona *discordgo.ApplicationCommand
+	var plan *discordgo.ApplicationCommand
 	for _, command := range commands {
 		if command.Name == botcmd.CommandPersona {
 			persona = command
-			break
+		}
+		if command.Name == botcmd.CommandPlan {
+			plan = command
 		}
 	}
 	if persona == nil {
@@ -218,6 +221,12 @@ func TestBuildDiscordApplicationCommands(t *testing.T) {
 	}
 	if persona.Options[0].Type != discordgo.ApplicationCommandOptionString {
 		t.Fatalf("expected persona option type string, got %v", persona.Options[0].Type)
+	}
+	if plan == nil {
+		t.Fatal("expected plan slash command to be present")
+	}
+	if len(plan.Options) != 1 || plan.Options[0].Name != botcmd.OptionPlanPrompt {
+		t.Fatalf("unexpected plan options: %#v", plan.Options)
 	}
 }
 

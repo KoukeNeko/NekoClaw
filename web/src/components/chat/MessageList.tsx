@@ -2,12 +2,19 @@ import { useEffect, useRef } from "react";
 import { useAppStore } from "@/store/appStore";
 import { MessageBubble } from "./MessageBubble";
 import { ThinkingIndicator } from "./ThinkingIndicator";
+import { PlanCard } from "./PlanCard";
+
+interface Props {
+  onApprovePlan: (planID: string) => void;
+  onRejectPlan: (planID: string) => void;
+}
 
 /**
  * Scrollable message list with auto-scroll to bottom.
  */
-export function MessageList() {
+export function MessageList({ onApprovePlan, onRejectPlan }: Props) {
   const messages = useAppStore((s) => s.messages);
+  const plans = useAppStore((s) => s.plans);
   const isStreaming = useAppStore((s) => s.isStreaming);
   const sessionID = useAppStore((s) => s.sessionID);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -35,7 +42,7 @@ export function MessageList() {
     }
   }, [messages, isStreaming]);
 
-  if (messages.length === 0) {
+  if (messages.length === 0 && plans.length === 0) {
     return (
       <div className="h-full flex items-center justify-center">
         <div className="text-center text-base-content/30 space-y-2">
@@ -53,6 +60,15 @@ export function MessageList() {
       className="h-full overflow-y-auto [scrollbar-width:thin] px-2 sm:px-4 py-4"
     >
       <div className="space-y-4">
+        {plans.map((plan) => (
+          <PlanCard
+            key={plan.id}
+            plan={plan}
+            isStreaming={isStreaming}
+            onApprove={onApprovePlan}
+            onReject={onRejectPlan}
+          />
+        ))}
         {messages.map((msg) =>
           msg.role === "thinking" ? (
             <ThinkingIndicator key={msg.id} />
