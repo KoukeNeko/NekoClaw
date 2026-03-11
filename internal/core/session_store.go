@@ -117,7 +117,7 @@ func (s *SessionStore) Append(sessionID string, entries ...SessionEntry) {
 	s.cache[sessionID] = append(s.cache[sessionID], entries...)
 
 	// Always update in-memory metadata (needed for ListSessions/lifecycle).
-	s.updateMetadataLocked(sessionID)
+	s.updateMetadataLocked(sessionID, true)
 
 	if s.dataDir == "" {
 		return
@@ -169,6 +169,24 @@ func (s *SessionStore) DeleteSession(sessionID string) error {
 		return err
 	}
 	s.writeMetadataLocked()
+	return nil
+}
+
+// RewriteSession atomically replaces the entire transcript for a session.
+func (s *SessionStore) RewriteSession(sessionID string, entries []SessionEntry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureLoadedLocked(sessionID)
+
+	replacement := append([]SessionEntry(nil), entries...)
+	if s.dataDir != "" {
+		if err := s.rewriteTranscriptLocked(sessionID, replacement); err != nil {
+			return err
+		}
+	}
+	s.cache[sessionID] = replacement
+	s.loaded[sessionID] = true
+	s.updateMetadataLocked(sessionID, false)
 	return nil
 }
 
@@ -301,17 +319,22 @@ func (s *SessionStore) appendToTranscriptLocked(sessionID string, entries []Sess
 	}
 }
 
-func (s *SessionStore) updateMetadataLocked(sessionID string) {
+func (s *SessionStore) updateMetadataLocked(sessionID string, touchUpdatedAt bool) {
 	now := time.Now()
 	meta, exists := s.metadata[sessionID]
 	if !exists {
 		meta = SessionMetadata{
 			SessionID: sessionID,
-			CreatedAt: now,
+			CreatedAt: metadataCreatedAt(s.cache[sessionID], now),
 		}
 	}
 	meta.MessageCount = s.countMessagesLocked(sessionID)
-	meta.UpdatedAt = now
+	meta.InputTokens, meta.OutputTokens = s.usageTotalsLocked(sessionID)
+	meta.ContextTokens = EstimateSessionEntriesTokens(s.cache[sessionID])
+	meta.CompactionCount = s.countCompactionsLocked(sessionID)
+	if touchUpdatedAt || meta.UpdatedAt.IsZero() {
+		meta.UpdatedAt = now
+	}
 	s.metadata[sessionID] = meta
 	if s.dataDir != "" {
 		s.writeMetadataLocked()
@@ -354,6 +377,29 @@ func (s *SessionStore) countMessagesLocked(sessionID string) int {
 	return count
 }
 
+func (s *SessionStore) countCompactionsLocked(sessionID string) int {
+	count := 0
+	for _, e := range s.cache[sessionID] {
+		if e.Type == EntryCompaction {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *SessionStore) usageTotalsLocked(sessionID string) (int, int) {
+	inputTokens := 0
+	outputTokens := 0
+	for _, e := range s.cache[sessionID] {
+		if e.Type != EntryMessage || e.MsgUsage == nil {
+			continue
+		}
+		inputTokens += e.MsgUsage.InputTokens
+		outputTokens += e.MsgUsage.OutputTokens
+	}
+	return inputTokens, outputTokens
+}
+
 func (s *SessionStore) writeMetadataLocked() {
 	file := metadataFile{Sessions: s.metadata}
 	payload, err := json.MarshalIndent(file, "", "  ")
@@ -381,8 +427,58 @@ func (s *SessionStore) TranscriptsDir() string {
 	return filepath.Join(s.dataDir, "transcripts")
 }
 
+// TranscriptFileSize returns the persisted transcript size in bytes.
+func (s *SessionStore) TranscriptFileSize(sessionID string) int64 {
+	if s.dataDir == "" {
+		return 0
+	}
+	info, err := os.Stat(s.transcriptPath(sessionID))
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
 func (s *SessionStore) transcriptPath(sessionID string) string {
 	return filepath.Join(s.dataDir, "transcripts", sanitizeSessionID(sessionID)+".jsonl")
+}
+
+func (s *SessionStore) rewriteTranscriptLocked(sessionID string, entries []SessionEntry) error {
+	path := s.transcriptPath(sessionID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	file, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(file)
+	for _, entry := range entries {
+		if err := encoder.Encode(entry); err != nil {
+			_ = file.Close()
+			_ = os.Remove(tmp)
+			return err
+		}
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func metadataCreatedAt(entries []SessionEntry, fallback time.Time) time.Time {
+	for _, entry := range entries {
+		if !entry.Timestamp.IsZero() {
+			return entry.Timestamp
+		}
+	}
+	return fallback
 }
 
 func sanitizeSessionID(id string) string {

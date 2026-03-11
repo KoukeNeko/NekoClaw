@@ -139,3 +139,76 @@ func TestCompressNoopWhenWithinBudget(t *testing.T) {
 		}
 	}
 }
+
+func TestCompressTrimsOversizedToolResultBeforeDroppingHistory(t *testing.T) {
+	toolPayload := strings.Repeat("tool-output-", 1200)
+	messages := []core.Message{
+		testMessage(core.RoleUser, "recent question", 1),
+		{
+			Role:      core.RoleTool,
+			Content:   toolPayload,
+			ToolName:  "fetch_logs",
+			CreatedAt: time.Unix(2, 0),
+		},
+		testMessage(core.RoleAssistant, "recent answer", 3),
+	}
+
+	policy := DefaultPolicy(16384)
+	policy.ReserveTokens = 128
+	policy.MaxHistoryShare = 1
+	policy.ToolSoftTrimMax = 300
+	policy.ToolSoftTrimHead = 80
+	policy.ToolSoftTrimTail = 80
+
+	compressed, meta, changed := Compress(messages, policy)
+
+	if !changed {
+		t.Fatalf("expected compression changes")
+	}
+	if meta.SoftTrimmed == 0 {
+		t.Fatalf("expected tool trim to be recorded")
+	}
+	if meta.DroppedMessages != 0 {
+		t.Fatalf("expected no history drop, got %d", meta.DroppedMessages)
+	}
+	if compressed[1].Role != core.RoleTool {
+		t.Fatalf("expected tool message to remain in place")
+	}
+	if !strings.Contains(compressed[1].Content, "Tool result compacted to fit context limits.") {
+		t.Fatalf("expected trimmed tool summary, got %q", compressed[1].Content)
+	}
+}
+
+func TestCompressPreservesLeadingSystemMessages(t *testing.T) {
+	messages := []core.Message{
+		testMessage(core.RoleSystem, "persona prompt", 1),
+		testMessage(core.RoleSystem, "memory prompt", 2),
+		testMessage(core.RoleUser, "u1 "+strings.Repeat("x", 5000), 3),
+		testMessage(core.RoleAssistant, "a1 "+strings.Repeat("x", 5000), 4),
+		testMessage(core.RoleUser, "u2 "+strings.Repeat("x", 5000), 5),
+		testMessage(core.RoleAssistant, "a2 "+strings.Repeat("x", 5000), 6),
+	}
+
+	policy := DefaultPolicy(1024)
+	policy.ReserveTokens = 128
+	policy.MaxHistoryShare = 0.5
+	policy.PruneParts = 2
+
+	compressed, _, changed := Compress(messages, policy)
+
+	if !changed {
+		t.Fatalf("expected compression changes")
+	}
+	if len(compressed) < 3 {
+		t.Fatalf("expected pinned system messages and summary to remain")
+	}
+	if compressed[0].Role != core.RoleSystem || compressed[0].Content != "persona prompt" {
+		t.Fatalf("expected first system message to be preserved, got role=%q content=%q", compressed[0].Role, compressed[0].Content)
+	}
+	if compressed[1].Role != core.RoleSystem || compressed[1].Content != "memory prompt" {
+		t.Fatalf("expected second system message to be preserved, got role=%q content=%q", compressed[1].Role, compressed[1].Content)
+	}
+	if compressed[2].Role != core.RoleSystem || !strings.Contains(compressed[2].Content, "History compacted: dropped") {
+		t.Fatalf("expected dropped-history summary after pinned system messages")
+	}
+}

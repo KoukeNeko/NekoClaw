@@ -17,8 +17,8 @@ type testProvider struct {
 	generateFn    func(ctx context.Context, req provider.GenerateRequest) (provider.GenerateResponse, error)
 }
 
-func (p *testProvider) ID() string                  { return "test" }
-func (p *testProvider) ContextWindow(_ string) int   { return p.contextWindow }
+func (p *testProvider) ID() string                 { return "test" }
+func (p *testProvider) ContextWindow(_ string) int { return p.contextWindow }
 func (p *testProvider) Generate(ctx context.Context, req provider.GenerateRequest) (provider.GenerateResponse, error) {
 	if p.generateFn != nil {
 		return p.generateFn(ctx, req)
@@ -146,11 +146,70 @@ func TestCompactProviderError(t *testing.T) {
 		ReserveTokens:    100,
 		KeepRecentTokens: 200,
 	})
-	if err == nil {
-		t.Fatalf("expected error from provider failure")
+	if err != nil {
+		t.Fatalf("expected deterministic fallback, got error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "LLM unavailable") {
-		t.Fatalf("expected LLM error, got: %v", err)
+}
+
+func TestCompactWithoutLLMUsesDeterministicSummary(t *testing.T) {
+	compactor := NewCompactor(nil, "test-model", core.Account{ID: "test"})
+
+	entries := makeEntries(50)
+	result, err := compactor.Compact(context.Background(), CompactionRequest{
+		Entries:          entries,
+		ContextWindow:    1000,
+		ReserveTokens:    100,
+		KeepRecentTokens: 200,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.DroppedCount == 0 {
+		t.Fatalf("expected dropped entries")
+	}
+	if !strings.Contains(result.CompactionEntry.Summary, "History compacted: merged") {
+		t.Fatalf("expected deterministic summary, got %q", result.CompactionEntry.Summary)
+	}
+}
+
+func TestCompactPromptIncludesExistingCompactionEntries(t *testing.T) {
+	sawExistingSummary := false
+	prov := &testProvider{
+		contextWindow: 1000,
+		generateFn: func(_ context.Context, req provider.GenerateRequest) (provider.GenerateResponse, error) {
+			lastMsg := req.Messages[len(req.Messages)-1]
+			if strings.Contains(lastMsg.Content, "older compaction summary") {
+				sawExistingSummary = true
+			}
+			return provider.GenerateResponse{Text: "merged summary"}, nil
+		},
+	}
+	compactor := NewCompactor(prov, "test-model", core.Account{ID: "test"})
+
+	entries := makeEntries(40)
+	entries = append(
+		entries[:4],
+		append(
+			[]core.SessionEntry{core.NewCompactionEntry("older compaction summary", 3, 500, "next")},
+			entries[4:]...,
+		)...,
+	)
+
+	result, err := compactor.Compact(context.Background(), CompactionRequest{
+		Entries:          entries,
+		ContextWindow:    1000,
+		ReserveTokens:    100,
+		KeepRecentTokens: 200,
+		AllowLLMSummary:  true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.DroppedCount == 0 {
+		t.Fatalf("expected dropped entries")
+	}
+	if !sawExistingSummary {
+		t.Fatalf("expected prompt to include existing compaction summary")
 	}
 }
 

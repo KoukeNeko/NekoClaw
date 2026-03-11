@@ -798,11 +798,19 @@ export interface SecurityPasswordRequest {
 }
 
 // ---------------------------------------------------------------------------
-// General / Discord / Telegram config
+// General / Compaction / Discord / Telegram config
 // ---------------------------------------------------------------------------
 
 export interface GeneralConfig {
   timezone: string;
+}
+
+export interface CompactionConfig {
+  enabled: boolean;
+  background_enabled: boolean;
+  llm_summary_enabled: boolean;
+  trigger_threshold_ratio: number;
+  keep_recent_tokens: number;
 }
 
 export interface DiscordConfig {

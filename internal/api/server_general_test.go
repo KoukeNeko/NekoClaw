@@ -78,6 +78,77 @@ func TestGeneralConfigEndpoint_RejectsInvalidTimezone(t *testing.T) {
 	}
 }
 
+func TestCompactionConfigEndpoint_PersistsConfig(t *testing.T) {
+	svc := app.NewService(app.ServiceOptions{})
+	configDir := t.TempDir()
+	svc.SetConfigDir(configDir)
+
+	handler := NewServer(svc).Handler()
+
+	getResp := performJSONRequest(t, handler, http.MethodGet, "/v1/compaction/config", "")
+	if getResp.Code != http.StatusOK {
+		t.Fatalf("unexpected GET status: %d body=%s", getResp.Code, getResp.Body.String())
+	}
+
+	var initial core.CompactionConfig
+	if err := json.Unmarshal(getResp.Body.Bytes(), &initial); err != nil {
+		t.Fatalf("decode initial compaction config: %v", err)
+	}
+	if initial != core.DefaultCompactionConfig() {
+		t.Fatalf("unexpected initial compaction config: %#v", initial)
+	}
+
+	putResp := performJSONRequest(
+		t,
+		handler,
+		http.MethodPut,
+		"/v1/compaction/config",
+		`{"enabled":true,"background_enabled":false,"llm_summary_enabled":false,"trigger_threshold_ratio":0.9,"keep_recent_tokens":4096}`,
+	)
+	if putResp.Code != http.StatusOK {
+		t.Fatalf("unexpected PUT status: %d body=%s", putResp.Code, putResp.Body.String())
+	}
+
+	var saved core.CompactionConfig
+	if err := json.Unmarshal(putResp.Body.Bytes(), &saved); err != nil {
+		t.Fatalf("decode saved compaction config: %v", err)
+	}
+	if saved.TriggerThresholdRatio != 0.9 || saved.KeepRecentTokens != 4096 {
+		t.Fatalf("saved compaction config = %#v", saved)
+	}
+	if saved.BackgroundEnabled || saved.LLMSummaryEnabled {
+		t.Fatalf("expected background/llm summary to be disabled, got %#v", saved)
+	}
+
+	config, err := core.LoadConfig(configDir)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if config.Compaction != saved {
+		t.Fatalf("persisted compaction config = %#v, want %#v", config.Compaction, saved)
+	}
+}
+
+func TestCompactionConfigEndpoint_RejectsInvalidValues(t *testing.T) {
+	svc := app.NewService(app.ServiceOptions{})
+	svc.SetConfigDir(t.TempDir())
+
+	handler := NewServer(svc).Handler()
+	resp := performJSONRequest(
+		t,
+		handler,
+		http.MethodPut,
+		"/v1/compaction/config",
+		`{"trigger_threshold_ratio":0.2,"keep_recent_tokens":512}`,
+	)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d body=%s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "trigger_threshold_ratio") {
+		t.Fatalf("expected validation error, got %s", resp.Body.String())
+	}
+}
+
 func TestDefaultProviderEndpoint_PersistsSelection(t *testing.T) {
 	svc := app.NewService(app.ServiceOptions{})
 	configDir := t.TempDir()

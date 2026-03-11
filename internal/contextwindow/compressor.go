@@ -15,6 +15,7 @@ const (
 	minSlidingBudgetTokens = 256
 	maxDroppedPreviewLines = 3
 	maxDroppedPreviewChars = 160
+	toolTrimSnippetChars   = 160
 )
 
 type Policy struct {
@@ -77,12 +78,26 @@ func Compress(messages []core.Message, policy Policy) ([]core.Message, core.Comp
 		return working, core.CompressionMeta{OriginalTokens: originalTokens, CompressedTokens: originalTokens}, false
 	}
 
-	pruned := pruneHistoryForContextShare(working, policy.MaxContextTokens, policy.MaxHistoryShare, policy.PruneParts)
+	pinned, working := splitLeadingSystemMessages(working)
+	pinnedTokens := 0
+	if len(pinned) > 0 {
+		pinnedTokens = EstimateMessagesTokens(pinned)
+	}
+
+	trimmedTools := 0
+	working, trimmedTools = trimOversizedToolMessages(working, policy)
+
+	pruned := pruneHistoryForContextShare(
+		working,
+		policy.MaxContextTokens-pinnedTokens,
+		policy.MaxHistoryShare,
+		policy.PruneParts,
+	)
 	working = pruned.Messages
 	droppedMessagesList := append([]core.Message(nil), pruned.DroppedMessagesList...)
 	droppedMessages := pruned.DroppedMessages
 
-	budgetTokens := policy.MaxContextTokens - policy.ReserveTokens
+	budgetTokens := policy.MaxContextTokens - policy.ReserveTokens - pinnedTokens
 	if budgetTokens < minSlidingBudgetTokens {
 		budgetTokens = minSlidingBudgetTokens
 	}
@@ -96,6 +111,13 @@ func Compress(messages []core.Message, policy Policy) ([]core.Message, core.Comp
 	if len(extraDropped) > 0 {
 		droppedMessagesList = append(droppedMessagesList, extraDropped...)
 		droppedMessages += len(extraDropped)
+	}
+
+	sanitizedWorking, orphanedToolMessages := core.SanitizeToolMessagePairs(working)
+	if len(orphanedToolMessages) > 0 {
+		working = sanitizedWorking
+		droppedMessagesList = append(droppedMessagesList, orphanedToolMessages...)
+		droppedMessages += len(orphanedToolMessages)
 	}
 
 	if droppedMessages > 0 {
@@ -118,16 +140,33 @@ func Compress(messages []core.Message, policy Policy) ([]core.Message, core.Comp
 		working = append([]core.Message{summaryMessage}, working...)
 	}
 
+	if len(pinned) > 0 {
+		working = append(append([]core.Message(nil), pinned...), working...)
+	}
+
 	compressedTokens := EstimateMessagesTokens(working)
 	meta := core.CompressionMeta{
 		OriginalTokens:   originalTokens,
 		CompressedTokens: compressedTokens,
 		DroppedMessages:  droppedMessages,
-		SoftTrimmed:      0,
+		SoftTrimmed:      trimmedTools + len(orphanedToolMessages),
 		HardCleared:      0,
 	}
-	compressed := droppedMessages > 0
+	compressed := droppedMessages > 0 || trimmedTools > 0
 	return working, meta, compressed
+}
+
+func splitLeadingSystemMessages(messages []core.Message) ([]core.Message, []core.Message) {
+	idx := 0
+	for idx < len(messages) && messages[idx].Role == core.RoleSystem {
+		idx++
+	}
+	if idx == 0 {
+		return nil, append([]core.Message(nil), messages...)
+	}
+	pinned := append([]core.Message(nil), messages[:idx]...)
+	rest := append([]core.Message(nil), messages[idx:]...)
+	return pinned, rest
 }
 
 type pruneResult struct {
@@ -332,6 +371,53 @@ func inlineSnippet(text string, maxChars int) string {
 		return "…"
 	}
 	return string(runes[:maxChars-1]) + "…"
+}
+
+func trimOversizedToolMessages(messages []core.Message, policy Policy) ([]core.Message, int) {
+	if len(messages) == 0 || policy.ToolSoftTrimMax <= 0 {
+		return messages, 0
+	}
+	trimmed := 0
+	out := make([]core.Message, len(messages))
+	for i, msg := range messages {
+		out[i] = msg
+		if msg.Role != core.RoleTool {
+			continue
+		}
+		if EstimateMessageTokens(msg) <= policy.ToolSoftTrimMax {
+			continue
+		}
+		out[i].Content = buildToolResultSummary(msg.Content, policy)
+		trimmed++
+	}
+	return out, trimmed
+}
+
+func buildToolResultSummary(content string, policy Policy) string {
+	head := inlineSnippet(content, policy.ToolSoftTrimHead)
+	tail := inlineSnippet(lastRunes(content, policy.ToolSoftTrimTail), toolTrimSnippetChars)
+	lines := []string{"Tool result compacted to fit context limits."}
+	if head != "" {
+		lines = append(lines, "Head: "+head)
+	}
+	if tail != "" && tail != head {
+		lines = append(lines, "Tail: "+tail)
+	}
+	if len(lines) == 1 {
+		lines = append(lines, policy.HardClearPlaceholder)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func lastRunes(text string, count int) string {
+	if count <= 0 {
+		return ""
+	}
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) <= count {
+		return string(runes)
+	}
+	return string(runes[len(runes)-count:])
 }
 
 // EstimateMessagesTokens estimates total tokens for a slice of messages

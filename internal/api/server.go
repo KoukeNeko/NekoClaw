@@ -78,6 +78,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/models", s.handleListModels)
 	mux.HandleFunc("/v1/fallbacks", s.handleFallbacks)
 	mux.HandleFunc("/v1/general/config", s.handleGeneralConfig)
+	mux.HandleFunc("/v1/compaction/config", s.handleCompactionConfig)
 	mux.HandleFunc("/v1/discord/config", s.handleDiscordConfig)
 	mux.HandleFunc("/v1/telegram/config", s.handleTelegramConfig)
 	mux.HandleFunc("/v1/tools/catalog", s.handleToolsCatalog)
@@ -1450,6 +1451,30 @@ func (s *Server) handleGeneralConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		respondJSON(w, http.StatusOK, s.svc.GetGeneralConfig())
+	default:
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleCompactionConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		respondJSON(w, http.StatusOK, s.svc.GetCompactionConfig())
+	case http.MethodPut:
+		var cfg core.CompactionConfig
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		if err := s.svc.SaveCompactionConfig(cfg); err != nil {
+			if errors.Is(err, app.ErrInvalidCompactionConfig) {
+				respondError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		respondJSON(w, http.StatusOK, s.svc.GetCompactionConfig())
 	default:
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}

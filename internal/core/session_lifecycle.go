@@ -36,6 +36,14 @@ func NewSessionLifecycle(store *SessionStore, config SessionLifecycleConfig) *Se
 	return &SessionLifecycle{store: store, config: config}
 }
 
+// Config returns the active lifecycle configuration.
+func (l *SessionLifecycle) Config() SessionLifecycleConfig {
+	if l == nil {
+		return DefaultLifecycleConfig()
+	}
+	return l.config
+}
+
 // ShouldReset returns true if the session should be reset due to idle timeout.
 // Bot sessions (Discord/Telegram) are only reset manually via /reset or by
 // housekeeping (MaxEntries/MaxFileSize). Compaction and context window

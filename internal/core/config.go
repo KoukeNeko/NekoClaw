@@ -39,6 +39,52 @@ type GeneralConfig struct {
 	Timezone string `json:"timezone,omitempty"`
 }
 
+// CompactionConfig holds deterministic/background compaction settings.
+type CompactionConfig struct {
+	Enabled               bool    `json:"enabled"`
+	BackgroundEnabled     bool    `json:"background_enabled"`
+	LLMSummaryEnabled     bool    `json:"llm_summary_enabled"`
+	TriggerThresholdRatio float64 `json:"trigger_threshold_ratio"`
+	KeepRecentTokens      int     `json:"keep_recent_tokens"`
+}
+
+// UnmarshalJSON applies defaults while still allowing explicit false values.
+func (c *CompactionConfig) UnmarshalJSON(data []byte) error {
+	type rawCompactionConfig struct {
+		Enabled               *bool    `json:"enabled"`
+		BackgroundEnabled     *bool    `json:"background_enabled"`
+		LLMSummaryEnabled     *bool    `json:"llm_summary_enabled"`
+		TriggerThresholdRatio *float64 `json:"trigger_threshold_ratio"`
+		KeepRecentTokens      *int     `json:"keep_recent_tokens"`
+	}
+	cfg := DefaultCompactionConfig()
+	if len(strings.TrimSpace(string(data))) == 0 || strings.TrimSpace(string(data)) == "null" {
+		*c = cfg
+		return nil
+	}
+	var raw rawCompactionConfig
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if raw.Enabled != nil {
+		cfg.Enabled = *raw.Enabled
+	}
+	if raw.BackgroundEnabled != nil {
+		cfg.BackgroundEnabled = *raw.BackgroundEnabled
+	}
+	if raw.LLMSummaryEnabled != nil {
+		cfg.LLMSummaryEnabled = *raw.LLMSummaryEnabled
+	}
+	if raw.TriggerThresholdRatio != nil {
+		cfg.TriggerThresholdRatio = *raw.TriggerThresholdRatio
+	}
+	if raw.KeepRecentTokens != nil {
+		cfg.KeepRecentTokens = *raw.KeepRecentTokens
+	}
+	*c = sanitizeCompactionConfig(cfg)
+	return nil
+}
+
 // SecurityConfig holds browser admin auth settings.
 type SecurityConfig struct {
 	AuthEnabled          bool `json:"auth_enabled"`
@@ -55,15 +101,16 @@ type ToolsConfig struct {
 
 // AppConfig holds user-configurable settings persisted to config.json.
 type AppConfig struct {
-	DefaultProvider     string          `json:"default_provider,omitempty"`
-	DefaultModel        string          `json:"default_model,omitempty"`
-	DefaultThinkingMode ThinkingMode    `json:"default_thinking_mode,omitempty"`
-	Fallbacks           []FallbackEntry `json:"fallbacks,omitempty"`
-	General             GeneralConfig   `json:"general,omitempty"`
-	Security            SecurityConfig  `json:"security,omitempty"`
-	Discord             DiscordConfig   `json:"discord,omitempty"`
-	Telegram            TelegramConfig  `json:"telegram,omitempty"`
-	Tools               ToolsConfig     `json:"tools,omitempty"`
+	DefaultProvider     string           `json:"default_provider,omitempty"`
+	DefaultModel        string           `json:"default_model,omitempty"`
+	DefaultThinkingMode ThinkingMode     `json:"default_thinking_mode,omitempty"`
+	Fallbacks           []FallbackEntry  `json:"fallbacks,omitempty"`
+	General             GeneralConfig    `json:"general,omitempty"`
+	Compaction          CompactionConfig `json:"compaction,omitempty"`
+	Security            SecurityConfig   `json:"security,omitempty"`
+	Discord             DiscordConfig    `json:"discord,omitempty"`
+	Telegram            TelegramConfig   `json:"telegram,omitempty"`
+	Tools               ToolsConfig      `json:"tools,omitempty"`
 }
 
 // LoadConfig reads config.json from configDir.
@@ -76,6 +123,7 @@ func LoadConfig(configDir string) (AppConfig, error) {
 		if os.IsNotExist(err) {
 			return AppConfig{
 				Security:            DefaultSecurityConfig(),
+				Compaction:          DefaultCompactionConfig(),
 				DefaultThinkingMode: ThinkingModeAuto,
 			}, nil
 		}
@@ -92,6 +140,7 @@ func LoadConfig(configDir string) (AppConfig, error) {
 	cfg.DefaultThinkingMode = sanitizeThinkingMode(cfg.DefaultThinkingMode)
 	cfg.Fallbacks = sanitizeFallbacks(cfg.Fallbacks)
 	cfg.General = sanitizeGeneralConfig(cfg.General)
+	cfg.Compaction = sanitizeCompactionConfig(cfg.Compaction)
 	cfg.Security = sanitizeSecurityConfig(cfg.Security)
 	return cfg, nil
 }
@@ -109,6 +158,7 @@ func SaveConfig(configDir string, cfg AppConfig) error {
 	cfg.DefaultThinkingMode = sanitizeThinkingMode(cfg.DefaultThinkingMode)
 	cfg.Fallbacks = sanitizeFallbacks(cfg.Fallbacks)
 	cfg.General = sanitizeGeneralConfig(cfg.General)
+	cfg.Compaction = sanitizeCompactionConfig(cfg.Compaction)
 	cfg.Security = sanitizeSecurityConfig(cfg.Security)
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -174,6 +224,33 @@ func NormalizeProviderModelSelection(provider string, model string) (string, str
 func sanitizeGeneralConfig(cfg GeneralConfig) GeneralConfig {
 	cfg.Timezone = strings.TrimSpace(cfg.Timezone)
 	return cfg
+}
+
+func DefaultCompactionConfig() CompactionConfig {
+	return CompactionConfig{
+		Enabled:               true,
+		BackgroundEnabled:     true,
+		LLMSummaryEnabled:     true,
+		TriggerThresholdRatio: 0.80,
+		KeepRecentTokens:      20_000,
+	}
+}
+
+func (defaults CompactionConfig) ApplyDefaults(cfg CompactionConfig) CompactionConfig {
+	if cfg == (CompactionConfig{}) {
+		return defaults
+	}
+	if cfg.TriggerThresholdRatio <= 0 {
+		cfg.TriggerThresholdRatio = defaults.TriggerThresholdRatio
+	}
+	if cfg.KeepRecentTokens <= 0 {
+		cfg.KeepRecentTokens = defaults.KeepRecentTokens
+	}
+	return cfg
+}
+
+func sanitizeCompactionConfig(cfg CompactionConfig) CompactionConfig {
+	return DefaultCompactionConfig().ApplyDefaults(cfg)
 }
 
 func DefaultSecurityConfig() SecurityConfig {

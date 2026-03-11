@@ -37,6 +37,7 @@ type CompactionRequest struct {
 	ContextWindow    int
 	ReserveTokens    int
 	KeepRecentTokens int
+	AllowLLMSummary  bool
 }
 
 // CompactionResult is the output of a successful compaction.
@@ -87,9 +88,7 @@ func (c *Compactor) Compact(ctx context.Context, req CompactionRequest) (Compact
 	}
 
 	droppedTokens := EstimateEntriesTokens(dropped)
-
-	// Generate LLM summary of dropped messages.
-	summary, err := c.summarizeDropped(ctx, dropped)
+	summary, err := c.buildSummary(ctx, dropped, req.AllowLLMSummary)
 	if err != nil {
 		return CompactionResult{}, fmt.Errorf("compaction summarize failed: %w", err)
 	}
@@ -147,23 +146,12 @@ func splitByTokenBudget(entries []core.SessionEntry, keepTokens int) (kept, drop
 // EstimateEntryTokens estimates the token count for a single entry
 // using CJK-aware counting (delegated to tokenutil).
 func EstimateEntryTokens(e core.SessionEntry) int {
-	combined := strings.TrimSpace(e.Content) + " " +
-		string(e.Role) + " " +
-		strings.TrimSpace(e.ToolName) + " " +
-		strings.TrimSpace(e.Summary)
-	return tokenutil.EstimateStringWithOverhead(combined)
+	return core.EstimateSessionEntryTokens(e)
 }
 
 // EstimateEntriesTokens estimates the total token count for a slice of entries.
 func EstimateEntriesTokens(entries []core.SessionEntry) int {
-	total := 0
-	for _, e := range entries {
-		total += EstimateEntryTokens(e)
-	}
-	if total == 0 {
-		return 1
-	}
-	return total
+	return core.EstimateSessionEntriesTokens(entries)
 }
 
 func estimateStringTokens(s string) int {
@@ -200,6 +188,20 @@ func (c *Compactor) summarizeDropped(ctx context.Context, dropped []core.Session
 	return summary, nil
 }
 
+func (c *Compactor) buildSummary(ctx context.Context, dropped []core.SessionEntry, allowLLM bool) (string, error) {
+	if !allowLLM && c.prov != nil {
+		allowLLM = true
+	}
+	if allowLLM && c.prov != nil {
+		if summary, err := c.summarizeDropped(ctx, dropped); err == nil {
+			return summary, nil
+		} else {
+			logCompact.Warnf("llm summary fallback: error=%v", err)
+		}
+	}
+	return buildDeterministicSummary(dropped), nil
+}
+
 const summarizationSystemPrompt = `你是一個對話摘要助手。你的任務是摘要被壓縮移除的對話歷史。
 請生成一個簡潔但完整的摘要，保留：
 - 關鍵決策和結論
@@ -214,10 +216,12 @@ func buildSummarizationPrompt(dropped []core.SessionEntry) string {
 	var sb strings.Builder
 	sb.WriteString("以下是即將被移除的對話歷史。請生成摘要：\n\n")
 	for _, e := range dropped {
-		if e.Type != core.EntryMessage {
-			continue
+		switch e.Type {
+		case core.EntryMessage:
+			sb.WriteString(fmt.Sprintf("[%s] %s\n", e.Role, truncateForPrompt(e.Content, 2000)))
+		case core.EntryCompaction:
+			sb.WriteString(fmt.Sprintf("[compaction] %s\n", truncateForPrompt(e.Summary, 2000)))
 		}
-		sb.WriteString(fmt.Sprintf("[%s] %s\n", e.Role, truncateForPrompt(e.Content, 2000)))
 	}
 	return sb.String()
 }
@@ -228,4 +232,38 @@ func truncateForPrompt(s string, maxRunes int) string {
 		return string(runes)
 	}
 	return string(runes[:maxRunes-1]) + "…"
+}
+
+func buildDeterministicSummary(dropped []core.SessionEntry) string {
+	if len(dropped) == 0 {
+		return "History compacted."
+	}
+	lines := []string{
+		fmt.Sprintf(
+			"History compacted: merged %d older entries (~%d tokens).",
+			len(dropped),
+			EstimateEntriesTokens(dropped),
+		),
+	}
+	previewLines := 0
+	for i := len(dropped) - 1; i >= 0 && previewLines < 5; i-- {
+		entry := dropped[i]
+		switch entry.Type {
+		case core.EntryCompaction:
+			snippet := truncateForPrompt(strings.TrimSpace(entry.Summary), 180)
+			if snippet == "" {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("- compaction: %s", snippet))
+			previewLines++
+		case core.EntryMessage:
+			snippet := truncateForPrompt(strings.Join(strings.Fields(strings.TrimSpace(entry.Content)), " "), 180)
+			if snippet == "" {
+				snippet = "<empty>"
+			}
+			lines = append(lines, fmt.Sprintf("- %s: %s", entry.Role, snippet))
+			previewLines++
+		}
+	}
+	return strings.Join(lines, "\n")
 }

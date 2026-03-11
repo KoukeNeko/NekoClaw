@@ -51,6 +51,7 @@ import type {
   MemorySearchRequest,
   MemorySearchResponse,
   GeneralConfig,
+  CompactionConfig,
   DiscordConfig,
   TelegramConfig,
   SecurityConfig,
@@ -724,7 +725,7 @@ export function changeSecurityPassword(
 }
 
 // ---------------------------------------------------------------------------
-// General / Discord / Telegram / Tools config
+// General / Compaction / Discord / Telegram / Tools config
 // ---------------------------------------------------------------------------
 
 export function getGeneralConfig(): Promise<GeneralConfig> {
@@ -733,6 +734,14 @@ export function getGeneralConfig(): Promise<GeneralConfig> {
 
 export function setGeneralConfig(config: GeneralConfig): Promise<void> {
   return put("/v1/general/config", config);
+}
+
+export function getCompactionConfig(): Promise<CompactionConfig> {
+  return get("/v1/compaction/config");
+}
+
+export function setCompactionConfig(config: CompactionConfig): Promise<void> {
+  return put("/v1/compaction/config", config);
 }
 
 export function getDiscordConfig(): Promise<DiscordConfig> {

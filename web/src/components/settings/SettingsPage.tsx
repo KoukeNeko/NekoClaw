@@ -1,5 +1,6 @@
 import { useAppStore, type Route } from "@/store/appStore";
 import { GeneralPanel } from "./GeneralPanel";
+import { CompactionPanel } from "./CompactionPanel";
 import { SecurityPanel } from "./SecurityPanel";
 import { BackupPanel } from "./BackupPanel";
 import { PersonaPanel } from "./PersonaPanel";
@@ -20,6 +21,7 @@ interface TabDef {
 
 const TABS: TabDef[] = [
   { route: "settings/general", label: "一般" },
+  { route: "settings/compaction", label: "壓縮" },
   { route: "settings/security", label: "安全" },
   { route: "settings/backup", label: "備份" },
   { route: "settings/provider", label: "Provider" },
@@ -39,6 +41,8 @@ function renderPanel(route: Route) {
   switch (route) {
     case "settings/general":
       return <GeneralPanel />;
+    case "settings/compaction":
+      return <CompactionPanel />;
     case "settings/security":
       return <SecurityPanel />;
     case "settings/backup":

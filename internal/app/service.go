@@ -41,6 +41,7 @@ var ErrProfileInUse = errors.New("profile in use")
 var ErrProviderNotReady = errors.New("provider not ready")
 var ErrToolsNotSupported = errors.New("tools not supported by provider")
 var ErrInvalidTimezone = errors.New("invalid timezone")
+var ErrInvalidCompactionConfig = errors.New("invalid compaction config")
 
 type Service struct {
 	mu                sync.RWMutex
@@ -61,10 +62,11 @@ type Service struct {
 	discordConfig     core.DiscordConfig   // persisted Discord bot settings
 	telegramConfig    core.TelegramConfig  // persisted Telegram bot settings
 	toolsConfig       core.ToolsConfig     // persisted tool settings (web_search API key, etc.)
-	defaultProvider   string               // current default provider (synced from the Web UI)
-	defaultModel      string               // current default model (synced from the Web UI)
-	defaultThinking   core.ThinkingMode    // current default Gemini thinking mode
-	configDir         string               // directory for config.json persistence
+	compactionConfig  core.CompactionConfig
+	defaultProvider   string            // current default provider (synced from the Web UI)
+	defaultModel      string            // current default model (synced from the Web UI)
+	defaultThinking   core.ThinkingMode // current default Gemini thinking mode
+	configDir         string            // directory for config.json persistence
 	toolRuntime       *tooling.Runtime
 	mcpManager        *mcp.Manager
 	personaManager    *persona.Manager
@@ -73,18 +75,25 @@ type Service struct {
 	activeToolStatus  sync.Map // sessionID -> string (current tool name being executed)
 	activeRetryStatus sync.Map // sessionID -> string (failback status message)
 	modelNegativeTTL  sync.Map // provider/account/model -> expiry for account-scoped model_not_found
+	compactionStart   sync.Once
+	compactionActive  bool
+	compactionQueue   chan string
+	compactionQueueMu sync.Mutex
+	compactionQueued  map[string]struct{}
+	compactionRunning map[string]struct{}
 }
 
 type ServiceOptions struct {
-	SessionStore  *core.SessionStore
-	Lifecycle     *core.SessionLifecycle
-	MemoryDir     string
-	SearchIndex   *memory.SearchIndex
-	WorkspaceRoot string
-	ToolRunTTL    time.Duration
-	MCPConfigDir  string
-	PersonasDir   string
-	ToolsConfig   core.ToolsConfig // web_search API key, etc.
+	SessionStore     *core.SessionStore
+	Lifecycle        *core.SessionLifecycle
+	MemoryDir        string
+	SearchIndex      *memory.SearchIndex
+	WorkspaceRoot    string
+	ToolRunTTL       time.Duration
+	MCPConfigDir     string
+	PersonasDir      string
+	ToolsConfig      core.ToolsConfig // web_search API key, etc.
+	CompactionConfig core.CompactionConfig
 }
 
 func NewService(opts ServiceOptions) *Service {
@@ -101,6 +110,16 @@ func NewService(opts ServiceOptions) *Service {
 		searchIndex:       opts.SearchIndex,
 		preferredProfiles: map[string]string{},
 		defaultThinking:   core.ThinkingModeAuto,
+		compactionConfig:  core.DefaultCompactionConfig(),
+		compactionQueue:   make(chan string, 256),
+		compactionQueued:  map[string]struct{}{},
+		compactionRunning: map[string]struct{}{},
+	}
+	if opts.CompactionConfig != (core.CompactionConfig{}) {
+		cfg := normalizeCompactionConfig(opts.CompactionConfig)
+		if err := validateCompactionConfig(cfg); err == nil {
+			svc.compactionConfig = cfg
+		}
 	}
 	policy := tooling.DefaultPolicy(opts.WorkspaceRoot)
 	execCfg := tooling.ExecutorConfig{
@@ -2878,12 +2897,10 @@ func (s *Service) attemptSingleProvider(
 		memoryCh <- memoryResult{}
 	}
 
-	// LLM compaction and memory flush are skipped during fallback attempts.
-	// Fallback providers typically have smaller context windows; running
-	// persistent compaction here would permanently discard messages that the
-	// primary provider (with a larger window) can still use. The non-destructive
-	// sliding window below handles the size reduction for the fallback call.
-	if !params.isFallback {
+	compactionCfg := s.GetCompactionConfig()
+
+	// Memory flush is still only attempted on the primary request path.
+	if !params.isFallback && compactionCfg.Enabled {
 		// Pre-compaction memory flush: extract durable notes before messages are dropped.
 		if !params.disableSession && s.memoryDir != "" {
 			flusher := compaction.NewMemoryFlusher(prov, modelID, core.Account{}, s.memoryDir)
@@ -2893,53 +2910,32 @@ func (s *Service) attemptSingleProvider(
 				}
 			}
 		}
-
-		compactBudget := contextWindow - compaction.DefaultReserveTokens
-		if !params.disableSession && compactBudget > 0 && estimatedTokens > compactBudget {
-			compactor := compaction.NewCompactor(prov, modelID, core.Account{})
-			result, compactErr := compactor.Compact(ctx, compaction.CompactionRequest{
-				Entries:       entries,
-				ContextWindow: contextWindow,
-				ReserveTokens: compaction.DefaultReserveTokens,
-			})
-			if compactErr == nil && result.DroppedCount > 0 {
-				s.sessions.Append(sessionID, result.CompactionEntry)
-				compressedMessages = entriesToMessages(result.KeptEntries)
-				if len(params.ephemeralMessages) > 0 {
-					compressedMessages = append(compressedMessages, params.ephemeralMessages...)
-				}
-				if hasUserMessage {
-					compressedMessages = append(compressedMessages, userMessage)
-				}
-				compressionMeta = core.CompressionMeta{
-					OriginalTokens:   estimatedTokens,
-					CompressedTokens: compaction.EstimateEntriesTokens(result.KeptEntries) + result.SummaryTokens,
-					DroppedMessages:  result.DroppedCount,
-				}
-				compressed = true
-				logService.Logf("llm compaction: session_id=%s dropped=%d", sessionID, result.DroppedCount)
-			} else if compactErr != nil {
-				logService.Warnf("llm compaction fallback: session_id=%s error=%q", sessionID, compactErr)
-			}
-		}
 	}
 
-	// Fallback: token-based sliding window compression.
+	baseMessages := []core.Message{}
+	if !params.disableSession {
+		history := s.sessions.HistoryAsMessages(sessionID)
+		baseMessages = append(baseMessages, history...)
+	}
+	if len(params.ephemeralMessages) > 0 {
+		baseMessages = append(baseMessages, params.ephemeralMessages...)
+	}
+	if hasUserMessage {
+		baseMessages = append(baseMessages, userMessage)
+	}
 	if compressedMessages == nil {
-		baseMessages := []core.Message{}
-		if !params.disableSession {
-			history := s.sessions.HistoryAsMessages(sessionID)
-			baseMessages = append(baseMessages, history...)
-		}
-		if len(params.ephemeralMessages) > 0 {
-			baseMessages = append(baseMessages, params.ephemeralMessages...)
-		}
-		if hasUserMessage {
-			baseMessages = append(baseMessages, userMessage)
-		}
 		policy := contextwindow.DefaultPolicy(contextWindow)
 		policy = s.adjustCompressionPolicy(providerID, modelID, policy)
-		compressedMessages, compressionMeta, compressed = contextwindow.Compress(baseMessages, policy)
+		if compactionCfg.Enabled {
+			compressedMessages, compressionMeta, compressed = contextwindow.Compress(baseMessages, policy)
+		} else {
+			compressedMessages = append([]core.Message(nil), baseMessages...)
+			originalTokens := contextwindow.EstimateMessagesTokens(baseMessages)
+			compressionMeta = core.CompressionMeta{
+				OriginalTokens:   originalTokens,
+				CompressedTokens: originalTokens,
+			}
+		}
 	}
 
 	// Collect memory result (started concurrently above).
@@ -3177,7 +3173,7 @@ func (s *Service) attemptSingleProvider(
 							entries = append(entries, core.MessageToEntry(msg))
 						}
 					}
-					s.sessions.Append(sessionID, entries...)
+					s.appendSessionEntries(sessionID, contextWindow, entries)
 					// Async title generation on first exchange (tool path).
 					if hasUserMessage {
 						var firstAssistant string
@@ -3190,13 +3186,6 @@ func (s *Service) attemptSingleProvider(
 						if firstAssistant != "" {
 							s.generateSessionTitleAsync(providerID, attemptModelID, sessionID, account, userMessage.Content, firstAssistant)
 						}
-					}
-					if s.searchIndex != nil {
-						go func(entries []core.SessionEntry) {
-							if idxErr := s.searchIndex.Index(sessionID, entries); idxErr != nil {
-								logService.Errorf("search index: session_id=%s error=%q", sessionID, idxErr)
-							}
-						}(entries)
 					}
 				}
 				pool.MarkUsed(account.ID)
@@ -3322,16 +3311,9 @@ func (s *Service) attemptSingleProvider(
 									sessionEntries = append(sessionEntries, core.MessageToEntry(userMessage))
 								}
 								sessionEntries = append(sessionEntries, assistantEntry)
-								s.sessions.Append(sessionID, sessionEntries...)
+								s.appendSessionEntries(sessionID, contextWindow, sessionEntries)
 								if hasUserMessage {
 									s.generateSessionTitleAsync(providerID, attemptModelID, sessionID, account, userMessage.Content, text)
-								}
-								if s.searchIndex != nil {
-									go func(entries []core.SessionEntry) {
-										if idxErr := s.searchIndex.Index(sessionID, entries); idxErr != nil {
-											logService.Errorf("search index: session_id=%s error=%q", sessionID, idxErr)
-										}
-									}(sessionEntries)
 								}
 							}
 							if providerID == "google-gemini-cli" {
@@ -3421,18 +3403,10 @@ func (s *Service) attemptSingleProvider(
 					sessionEntries = append(sessionEntries, core.MessageToEntry(userMessage))
 				}
 				sessionEntries = append(sessionEntries, assistantEntry)
-				s.sessions.Append(sessionID, sessionEntries...)
+				s.appendSessionEntries(sessionID, contextWindow, sessionEntries)
 				// Async title generation on first exchange.
 				if hasUserMessage {
 					s.generateSessionTitleAsync(providerID, attemptModelID, sessionID, account, userMessage.Content, resp.Text)
-				}
-				// Async index for memory search.
-				if s.searchIndex != nil {
-					go func(entries []core.SessionEntry) {
-						if idxErr := s.searchIndex.Index(sessionID, entries); idxErr != nil {
-							logService.Errorf("search index: session_id=%s error=%q", sessionID, idxErr)
-						}
-					}(sessionEntries)
 				}
 			}
 			if providerID == "google-gemini-cli" {
@@ -4652,7 +4626,15 @@ func (s *Service) resolveTitleGenerationTarget(
 		return prov, titleModelID, titleAccount, true
 	}
 
-	return nil, "", core.Account{}, false
+	prov, _, err := s.resolveProviderPool(providerID)
+	if err != nil || prov == nil {
+		return nil, "", core.Account{}, false
+	}
+	titleModelID := strings.TrimSpace(modelID)
+	if titleModelID == "" {
+		titleModelID = "default"
+	}
+	return prov, titleModelID, account, true
 }
 
 func truncateRunes(s string, maxRunes int) string {

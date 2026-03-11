@@ -27,6 +27,7 @@ const VALID_ROUTES: Route[] = [
   "setup",
   "chat",
   "settings/general",
+  "settings/compaction",
   "settings/security",
   "settings/backup",
   "settings/provider",

@@ -120,6 +120,7 @@ func main() {
 	case "api":
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+		service.StartBackgroundCompaction(ctx)
 
 		var wg sync.WaitGroup
 		if discordBot != nil {
@@ -150,6 +151,7 @@ func main() {
 	case "web":
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+		service.StartBackgroundCompaction(ctx)
 
 		var wg sync.WaitGroup
 
@@ -382,15 +384,16 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	}
 
 	svc := app.NewService(app.ServiceOptions{
-		SessionStore:  sessionStore,
-		Lifecycle:     lifecycle,
-		MemoryDir:     memoryDir,
-		SearchIndex:   searchIndex,
-		WorkspaceRoot: workspaceRoot,
-		ToolRunTTL:    10 * time.Minute,
-		MCPConfigDir:  mcpDir,
-		PersonasDir:   personasDir,
-		ToolsConfig:   appConfig.Tools,
+		SessionStore:     sessionStore,
+		Lifecycle:        lifecycle,
+		MemoryDir:        memoryDir,
+		SearchIndex:      searchIndex,
+		WorkspaceRoot:    workspaceRoot,
+		ToolRunTTL:       10 * time.Minute,
+		MCPConfigDir:     mcpDir,
+		PersonasDir:      personasDir,
+		ToolsConfig:      appConfig.Tools,
+		CompactionConfig: appConfig.Compaction,
 	})
 
 	mockProvider := provider.NewMockProvider()
@@ -459,6 +462,7 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	// Apply remaining config (fallbacks, general settings, Discord, Telegram) from the earlier load.
 	svc.SetConfigDir(configDir)
 	svc.SetGeneralConfig(appConfig.General)
+	svc.SetCompactionConfig(appConfig.Compaction)
 	svc.SetSecurityConfig(appConfig.Security)
 	svc.SetDiscordConfig(appConfig.Discord)
 	svc.SetTelegramConfig(appConfig.Telegram)

@@ -411,6 +411,71 @@ func TestCompactionEntryInHistory(t *testing.T) {
 	}
 }
 
+func TestRewriteSessionUpdatesMetadataAndPersists(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "sessions")
+	store, err := NewPersistentSessionStore(dataDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	user := NewMessageEntry(RoleUser, "question")
+	assistant := NewMessageEntry(RoleAssistant, "answer")
+	assistant.MsgUsage = &UsageInfo{
+		InputTokens:  12,
+		OutputTokens: 8,
+		TotalTokens:  20,
+	}
+	store.Append("rewrite", user, assistant)
+
+	before, ok := store.GetMetadata("rewrite")
+	if !ok {
+		t.Fatalf("expected metadata before rewrite")
+	}
+
+	entries := store.History("rewrite")
+	rewritten := []SessionEntry{
+		entries[0],
+		NewCompactionEntry("summary", 1, 100, assistant.ID),
+		assistant,
+	}
+	if err := store.RewriteSession("rewrite", rewritten); err != nil {
+		t.Fatalf("rewrite failed: %v", err)
+	}
+
+	after, ok := store.GetMetadata("rewrite")
+	if !ok {
+		t.Fatalf("expected metadata after rewrite")
+	}
+	if after.MessageCount != 1 {
+		t.Fatalf("message_count = %d, want 1", after.MessageCount)
+	}
+	if after.CompactionCount != 1 {
+		t.Fatalf("compaction_count = %d, want 1", after.CompactionCount)
+	}
+	if after.InputTokens != 12 || after.OutputTokens != 8 {
+		t.Fatalf("usage totals = (%d, %d), want (12, 8)", after.InputTokens, after.OutputTokens)
+	}
+	wantContext := EstimateSessionEntriesTokens(rewritten)
+	if after.ContextTokens != wantContext {
+		t.Fatalf("context_tokens = %d, want %d", after.ContextTokens, wantContext)
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Fatalf("updated_at changed on rewrite: before=%v after=%v", before.UpdatedAt, after.UpdatedAt)
+	}
+
+	reloaded, err := NewPersistentSessionStore(dataDir)
+	if err != nil {
+		t.Fatalf("reload store failed: %v", err)
+	}
+	reloadedEntries := reloaded.History("rewrite")
+	if len(reloadedEntries) != len(rewritten) {
+		t.Fatalf("reloaded entry count = %d, want %d", len(reloadedEntries), len(rewritten))
+	}
+	if reloadedEntries[1].Type != EntryCompaction || reloadedEntries[1].Summary != "summary" {
+		t.Fatalf("expected persisted compaction entry, got type=%q summary=%q", reloadedEntries[1].Type, reloadedEntries[1].Summary)
+	}
+}
+
 func nonEmptyLines(s string) []string {
 	var lines []string
 	for _, line := range strings.Split(s, "\n") {
