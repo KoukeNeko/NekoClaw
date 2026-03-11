@@ -197,8 +197,9 @@ func (s *Service) enqueueStartupCompactionCandidates(ctx context.Context) {
 }
 
 func (s *Service) backgroundCatchupContextWindow() int {
-	providerID := s.GetDefaultProvider()
-	modelID := s.GetDefaultModel()
+	resolved := s.ResolveModelRole(core.ModelRoleCompaction)
+	providerID := strings.TrimSpace(resolved.Provider)
+	modelID := strings.TrimSpace(resolved.Model)
 	if providerID == "" {
 		return defaultCompactionCtxWindow
 	}
@@ -240,18 +241,19 @@ func (s *Service) compactSessionInBackground(ctx context.Context, sessionID stri
 		return
 	}
 
-	compactionProv, modelID, account, contextWindow, allowLLM := resolveCompactionRuntime(s, compactable, cfg)
-	if !s.shouldCompactLoadedSession(sessionID, compactable, contextWindow, cfg) {
+	runtime := resolveCompactionRuntime(s, compactable, cfg)
+	if !s.shouldCompactLoadedSession(sessionID, compactable, runtime.ContextWindow, cfg) {
 		return
 	}
 
-	compactor := compaction.NewCompactor(compactionProv, modelID, account)
+	compactor := compaction.NewCompactor(runtime.Provider, runtime.ModelID, runtime.Account)
 	result, err := compactor.Compact(ctx, compaction.CompactionRequest{
 		Entries:          compactable,
-		ContextWindow:    contextWindow,
+		ContextWindow:    runtime.ContextWindow,
 		ReserveTokens:    compaction.DefaultReserveTokens,
 		KeepRecentTokens: cfg.KeepRecentTokens,
-		AllowLLMSummary:  allowLLM,
+		AllowLLMSummary:  runtime.AllowLLMSummary,
+		Generation:       runtime.Generation,
 	})
 	if err != nil {
 		logService.Warnf("background compaction failed: session_id=%s error=%q", sessionID, err)
@@ -290,9 +292,19 @@ func (s *Service) shouldCompactLoadedSession(sessionID string, entries []core.Se
 	return s.sessions.TranscriptFileSize(sessionID) >= s.compactionFileThreshold(cfg)
 }
 
-func resolveCompactionRuntime(s *Service, entries []core.SessionEntry, cfg core.CompactionConfig) (provider.Provider, string, core.Account, int, bool) {
-	providerID := strings.TrimSpace(s.GetDefaultProvider())
-	modelID := strings.TrimSpace(s.GetDefaultModel())
+type compactionRuntimeTarget struct {
+	Provider        provider.Provider
+	ModelID         string
+	Account         core.Account
+	ContextWindow   int
+	AllowLLMSummary bool
+	Generation      *provider.GenerationParams
+}
+
+func resolveCompactionRuntime(s *Service, entries []core.SessionEntry, cfg core.CompactionConfig) compactionRuntimeTarget {
+	resolved := s.ResolveModelRole(core.ModelRoleCompaction)
+	providerID := strings.TrimSpace(resolved.Provider)
+	modelID := strings.TrimSpace(resolved.Model)
 	for i := len(entries) - 1; i >= 0; i-- {
 		entry := entries[i]
 		if entry.Type != core.EntryMessage || entry.Role != core.RoleAssistant {
@@ -317,6 +329,7 @@ func resolveCompactionRuntime(s *Service, entries []core.SessionEntry, cfg core.
 
 	prov := s.Provider(providerID)
 	contextWindow := defaultCompactionCtxWindow
+	generation := workflowThinkingGenerationParams(providerID, resolved.ThinkingMode)
 	if prov != nil {
 		if cw := prov.ContextWindow(modelID); cw > 0 {
 			contextWindow = cw
@@ -324,17 +337,36 @@ func resolveCompactionRuntime(s *Service, entries []core.SessionEntry, cfg core.
 	}
 
 	if !cfg.LLMSummaryEnabled || prov == nil {
-		return nil, modelID, core.Account{}, contextWindow, false
+		return compactionRuntimeTarget{
+			ModelID:       modelID,
+			ContextWindow: contextWindow,
+			Generation:    generation,
+		}
 	}
 	pool := s.Pool(providerID)
 	if pool == nil {
-		return nil, modelID, core.Account{}, contextWindow, false
+		return compactionRuntimeTarget{
+			ModelID:       modelID,
+			ContextWindow: contextWindow,
+			Generation:    generation,
+		}
 	}
 	account, ok := pool.Acquire(s.preferredProfile(providerID))
 	if !ok {
-		return nil, modelID, core.Account{}, contextWindow, false
+		return compactionRuntimeTarget{
+			ModelID:       modelID,
+			ContextWindow: contextWindow,
+			Generation:    generation,
+		}
 	}
-	return prov, modelID, account, contextWindow, true
+	return compactionRuntimeTarget{
+		Provider:        prov,
+		ModelID:         modelID,
+		Account:         account,
+		ContextWindow:   contextWindow,
+		AllowLLMSummary: true,
+		Generation:      generation,
+	}
 }
 
 func splitCompactionHeader(entries []core.SessionEntry) (*core.SessionEntry, []core.SessionEntry) {

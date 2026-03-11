@@ -197,6 +197,15 @@ func TestDefaultProviderEndpoint_PersistsSelection(t *testing.T) {
 	if config.DefaultThinkingMode != core.ThinkingModeHigh {
 		t.Fatalf("config default_thinking_mode = %q, want %q", config.DefaultThinkingMode, core.ThinkingModeHigh)
 	}
+	if config.ModelRoles.Action.Provider != "google-gemini-cli" {
+		t.Fatalf("config model_roles.action.provider = %q, want %q", config.ModelRoles.Action.Provider, "google-gemini-cli")
+	}
+	if config.ModelRoles.Action.Model != "gemini-2.5-pro" {
+		t.Fatalf("config model_roles.action.model = %q, want %q", config.ModelRoles.Action.Model, "gemini-2.5-pro")
+	}
+	if config.ModelRoles.Action.ThinkingMode != core.ThinkingModeHigh {
+		t.Fatalf("config model_roles.action.thinking_mode = %q, want %q", config.ModelRoles.Action.ThinkingMode, core.ThinkingModeHigh)
+	}
 }
 
 func TestDefaultProviderEndpoint_PreservesGeminiCLIModel(t *testing.T) {
@@ -272,6 +281,67 @@ func TestFallbacksEndpoint_PersistsThinkingMode(t *testing.T) {
 	}
 	if config.Fallbacks[1].ThinkingMode != core.ThinkingModeHigh {
 		t.Fatalf("config fallback[1].thinking_mode = %q, want %q", config.Fallbacks[1].ThinkingMode, core.ThinkingModeHigh)
+	}
+}
+
+func TestModelRolesConfigEndpoint_PersistsSelection(t *testing.T) {
+	svc := app.NewService(app.ServiceOptions{})
+	configDir := t.TempDir()
+	svc.SetConfigDir(configDir)
+
+	handler := NewServer(svc).Handler()
+	resp := performJSONRequest(
+		t,
+		handler,
+		http.MethodPut,
+		"/v1/model-roles/config",
+		`{
+			"action":{"provider":"google-ai-studio","model":"gemini-2.5-pro","thinking_mode":"high"},
+			"planner":{"provider":"google-gemini-cli","model":"gemini-3.1-pro-preview","thinking_mode":"medium"},
+			"compaction":{"thinking_mode":"low"},
+			"title":{"provider":"openai","model":"gpt-5-mini"}
+		}`,
+	)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected PUT status: %d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var saved core.ModelRolesConfig
+	if err := json.Unmarshal(resp.Body.Bytes(), &saved); err != nil {
+		t.Fatalf("decode saved model roles: %v", err)
+	}
+	if saved.Action.Provider != "google-ai-studio" {
+		t.Fatalf("action provider = %q, want google-ai-studio", saved.Action.Provider)
+	}
+	if saved.Planner.Provider != "google-gemini-cli" {
+		t.Fatalf("planner provider = %q, want google-gemini-cli", saved.Planner.Provider)
+	}
+	if saved.Compaction.ThinkingMode != core.ThinkingModeLow {
+		t.Fatalf("compaction thinking = %q, want %q", saved.Compaction.ThinkingMode, core.ThinkingModeLow)
+	}
+
+	config, err := core.LoadConfig(configDir)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if config.DefaultProvider != "google-ai-studio" {
+		t.Fatalf("config default_provider = %q, want google-ai-studio", config.DefaultProvider)
+	}
+	if config.ModelRoles.Title.Model != "gpt-5-mini" {
+		t.Fatalf("config model_roles.title.model = %q, want gpt-5-mini", config.ModelRoles.Title.Model)
+	}
+
+	getResp := performJSONRequest(t, handler, http.MethodGet, "/v1/model-roles/config", "")
+	if getResp.Code != http.StatusOK {
+		t.Fatalf("unexpected GET status: %d body=%s", getResp.Code, getResp.Body.String())
+	}
+
+	var fetched core.ModelRolesConfig
+	if err := json.Unmarshal(getResp.Body.Bytes(), &fetched); err != nil {
+		t.Fatalf("decode fetched model roles: %v", err)
+	}
+	if fetched.Planner.Model != "gemini-3.1-pro-preview" {
+		t.Fatalf("fetched planner model = %q, want gemini-3.1-pro-preview", fetched.Planner.Model)
 	}
 }
 

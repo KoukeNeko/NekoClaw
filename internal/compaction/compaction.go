@@ -38,6 +38,7 @@ type CompactionRequest struct {
 	ReserveTokens    int
 	KeepRecentTokens int
 	AllowLLMSummary  bool
+	Generation       *provider.GenerationParams
 }
 
 // CompactionResult is the output of a successful compaction.
@@ -88,7 +89,7 @@ func (c *Compactor) Compact(ctx context.Context, req CompactionRequest) (Compact
 	}
 
 	droppedTokens := EstimateEntriesTokens(dropped)
-	summary, err := c.buildSummary(ctx, dropped, req.AllowLLMSummary)
+	summary, err := c.buildSummary(ctx, dropped, req.AllowLLMSummary, req.Generation)
 	if err != nil {
 		return CompactionResult{}, fmt.Errorf("compaction summarize failed: %w", err)
 	}
@@ -162,7 +163,7 @@ func estimateStringTokens(s string) int {
 // LLM summarization
 // ---------------------------------------------------------------------------
 
-func (c *Compactor) summarizeDropped(ctx context.Context, dropped []core.SessionEntry) (string, error) {
+func (c *Compactor) summarizeDropped(ctx context.Context, dropped []core.SessionEntry, generation *provider.GenerationParams) (string, error) {
 	prompt := buildSummarizationPrompt(dropped)
 
 	resp, err := c.prov.Generate(ctx, provider.GenerateRequest{
@@ -171,7 +172,8 @@ func (c *Compactor) summarizeDropped(ctx context.Context, dropped []core.Session
 			{Role: core.RoleSystem, Content: summarizationSystemPrompt},
 			{Role: core.RoleUser, Content: prompt},
 		},
-		Account: c.account,
+		Account:    c.account,
+		Generation: generation,
 	})
 	if err != nil {
 		return "", err
@@ -188,12 +190,12 @@ func (c *Compactor) summarizeDropped(ctx context.Context, dropped []core.Session
 	return summary, nil
 }
 
-func (c *Compactor) buildSummary(ctx context.Context, dropped []core.SessionEntry, allowLLM bool) (string, error) {
+func (c *Compactor) buildSummary(ctx context.Context, dropped []core.SessionEntry, allowLLM bool, generation *provider.GenerationParams) (string, error) {
 	if !allowLLM && c.prov != nil {
 		allowLLM = true
 	}
 	if allowLLM && c.prov != nil {
-		if summary, err := c.summarizeDropped(ctx, dropped); err == nil {
+		if summary, err := c.summarizeDropped(ctx, dropped, generation); err == nil {
 			return summary, nil
 		} else {
 			logCompact.Warnf("llm summary fallback: error=%v", err)

@@ -105,6 +105,7 @@ type AppConfig struct {
 	DefaultModel        string           `json:"default_model,omitempty"`
 	DefaultThinkingMode ThinkingMode     `json:"default_thinking_mode,omitempty"`
 	Fallbacks           []FallbackEntry  `json:"fallbacks,omitempty"`
+	ModelRoles          ModelRolesConfig `json:"model_roles,omitempty"`
 	General             GeneralConfig    `json:"general,omitempty"`
 	Compaction          CompactionConfig `json:"compaction,omitempty"`
 	Security            SecurityConfig   `json:"security,omitempty"`
@@ -139,6 +140,7 @@ func LoadConfig(configDir string) (AppConfig, error) {
 	)
 	cfg.DefaultThinkingMode = sanitizeThinkingMode(cfg.DefaultThinkingMode)
 	cfg.Fallbacks = sanitizeFallbacks(cfg.Fallbacks)
+	cfg.ModelRoles = NormalizeModelRolesConfig(cfg.ModelRoles)
 	cfg.General = sanitizeGeneralConfig(cfg.General)
 	cfg.Compaction = sanitizeCompactionConfig(cfg.Compaction)
 	cfg.Security = sanitizeSecurityConfig(cfg.Security)
@@ -157,6 +159,7 @@ func SaveConfig(configDir string, cfg AppConfig) error {
 	)
 	cfg.DefaultThinkingMode = sanitizeThinkingMode(cfg.DefaultThinkingMode)
 	cfg.Fallbacks = sanitizeFallbacks(cfg.Fallbacks)
+	cfg.ModelRoles = NormalizeModelRolesConfig(cfg.ModelRoles)
 	cfg.General = sanitizeGeneralConfig(cfg.General)
 	cfg.Compaction = sanitizeCompactionConfig(cfg.Compaction)
 	cfg.Security = sanitizeSecurityConfig(cfg.Security)

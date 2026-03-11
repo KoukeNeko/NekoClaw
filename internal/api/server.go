@@ -81,6 +81,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/fallbacks", s.handleFallbacks)
 	mux.HandleFunc("/v1/general/config", s.handleGeneralConfig)
 	mux.HandleFunc("/v1/compaction/config", s.handleCompactionConfig)
+	mux.HandleFunc("/v1/model-roles/config", s.handleModelRolesConfig)
 	mux.HandleFunc("/v1/discord/config", s.handleDiscordConfig)
 	mux.HandleFunc("/v1/telegram/config", s.handleTelegramConfig)
 	mux.HandleFunc("/v1/tools/catalog", s.handleToolsCatalog)
@@ -1542,6 +1543,26 @@ func (s *Server) handleDefaultProvider(w http.ResponseWriter, r *http.Request) {
 			"model":         s.svc.GetDefaultModel(),
 			"thinking_mode": s.svc.GetDefaultThinkingMode(),
 		})
+	default:
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleModelRolesConfig(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		respondJSON(w, http.StatusOK, s.svc.GetModelRolesConfig())
+	case http.MethodPut:
+		var cfg core.ModelRolesConfig
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+		if err := s.svc.SaveModelRolesConfig(cfg); err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		respondJSON(w, http.StatusOK, s.svc.GetModelRolesConfig())
 	default:
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}

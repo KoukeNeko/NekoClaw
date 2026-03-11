@@ -481,6 +481,7 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		svc.SetDefaultProvider(appConfig.DefaultProvider)
 		svc.SetDefaultModel(appConfig.DefaultModel)
 	}
+	svc.SetModelRolesConfig(appConfig.ModelRoles)
 
 	if len(appConfig.Fallbacks) > 0 {
 		svc.SetFallbacks(appConfig.Fallbacks)

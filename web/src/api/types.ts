@@ -581,6 +581,19 @@ export interface SetDefaultProviderRequest {
   thinking_mode?: ThinkingMode;
 }
 
+export interface ModelRoleConfig {
+  provider?: string;
+  model?: string;
+  thinking_mode?: ThinkingMode;
+}
+
+export interface ModelRolesConfig {
+  action: ModelRoleConfig;
+  planner: ModelRoleConfig;
+  compaction: ModelRoleConfig;
+  title: ModelRoleConfig;
+}
+
 // ---------------------------------------------------------------------------
 // Fallbacks
 // ---------------------------------------------------------------------------

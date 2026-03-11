@@ -52,6 +52,7 @@ import type {
   MemorySearchResponse,
   GeneralConfig,
   CompactionConfig,
+  ModelRolesConfig,
   DiscordConfig,
   TelegramConfig,
   SecurityConfig,
@@ -767,6 +768,14 @@ export function getCompactionConfig(): Promise<CompactionConfig> {
 
 export function setCompactionConfig(config: CompactionConfig): Promise<void> {
   return put("/v1/compaction/config", config);
+}
+
+export function getModelRolesConfig(): Promise<ModelRolesConfig> {
+  return get("/v1/model-roles/config");
+}
+
+export function setModelRolesConfig(config: ModelRolesConfig): Promise<void> {
+  return put("/v1/model-roles/config", config);
 }
 
 export function getDiscordConfig(): Promise<DiscordConfig> {

@@ -67,7 +67,8 @@ type Service struct {
 	defaultProvider   string            // current default provider (synced from the Web UI)
 	defaultModel      string            // current default model (synced from the Web UI)
 	defaultThinking   core.ThinkingMode // current default Gemini thinking mode
-	configDir         string            // directory for config.json persistence
+	modelRoles        core.ModelRolesConfig
+	configDir         string // directory for config.json persistence
 	toolRuntime       *tooling.Runtime
 	reminders         *ReminderEngine
 	mcpManager        *mcp.Manager
@@ -755,12 +756,22 @@ func (s *Service) SaveDefaultProviderConfig(
 	s.defaultProvider = providerID
 	s.defaultModel = modelID
 	s.defaultThinking = thinkingMode
+	s.modelRoles.Action = core.NormalizeModelRoleConfig(core.ModelRoleConfig{
+		Provider:     providerID,
+		Model:        modelID,
+		ThinkingMode: thinkingMode,
+	})
 	s.mu.Unlock()
 
 	appCfg, _ := core.LoadConfig(configDir)
 	appCfg.DefaultProvider = providerID
 	appCfg.DefaultModel = modelID
 	appCfg.DefaultThinkingMode = thinkingMode
+	appCfg.ModelRoles.Action = core.NormalizeModelRoleConfig(core.ModelRoleConfig{
+		Provider:     providerID,
+		Model:        modelID,
+		ThinkingMode: thinkingMode,
+	})
 	return core.SaveConfig(configDir, appCfg)
 }
 
@@ -2508,14 +2519,11 @@ func (s *Service) addAnthropicCredential(req commonAnthropicAddRequest) (Anthrop
 }
 
 func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.ChatResponse, error) {
-	providerID := strings.TrimSpace(req.Provider)
-	if providerID == "" {
-		providerID = "mock"
-	}
-	modelID := strings.TrimSpace(req.Model)
-	if modelID == "" {
-		modelID = "default"
-	}
+	providerID, modelID, primaryThinkingMode := s.resolveRequestRuntime(
+		req.ToolMode,
+		strings.TrimSpace(req.Provider),
+		strings.TrimSpace(req.Model),
+	)
 	sessionID := strings.TrimSpace(req.SessionID)
 	disableSession := req.DisableSession
 	if sessionID == "" && disableSession {
@@ -2552,7 +2560,6 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		model        string
 		thinkingMode core.ThinkingMode
 	}
-	primaryThinkingMode := s.GetDefaultThinkingMode()
 	chain := []fallbackCandidate{{
 		provider:     providerID,
 		model:        modelID,
@@ -2670,14 +2677,11 @@ func (s *Service) HandleChatStream(ctx context.Context, req core.ChatRequest) <-
 		}
 
 		// Same normalization as HandleChat.
-		providerID := strings.TrimSpace(req.Provider)
-		if providerID == "" {
-			providerID = "mock"
-		}
-		modelID := strings.TrimSpace(req.Model)
-		if modelID == "" {
-			modelID = "default"
-		}
+		providerID, modelID, primaryThinkingMode := s.resolveRequestRuntime(
+			req.ToolMode,
+			strings.TrimSpace(req.Provider),
+			strings.TrimSpace(req.Model),
+		)
 		sessionID := strings.TrimSpace(req.SessionID)
 		disableSession := req.DisableSession
 		if sessionID == "" && disableSession {
@@ -2713,7 +2717,6 @@ func (s *Service) HandleChatStream(ctx context.Context, req core.ChatRequest) <-
 			model        string
 			thinkingMode core.ThinkingMode
 		}
-		primaryThinkingMode := s.GetDefaultThinkingMode()
 		chain := []fallbackCandidate{{
 			provider:     providerID,
 			model:        modelID,
@@ -4665,7 +4668,7 @@ func (s *Service) generateSessionTitleAsync(
 		return
 	}
 
-	prov, titleModelID, titleAccount, ok := s.resolveTitleGenerationTarget(providerID, modelID, account)
+	prov, titleModelID, titleAccount, titleGeneration, ok := s.resolveTitleGenerationTarget(providerID, modelID, account)
 	if !ok {
 		s.titleGenPending.Delete(sessionID)
 		return
@@ -4687,7 +4690,8 @@ func (s *Service) generateSessionTitleAsync(
 				{Role: core.RoleSystem, Content: titleGenSystemPrompt},
 				{Role: core.RoleUser, Content: prompt},
 			},
-			Account: titleAccount,
+			Account:    titleAccount,
+			Generation: titleGeneration,
 		})
 		if err != nil {
 			logService.Errorf("title gen: session_id=%s error=%q", sessionID, err)
@@ -4711,13 +4715,36 @@ func (s *Service) generateSessionTitleAsync(
 func (s *Service) resolveTitleGenerationTarget(
 	providerID, modelID string,
 	account core.Account,
-) (provider.Provider, string, core.Account, bool) {
-	if strings.TrimSpace(providerID) != "google-gemini-cli" {
-		prov, _, err := s.resolveProviderPool(providerID)
+) (provider.Provider, string, core.Account, *provider.GenerationParams, bool) {
+	resolved := s.ResolveModelRole(core.ModelRoleTitle, core.ModelRoleConfig{
+		Provider: providerID,
+		Model:    modelID,
+	})
+	titleProviderID := strings.TrimSpace(resolved.Provider)
+	titleModelID := strings.TrimSpace(resolved.Model)
+	titleThinkingMode := resolved.ThinkingMode
+
+	if titleProviderID == "" {
+		return nil, "", core.Account{}, nil, false
+	}
+
+	if titleProviderID != "google-gemini-cli" {
+		prov, pool, err := s.resolveProviderPool(titleProviderID)
 		if err != nil {
-			return nil, "", core.Account{}, false
+			return nil, "", core.Account{}, nil, false
 		}
-		return prov, modelID, account, true
+		titleGeneration := workflowThinkingGenerationParams(titleProviderID, titleThinkingMode)
+		if account.Provider == titleProviderID && strings.TrimSpace(account.ID) != "" {
+			return prov, titleModelID, account, titleGeneration, true
+		}
+		if pool == nil {
+			return nil, "", core.Account{}, nil, false
+		}
+		titleAccount, ok := pool.Acquire(s.preferredProfile(titleProviderID))
+		if !ok {
+			return nil, "", core.Account{}, nil, false
+		}
+		return prov, titleModelID, titleAccount, titleGeneration, true
 	}
 
 	for _, fallback := range s.GetFallbacks() {
@@ -4733,22 +4760,30 @@ func (s *Service) resolveTitleGenerationTarget(
 		if !ok {
 			continue
 		}
-		titleModelID := strings.TrimSpace(fallback.Model)
-		if titleModelID == "" {
-			titleModelID = "default"
+		fallbackModelID := strings.TrimSpace(fallback.Model)
+		if fallbackModelID == "" {
+			fallbackModelID = "default"
 		}
-		return prov, titleModelID, titleAccount, true
+		return prov, fallbackModelID, titleAccount, workflowThinkingGenerationParams(fallbackProviderID, titleThinkingMode), true
 	}
 
-	prov, _, err := s.resolveProviderPool(providerID)
+	prov, _, err := s.resolveProviderPool(titleProviderID)
 	if err != nil || prov == nil {
-		return nil, "", core.Account{}, false
+		return nil, "", core.Account{}, nil, false
 	}
-	titleModelID := strings.TrimSpace(modelID)
-	if titleModelID == "" {
-		titleModelID = "default"
+	titleGeneration := workflowThinkingGenerationParams(titleProviderID, titleThinkingMode)
+	if account.Provider == titleProviderID && strings.TrimSpace(account.ID) != "" {
+		return prov, titleModelID, account, titleGeneration, true
 	}
-	return prov, titleModelID, account, true
+	pool := s.Pool(titleProviderID)
+	if pool == nil {
+		return nil, "", core.Account{}, nil, false
+	}
+	titleAccount, ok := pool.Acquire(s.preferredProfile(titleProviderID))
+	if !ok {
+		return nil, "", core.Account{}, nil, false
+	}
+	return prov, titleModelID, titleAccount, titleGeneration, true
 }
 
 func truncateRunes(s string, maxRunes int) string {
@@ -4810,6 +4845,17 @@ func withThinkingMode(
 	}
 	next.ThinkingMode = &mode
 	return next
+}
+
+func workflowThinkingGenerationParams(providerID string, mode core.ThinkingMode) *provider.GenerationParams {
+	mode = core.NormalizeThinkingMode(string(mode))
+	if mode == "" || mode == core.ThinkingModeAuto {
+		return nil
+	}
+	if !providerSupportsThinkingMode(providerID) {
+		return nil
+	}
+	return withThinkingMode(nil, mode)
 }
 
 func normalizeFallbackEntries(entries []core.FallbackEntry) []core.FallbackEntry {
