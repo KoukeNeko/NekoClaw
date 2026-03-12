@@ -404,7 +404,7 @@ func TestBuildGeminiGenerationConfig_WithValues(t *testing.T) {
 	}
 }
 
-func TestBuildGeminiGenerationConfig_OmitsPenaltyForFlashModels(t *testing.T) {
+func TestBuildGeminiGenerationConfig_OmitsPenaltyForGemini3Models(t *testing.T) {
 	temp := 0.7
 	topP := 0.9
 	freq := 0.3
@@ -416,6 +416,8 @@ func TestBuildGeminiGenerationConfig_OmitsPenaltyForFlashModels(t *testing.T) {
 		PresencePenalty:  &pres,
 	}
 	for _, model := range []string{
+		"models/gemini-3.1-pro-preview",
+		"models/gemini-3-pro-preview",
 		"models/gemini-3.1-flash-lite-preview",
 		"models/gemini-3-flash-preview",
 	} {

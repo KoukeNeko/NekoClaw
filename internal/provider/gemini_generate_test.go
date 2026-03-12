@@ -95,68 +95,77 @@ func TestGenerateUsesStreamGenerateContentAndParsesSSE(t *testing.T) {
 	}
 }
 
-func TestGenerateOmitsPenaltyForFlashLiteModels(t *testing.T) {
+func TestGenerateOmitsPenaltyForGemini3Models(t *testing.T) {
 	temp := 0.7
 	topP := 0.9
 	freq := 0.3
 	pres := 0.2
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		var payload map[string]any
-		if err := json.Unmarshal(body, &payload); err != nil {
-			t.Fatalf("decode request body: %v", err)
-		}
+	for _, model := range []string{
+		"gemini-3.1-pro-preview",
+		"gemini-3-pro-preview",
+		"gemini-3.1-flash-lite-preview",
+		"gemini-3-flash-preview",
+	} {
+		t.Run(model, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				var payload map[string]any
+				if err := json.Unmarshal(body, &payload); err != nil {
+					t.Fatalf("decode request body: %v", err)
+				}
 
-		requestRoot, _ := payload["request"].(map[string]any)
-		genConfig, _ := requestRoot["generationConfig"].(map[string]any)
-		if genConfig == nil {
-			t.Fatalf("expected generationConfig in request payload")
-		}
-		if genConfig["temperature"] != 0.7 {
-			t.Fatalf("expected temperature to be preserved, got %v", genConfig["temperature"])
-		}
-		if genConfig["topP"] != 0.9 {
-			t.Fatalf("expected topP to be preserved, got %v", genConfig["topP"])
-		}
-		if _, ok := genConfig["frequencyPenalty"]; ok {
-			t.Fatalf("expected frequencyPenalty to be omitted, got %v", genConfig["frequencyPenalty"])
-		}
-		if _, ok := genConfig["presencePenalty"]; ok {
-			t.Fatalf("expected presencePenalty to be omitted, got %v", genConfig["presencePenalty"])
-		}
+				requestRoot, _ := payload["request"].(map[string]any)
+				genConfig, _ := requestRoot["generationConfig"].(map[string]any)
+				if genConfig == nil {
+					t.Fatalf("expected generationConfig in request payload")
+				}
+				if genConfig["temperature"] != 0.7 {
+					t.Fatalf("expected temperature to be preserved, got %v", genConfig["temperature"])
+				}
+				if genConfig["topP"] != 0.9 {
+					t.Fatalf("expected topP to be preserved, got %v", genConfig["topP"])
+				}
+				if _, ok := genConfig["frequencyPenalty"]; ok {
+					t.Fatalf("expected frequencyPenalty to be omitted, got %v", genConfig["frequencyPenalty"])
+				}
+				if _, ok := genConfig["presencePenalty"]; ok {
+					t.Fatalf("expected presencePenalty to be omitted, got %v", genConfig["presencePenalty"])
+				}
 
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]}}]}}\n\n"))
-	}))
-	defer srv.Close()
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]}}]}}\n\n"))
+			}))
+			defer srv.Close()
 
-	p := NewGeminiInternalProvider(GeminiInternalOptions{
-		Endpoints: []string{srv.URL},
-	})
-	resp, err := p.Generate(context.Background(), GenerateRequest{
-		Model: "gemini-3.1-flash-lite-preview",
-		Messages: []core.Message{
-			{Role: core.RoleUser, Content: "hi"},
-		},
-		Generation: &GenerationParams{
-			Temperature:      &temp,
-			TopP:             &topP,
-			FrequencyPenalty: &freq,
-			PresencePenalty:  &pres,
-		},
-		Account: core.Account{
-			ID:       "a1",
-			Provider: "google-gemini-cli",
-			Type:     core.AccountOAuth,
-			Token:    "token-1",
-		},
-	})
-	if err != nil {
-		t.Fatalf("generate failed: %v", err)
-	}
-	if resp.Text != "ok" {
-		t.Fatalf("unexpected response text: %q", resp.Text)
+			p := NewGeminiInternalProvider(GeminiInternalOptions{
+				Endpoints: []string{srv.URL},
+			})
+			resp, err := p.Generate(context.Background(), GenerateRequest{
+				Model: model,
+				Messages: []core.Message{
+					{Role: core.RoleUser, Content: "hi"},
+				},
+				Generation: &GenerationParams{
+					Temperature:      &temp,
+					TopP:             &topP,
+					FrequencyPenalty: &freq,
+					PresencePenalty:  &pres,
+				},
+				Account: core.Account{
+					ID:       "a1",
+					Provider: "google-gemini-cli",
+					Type:     core.AccountOAuth,
+					Token:    "token-1",
+				},
+			})
+			if err != nil {
+				t.Fatalf("generate failed: %v", err)
+			}
+			if resp.Text != "ok" {
+				t.Fatalf("unexpected response text: %q", resp.Text)
+			}
+		})
 	}
 }
 

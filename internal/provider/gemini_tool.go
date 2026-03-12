@@ -446,8 +446,11 @@ func geminiModelSupportsPenalty(model string) bool {
 	if normalized == "" {
 		return true
 	}
-	// Gemini Flash-family models reject presence/frequency penalty fields
+	// Gemini 3-family models reject presence/frequency penalty fields
 	// outright with "Penalty is not enabled for this model".
+	if strings.HasPrefix(normalized, "gemini-3.1-") || strings.HasPrefix(normalized, "gemini-3-") {
+		return false
+	}
 	return !strings.Contains(normalized, "flash")
 }
 

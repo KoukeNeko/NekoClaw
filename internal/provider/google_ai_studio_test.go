@@ -86,13 +86,15 @@ func TestGoogleAIStudioGenerateParsesText(t *testing.T) {
 	}
 }
 
-func TestGoogleAIStudioGenerateOmitsPenaltyForFlashModels(t *testing.T) {
+func TestGoogleAIStudioGenerateOmitsPenaltyForGemini3Models(t *testing.T) {
 	temp := 0.7
 	topP := 0.9
 	freq := 0.3
 	pres := 0.2
 
 	for _, model := range []string{
+		"gemini-3.1-pro-preview",
+		"gemini-3-pro-preview",
 		"gemini-3.1-flash-lite-preview",
 		"gemini-3-flash-preview",
 	} {
