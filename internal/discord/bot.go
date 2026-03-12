@@ -57,8 +57,10 @@ const (
 const (
 	discordPlanApprovePrefix = "plan:approve:"
 	discordPlanRejectPrefix  = "plan:reject:"
-	discordToolAllowPrefix   = "tool:allow:"
-	discordToolDenyPrefix    = "tool:deny:"
+	discordToolAllowOncePrefix      = "tool:allow-once:"
+	discordToolAllowSessionPrefix   = "tool:allow-session:"
+	discordToolAllowWorkspacePrefix = "tool:allow-workspace:"
+	discordToolDenyPrefix           = "tool:deny:"
 )
 
 // messageJob represents a queued message to be processed.
@@ -807,10 +809,19 @@ func (b *Bot) handlePlannerComponentInteraction(s *discordgo.Session, ic *discor
 			},
 		})
 		return true
-	case strings.HasPrefix(customID, discordToolAllowPrefix), strings.HasPrefix(customID, discordToolDenyPrefix):
-		decision := "allow"
-		prefix := discordToolAllowPrefix
-		if strings.HasPrefix(customID, discordToolDenyPrefix) {
+	case strings.HasPrefix(customID, discordToolAllowOncePrefix),
+		strings.HasPrefix(customID, discordToolAllowSessionPrefix),
+		strings.HasPrefix(customID, discordToolAllowWorkspacePrefix),
+		strings.HasPrefix(customID, discordToolDenyPrefix):
+		decision := "allow_once"
+		prefix := discordToolAllowOncePrefix
+		if strings.HasPrefix(customID, discordToolAllowSessionPrefix) {
+			decision = "allow_for_session"
+			prefix = discordToolAllowSessionPrefix
+		} else if strings.HasPrefix(customID, discordToolAllowWorkspacePrefix) {
+			decision = "allow_for_workspace"
+			prefix = discordToolAllowWorkspacePrefix
+		} else if strings.HasPrefix(customID, discordToolDenyPrefix) {
 			decision = "deny"
 			prefix = discordToolDenyPrefix
 		}
@@ -823,7 +834,12 @@ func (b *Bot) handlePlannerComponentInteraction(s *discordgo.Session, ic *discor
 		if err := s.InteractionRespond(ic.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseUpdateMessage,
 			Data: &discordgo.InteractionResponseData{
-				Content: fmt.Sprintf("已%s工具請求 `%s`。", map[string]string{"allow": "核准", "deny": "拒絕"}[decision], approvalID),
+				Content: fmt.Sprintf("已%s工具請求 `%s`。", map[string]string{
+					"allow_once":          "單次核准",
+					"allow_for_session":   "核准本 session",
+					"allow_for_workspace": "核准工作區",
+					"deny":                "拒絕",
+				}[decision], approvalID),
 			},
 		}); err != nil {
 			logDiscord.Errorf("tool approval respond: %v", err)
@@ -882,13 +898,23 @@ func buildDiscordToolApprovalComponents(runID string, approvals []core.PendingTo
 		rows = append(rows, discordgo.ActionsRow{
 			Components: []discordgo.MessageComponent{
 				discordgo.Button{
-					CustomID: discordToolAllowPrefix + runID + ":" + approval.ApprovalID,
-					Label:    "Allow " + label,
+					CustomID: discordToolAllowOncePrefix + runID + ":" + approval.ApprovalID,
+					Label:    "Once " + label,
 					Style:    discordgo.SuccessButton,
 				},
 				discordgo.Button{
+					CustomID: discordToolAllowSessionPrefix + runID + ":" + approval.ApprovalID,
+					Label:    "Session",
+					Style:    discordgo.PrimaryButton,
+				},
+				discordgo.Button{
+					CustomID: discordToolAllowWorkspacePrefix + runID + ":" + approval.ApprovalID,
+					Label:    "Workspace",
+					Style:    discordgo.SecondaryButton,
+				},
+				discordgo.Button{
 					CustomID: discordToolDenyPrefix + runID + ":" + approval.ApprovalID,
-					Label:    "Deny " + label,
+					Label:    "Deny",
 					Style:    discordgo.DangerButton,
 				},
 			},

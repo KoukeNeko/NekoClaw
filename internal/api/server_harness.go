@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/doeshing/nekoclaw/internal/core"
 )
@@ -259,19 +258,16 @@ func (s *Server) handleSnapshotRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimSpace(parts[0])
-	snapshots := s.svc.ListSnapshots("")
-	for _, record := range snapshots {
-		if record.ID != id {
-			continue
-		}
-		now := time.Now().UTC()
-		record.RestoredAt = &now
-		if s.svc.TaskList(record.SessionID).SessionID != "" && s.svc != nil && s.svc.ListSnapshots(record.SessionID) != nil {
-			respondJSON(w, http.StatusAccepted, map[string]any{"snapshot": record, "restored": false, "message": "snapshot metadata updated; filesystem undo is not yet wired"})
-			return
-		}
+	record, restored, message, err := s.svc.UndoSnapshot(id)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
 	}
-	respondError(w, http.StatusNotFound, "snapshot not found")
+	respondJSON(w, http.StatusOK, map[string]any{
+		"snapshot": record,
+		"restored": restored,
+		"message":  message,
+	})
 }
 
 func (s *Server) handleTraces(w http.ResponseWriter, r *http.Request) {

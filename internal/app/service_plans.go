@@ -170,8 +170,19 @@ func (s *Service) RunApprovedPlan(ctx context.Context, planID string) (<-chan co
 
 		for chunk := range src {
 			if chunk.Type == core.ChunkDone && chunk.Response != nil {
-				if _, updateErr := s.updatePlanExecutionResult(planID, *chunk.Response); updateErr != nil {
+				record, resp, criticNote, updateErr := s.finalizePlanExecutionResponse(planID, *chunk.Response)
+				if updateErr != nil {
 					logService.Errorf("plan update after execution: plan_id=%s error=%v", planID, updateErr)
+				} else {
+					_ = record
+					chunk.Response = &resp
+					if strings.TrimSpace(criticNote) != "" {
+						select {
+						case out <- core.StreamChunk{Type: core.ChunkText, Content: criticNote}:
+						case <-ctx.Done():
+							return
+						}
+					}
 				}
 			}
 			if chunk.Type == core.ChunkError {
@@ -208,8 +219,19 @@ func (s *Service) ContinuePendingToolRunStream(ctx context.Context, runID string
 		defer close(out)
 		for chunk := range src {
 			if chunk.Type == core.ChunkDone && chunk.Response != nil {
-				if _, err := s.FinalizePendingPlanRun(runID, *chunk.Response); err != nil && !errors.Is(err, ErrPlanNotFound) {
+				record, resp, criticNote, err := s.finalizePendingPlanRunResponse(runID, *chunk.Response)
+				if err != nil && !errors.Is(err, ErrPlanNotFound) {
 					logService.Errorf("finalize pending plan run: run_id=%s error=%v", runID, err)
+				} else {
+					_ = record
+					chunk.Response = &resp
+					if strings.TrimSpace(criticNote) != "" {
+						select {
+						case out <- core.StreamChunk{Type: core.ChunkText, Content: criticNote}:
+						case <-ctx.Done():
+							return
+						}
+					}
 				}
 			}
 			if chunk.Type == core.ChunkError {
@@ -368,11 +390,16 @@ func finalizePlanExecution(record core.PlanRecord, resp core.ChatResponse) core.
 }
 
 func (s *Service) FinalizePendingPlanRun(runID string, resp core.ChatResponse) (core.PlanRecord, error) {
+	record, _, _, err := s.finalizePendingPlanRunResponse(runID, resp)
+	return record, err
+}
+
+func (s *Service) finalizePendingPlanRunResponse(runID string, resp core.ChatResponse) (core.PlanRecord, core.ChatResponse, string, error) {
 	planID, ok := s.planIDForRun(runID)
 	if !ok {
-		return core.PlanRecord{}, ErrPlanNotFound
+		return core.PlanRecord{}, resp, "", ErrPlanNotFound
 	}
-	return s.updatePlanExecutionResult(planID, resp)
+	return s.finalizePlanExecutionResponse(planID, resp)
 }
 
 func (s *Service) FailPendingPlanRun(runID string, reason string) (core.PlanRecord, error) {
@@ -384,9 +411,14 @@ func (s *Service) FailPendingPlanRun(runID string, reason string) (core.PlanReco
 }
 
 func (s *Service) updatePlanExecutionResult(planID string, resp core.ChatResponse) (core.PlanRecord, error) {
+	record, _, _, err := s.finalizePlanExecutionResponse(planID, resp)
+	return record, err
+}
+
+func (s *Service) finalizePlanExecutionResponse(planID string, resp core.ChatResponse) (core.PlanRecord, core.ChatResponse, string, error) {
 	record, err := s.GetPlan(planID)
 	if err != nil {
-		return core.PlanRecord{}, err
+		return core.PlanRecord{}, resp, "", err
 	}
 	if resp.Status == core.ChatStatusApprovalRequired && strings.TrimSpace(resp.RunID) != "" {
 		record.Status = core.PlanStatusExecuting
@@ -394,28 +426,66 @@ func (s *Service) updatePlanExecutionResult(planID string, resp core.ChatRespons
 		record.LastError = ""
 		s.bindPlanRun(resp.RunID, planID)
 		if err := s.plans.Update(record); err != nil {
-			return core.PlanRecord{}, err
+			return core.PlanRecord{}, resp, "", err
 		}
-		return record, nil
+		return record, resp, "", nil
 	}
 	record = finalizePlanExecution(record, resp)
+	var criticNote string
+	if record.Status == core.PlanStatusCompleted {
+		artifact, criticErr := s.runPlanCritic(record, resp)
+		if criticErr != nil {
+			logService.Warnf("plan critic: plan_id=%s error=%v", planID, criticErr)
+			s.recordTrace(core.TraceRecord{
+				SessionID: record.SessionID,
+				RunID:     planID,
+				RunKind:   "plan_critic_error",
+				Prompt:    record.RequestPrompt,
+				Reply:     criticErr.Error(),
+			})
+		} else {
+			criticNote = formatCriticNote(artifact)
+			resp.SubagentArtifacts = append(resp.SubagentArtifacts, artifact)
+			s.attachSubagentArtifactsToLastAssistant(record.SessionID, []core.SubagentArtifact{artifact})
+		}
+	}
 	s.unbindPlanRunByPlan(planID)
 	if err := s.plans.Update(record); err != nil {
-		return core.PlanRecord{}, err
+		return core.PlanRecord{}, resp, criticNote, err
 	}
 	s.recordTrace(core.TraceRecord{
-		SessionID:  record.SessionID,
-		RunID:      planID,
-		RunKind:    "plan_execution",
-		Provider:   resp.Provider,
-		Model:      resp.Model,
-		Prompt:     record.RequestPrompt,
-		Reply:      resp.Reply,
-		ToolEvents: append([]core.ToolEvent(nil), resp.ToolEvents...),
-		Reminders:  append([]core.ReminderEvent(nil), resp.Reminders...),
+		SessionID:         record.SessionID,
+		RunID:             planID,
+		RunKind:           "plan_execution",
+		Provider:          resp.Provider,
+		Model:             resp.Model,
+		Prompt:            record.RequestPrompt,
+		Reply:             resp.Reply,
+		ToolEvents:        append([]core.ToolEvent(nil), resp.ToolEvents...),
+		Reminders:         append([]core.ReminderEvent(nil), resp.Reminders...),
+		SubagentArtifacts: append([]core.SubagentArtifact(nil), resp.SubagentArtifacts...),
 	})
 	s.maybeCreatePlaybookCandidate("plan:"+planID, record.PlanMarkdown, core.PlaybookScopeWorkspace, workspaceScopeValue(s.workspaceRoot))
-	return record, nil
+	return record, resp, criticNote, nil
+}
+
+func (s *Service) runPlanCritic(record core.PlanRecord, resp core.ChatResponse) (core.SubagentArtifact, error) {
+	return s.SpawnSubagent(
+		context.Background(),
+		record.SessionID,
+		record.Surface,
+		"critic",
+		fmt.Sprintf("Review the completed approved plan `%s` for regressions, missing verification, or unsafe assumptions.", chooseFirstNonEmpty(record.PlanSummary, record.RequestPrompt)),
+		resp.Reply,
+	)
+}
+
+func formatCriticNote(artifact core.SubagentArtifact) string {
+	markdown := strings.TrimSpace(artifact.Markdown)
+	if markdown == "" {
+		return ""
+	}
+	return "\n\n" + markdown
 }
 
 func (s *Service) failPlanExecution(planID string, reason string) (core.PlanRecord, error) {

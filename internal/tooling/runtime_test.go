@@ -3,6 +3,8 @@ package tooling
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/doeshing/nekoclaw/internal/core"
@@ -275,5 +277,75 @@ func TestRuntimeMutatingToolRequiresApprovalOnDiscord(t *testing.T) {
 	}
 	if !result.Pending || result.Response.Status != core.ChatStatusApprovalRequired {
 		t.Fatalf("expected discord approval_required, got pending=%v status=%s", result.Pending, result.Response.Status)
+	}
+}
+
+func TestRuntimeLookupGrantAutoApprovesMutatingTool(t *testing.T) {
+	executor := &fakeExecutor{mutating: map[string]bool{
+		"file_write": true,
+	}}
+	rt := NewRuntime(executor, NewApprovalStore(0))
+	fakeProv := &fakeToolProvider{
+		id:      "anthropic",
+		support: true,
+		turns: []provider.ToolTurnResponse{
+			{
+				ToolCalls: []provider.ToolCall{
+					{ID: "call-1", Name: "file_write", Arguments: json.RawMessage(`{"path":"a.txt","content":"x"}`)},
+				},
+			},
+			{Text: "auto-approved"},
+		},
+	}
+
+	result, err := rt.Run(context.Background(), RunRequest{
+		SessionID:    "s-grant",
+		Surface:      core.SurfaceWeb,
+		ProviderID:   "anthropic",
+		ModelID:      "default",
+		Account:      core.Account{ID: "a1"},
+		ToolProvider: fakeProv,
+		Messages:     []core.Message{{Role: core.RoleUser, Content: "write"}},
+		UserMessage:  core.Message{Role: core.RoleUser, Content: "write"},
+		EnableTools:  true,
+		SelectorForCall: func(call provider.ToolCall) string {
+			return "/tmp/a.txt"
+		},
+		LookupGrant: func(sessionID, toolName, selector string) (string, bool) {
+			return "allow_for_session", true
+		},
+	})
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if result.Pending {
+		t.Fatalf("expected auto-approved run, got pending")
+	}
+	if result.Response.Reply != "auto-approved" {
+		t.Fatalf("unexpected reply: %q", result.Response.Reply)
+	}
+}
+
+func TestValidateStaleReadDetectsExternalChange(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(path, []byte("before"), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	hash, err := hashFileState(path)
+	if err != nil {
+		t.Fatalf("hashFileState(before): %v", err)
+	}
+	if err := os.WriteFile(path, []byte("after"), 0o644); err != nil {
+		t.Fatalf("modify file: %v", err)
+	}
+	err = validateStaleRead(
+		provider.ToolCall{Name: "file_write"},
+		path,
+		map[string]string{path: hash},
+		map[string]struct{}{},
+	)
+	if err == nil {
+		t.Fatalf("expected stale-read error")
 	}
 }

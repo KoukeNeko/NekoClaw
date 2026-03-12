@@ -1,4 +1,8 @@
+import { useEffect, useState } from "react";
+import { listSnapshots, undoSnapshot } from "@/api/client";
+import type { SnapshotRecord } from "@/api/types";
 import { useAppStore } from "@/store/appStore";
+import { openSessionConversation } from "@/utils/sessionNavigation";
 import { formatTokens, formatCost } from "@/utils/format";
 
 /**
@@ -8,15 +12,46 @@ import { formatTokens, formatCost } from "@/utils/format";
 export function ChatHeader() {
   const provider = useAppStore((s) => s.provider);
   const model = useAppStore((s) => s.model);
+  const sessionID = useAppStore((s) => s.sessionID);
   const activePersona = useAppStore((s) => s.activePersona);
   const totalUsage = useAppStore((s) => s.totalUsage);
   const totalCost = useAppStore((s) => s.totalCost);
   const contextPercent = useAppStore((s) => s.contextPercent);
   const messages = useAppStore((s) => s.messages);
+  const [latestSnapshot, setLatestSnapshot] = useState<SnapshotRecord | null>(null);
+  const [undoBusy, setUndoBusy] = useState(false);
 
   const messageCount = messages.filter(
     (m) => m.role === "user" || m.role === "assistant",
   ).length;
+
+  useEffect(() => {
+    let cancelled = false;
+    listSnapshots(sessionID)
+      .then((snapshots) => {
+        if (cancelled) return;
+        setLatestSnapshot(snapshots.find((item) => !item.restored_at) ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLatestSnapshot(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionID, messages.length]);
+
+  async function handleUndo() {
+    if (!latestSnapshot || undoBusy) return;
+    setUndoBusy(true);
+    try {
+      await undoSnapshot(latestSnapshot.id);
+      await openSessionConversation(sessionID);
+    } finally {
+      setUndoBusy(false);
+    }
+  }
 
   return (
     <header className="navbar bg-base-200/50 backdrop-blur-sm border-b border-base-300 min-h-12 px-3 relative z-10">
@@ -51,8 +86,18 @@ export function ChatHeader() {
         </span>
       </div>
 
-      {/* Inspector dropdown */}
-      <div className="flex-none">
+      {/* Undo + inspector */}
+      <div className="flex-none flex items-center gap-1">
+        {latestSnapshot && (
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={handleUndo}
+            disabled={undoBusy}
+            title={`Undo snapshot ${latestSnapshot.id}`}
+          >
+            {undoBusy ? "還原中…" : "Undo"}
+          </button>
+        )}
         <div className="dropdown dropdown-end">
           <div
             tabIndex={0}

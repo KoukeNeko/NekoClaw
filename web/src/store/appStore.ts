@@ -8,6 +8,7 @@ import type {
   PlanRecord,
   ReminderEvent,
   SecurityStatus,
+  SubagentArtifact,
 } from "@/api/types";
 import {
   detectBrowserTimeZone,
@@ -30,6 +31,7 @@ export interface ChatMessage {
   elapsed?: number; // ms
   toolEvents?: ToolEvent[];
   reminders?: ReminderEvent[];
+  subagentArtifacts?: SubagentArtifact[];
   createdAt: string;
 }
 

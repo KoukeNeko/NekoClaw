@@ -63,7 +63,7 @@ type Metadata map[string]string
 
 type ToolApprovalDecision struct {
 	ApprovalID string `json:"approval_id"`
-	Decision   string `json:"decision"` // allow | deny
+	Decision   string `json:"decision"` // allow_once | allow_for_session | allow_for_workspace | deny
 }
 
 type ToolMode string
@@ -171,20 +171,21 @@ type ChatRequest struct {
 }
 
 type ChatResponse struct {
-	SessionID        string                `json:"session_id"`
-	Provider         string                `json:"provider"`
-	Model            string                `json:"model"`
-	Reply            string                `json:"reply"`
-	Compressed       bool                  `json:"compressed"`
-	Compression      CompressionMeta       `json:"compression"`
-	AccountID        string                `json:"account_id,omitempty"`
-	Usage            UsageInfo             `json:"usage"`
-	ElapsedMs        int64                 `json:"elapsed_ms,omitempty"`
-	Status           ChatStatus            `json:"status,omitempty"`
-	RunID            string                `json:"run_id,omitempty"`
-	PendingApprovals []PendingToolApproval `json:"pending_approvals,omitempty"`
-	ToolEvents       []ToolEvent           `json:"tool_events,omitempty"`
-	Reminders        []ReminderEvent       `json:"reminders,omitempty"`
+	SessionID         string                `json:"session_id"`
+	Provider          string                `json:"provider"`
+	Model             string                `json:"model"`
+	Reply             string                `json:"reply"`
+	Compressed        bool                  `json:"compressed"`
+	Compression       CompressionMeta       `json:"compression"`
+	AccountID         string                `json:"account_id,omitempty"`
+	Usage             UsageInfo             `json:"usage"`
+	ElapsedMs         int64                 `json:"elapsed_ms,omitempty"`
+	Status            ChatStatus            `json:"status,omitempty"`
+	RunID             string                `json:"run_id,omitempty"`
+	PendingApprovals  []PendingToolApproval `json:"pending_approvals,omitempty"`
+	ToolEvents        []ToolEvent           `json:"tool_events,omitempty"`
+	Reminders         []ReminderEvent       `json:"reminders,omitempty"`
+	SubagentArtifacts []SubagentArtifact    `json:"subagent_artifacts,omitempty"`
 }
 
 // UsageInfo holds token usage from a single API call.
@@ -301,12 +302,13 @@ type SessionEntry struct {
 	ToolCallID string      `json:"tool_call_id,omitempty"`
 
 	// type=message (assistant response metadata — populated for role=assistant)
-	MsgProvider   string          `json:"msg_provider,omitempty"`
-	MsgModel      string          `json:"msg_model,omitempty"`
-	MsgUsage      *UsageInfo      `json:"msg_usage,omitempty"`
-	MsgToolEvents []ToolEvent     `json:"msg_tool_events,omitempty"`
-	MsgElapsedMs  int64           `json:"msg_elapsed_ms,omitempty"`
-	MsgReminders  []ReminderEvent `json:"msg_reminders,omitempty"`
+	MsgProvider          string             `json:"msg_provider,omitempty"`
+	MsgModel             string             `json:"msg_model,omitempty"`
+	MsgUsage             *UsageInfo         `json:"msg_usage,omitempty"`
+	MsgToolEvents        []ToolEvent        `json:"msg_tool_events,omitempty"`
+	MsgElapsedMs         int64              `json:"msg_elapsed_ms,omitempty"`
+	MsgReminders         []ReminderEvent    `json:"msg_reminders,omitempty"`
+	MsgSubagentArtifacts []SubagentArtifact `json:"msg_subagent_artifacts,omitempty"`
 
 	// type=compaction
 	Summary          string `json:"summary,omitempty"`
@@ -408,12 +410,13 @@ func MessageToEntry(msg Message) SessionEntry {
 
 // AssistantResponseMeta holds per-message metadata for assistant responses.
 type AssistantResponseMeta struct {
-	Provider   string
-	Model      string
-	Usage      UsageInfo
-	ToolEvents []ToolEvent
-	ElapsedMs  int64
-	Reminders  []ReminderEvent
+	Provider          string
+	Model             string
+	Usage             UsageInfo
+	ToolEvents        []ToolEvent
+	ElapsedMs         int64
+	Reminders         []ReminderEvent
+	SubagentArtifacts []SubagentArtifact
 }
 
 // NewAssistantEntryWithMeta creates an assistant message entry with response metadata.
@@ -428,6 +431,9 @@ func NewAssistantEntryWithMeta(content string, meta AssistantResponseMeta) Sessi
 	e.MsgElapsedMs = meta.ElapsedMs
 	if len(meta.Reminders) > 0 {
 		e.MsgReminders = append([]ReminderEvent(nil), meta.Reminders...)
+	}
+	if len(meta.SubagentArtifacts) > 0 {
+		e.MsgSubagentArtifacts = append([]SubagentArtifact(nil), meta.SubagentArtifacts...)
 	}
 	return e
 }

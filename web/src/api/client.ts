@@ -848,6 +848,10 @@ export async function listSnapshots(sessionID: string): Promise<SnapshotRecord[]
   return resp.snapshots ?? [];
 }
 
+export function undoSnapshot(id: string): Promise<{ snapshot: SnapshotRecord; restored: boolean; message: string }> {
+  return post(`/v1/snapshots/${encodeURIComponent(id)}/undo`);
+}
+
 export async function listTraces(sessionID: string): Promise<TraceRecord[]> {
   const resp = await get<{ traces: TraceRecord[] }>(
     `/v1/traces?session_id=${encodeURIComponent(sessionID)}`,

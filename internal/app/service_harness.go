@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/doeshing/nekoclaw/internal/core"
+	"github.com/doeshing/nekoclaw/internal/provider"
+	"github.com/doeshing/nekoclaw/internal/tooling"
 )
 
 func (s *Service) GetPlaybookConfig() core.PlaybookConfig {
@@ -218,6 +220,9 @@ func (s *Service) SaveWorkflow(record core.WorkflowRecord) (core.WorkflowRecord,
 	if s.workflows == nil {
 		return core.WorkflowRecord{}, fmt.Errorf("workflow store unavailable")
 	}
+	if err := validateWorkflowRecord(record); err != nil {
+		return core.WorkflowRecord{}, err
+	}
 	return s.workflows.Put(record)
 }
 
@@ -387,6 +392,9 @@ func (s *Service) RunWorkflow(ctx context.Context, workflowID string, payload js
 	if !record.Enabled {
 		return core.WorkflowRun{}, fmt.Errorf("workflow disabled")
 	}
+	if err := validateWorkflowRecord(record); err != nil {
+		return core.WorkflowRun{}, err
+	}
 
 	run, err := s.workflowRuns.Put(core.WorkflowRun{
 		WorkflowID:     record.ID,
@@ -422,9 +430,21 @@ func (s *Service) RunWorkflow(ctx context.Context, workflowID string, payload js
 			if chatErr != nil {
 				return s.failWorkflowRun(run, chatErr)
 			}
+			if resp.Status == core.ChatStatusApprovalRequired {
+				return s.failWorkflowRun(run, fmt.Errorf("workflow tool step requires prior approval"))
+			}
 			run.StepOutputs[step.ID] = resp.Reply
 			ctxData[step.ID] = map[string]any{"reply": resp.Reply}
 			s.maybeCreatePlaybookCandidate("workflow:"+record.ID, resp.Reply, core.PlaybookScopeWorkspace, s.workspaceRoot)
+			if step.Review {
+				artifact, criticErr := s.runWorkflowCritic(ctx, record, step, resp.Reply)
+				if criticErr != nil {
+					logService.Warnf("workflow critic: workflow_id=%s step_id=%s error=%v", record.ID, step.ID, criticErr)
+				} else {
+					run.StepOutputs[step.ID+":critic"] = artifact.Markdown
+					ctxData[step.ID+"_critic"] = map[string]any{"markdown": artifact.Markdown}
+				}
+			}
 		case core.WorkflowStepSubagentRun:
 			goal, renderErr := s.renderWorkflowTemplate(step.Template, ctxData)
 			if renderErr != nil {
@@ -436,6 +456,25 @@ func (s *Service) RunWorkflow(ctx context.Context, workflowID string, payload js
 			}
 			run.StepOutputs[step.ID] = artifact.Markdown
 			ctxData[step.ID] = map[string]any{"markdown": artifact.Markdown}
+			if step.Review {
+				reviewArtifact, criticErr := s.runWorkflowCritic(ctx, record, step, artifact.Markdown)
+				if criticErr != nil {
+					logService.Warnf("workflow critic: workflow_id=%s step_id=%s error=%v", record.ID, step.ID, criticErr)
+				} else {
+					run.StepOutputs[step.ID+":critic"] = reviewArtifact.Markdown
+					ctxData[step.ID+"_critic"] = map[string]any{"markdown": reviewArtifact.Markdown}
+				}
+			}
+		case core.WorkflowStepToolCall:
+			output, toolErr := s.runWorkflowToolStep(ctx, record, step)
+			if toolErr != nil {
+				run.StepOutputs[step.ID] = output
+				return s.failWorkflowRun(run, toolErr)
+			}
+			run.StepOutputs[step.ID] = output
+			ctxData[step.ID] = map[string]any{"output": output}
+		case core.WorkflowStepApprovalGate:
+			return s.failWorkflowRun(run, fmt.Errorf("unsupported_step_kind: %s", step.Kind))
 		case core.WorkflowStepEmitMessage:
 			msg, renderErr := s.renderWorkflowTemplate(step.Template, ctxData)
 			if renderErr != nil {
@@ -455,7 +494,7 @@ func (s *Service) RunWorkflow(ctx context.Context, workflowID string, payload js
 			run.StepOutputs[step.ID] = msg
 			ctxData[step.ID] = map[string]any{"message": msg}
 		default:
-			run.StepOutputs[step.ID] = ""
+			return s.failWorkflowRun(run, fmt.Errorf("unsupported_step_kind: %s", step.Kind))
 		}
 	}
 
@@ -482,6 +521,141 @@ func (s *Service) failWorkflowRun(run core.WorkflowRun, err error) (core.Workflo
 		_, _ = s.workflowRuns.Put(run)
 	}
 	return run, err
+}
+
+func validateWorkflowRecord(record core.WorkflowRecord) error {
+	for _, step := range record.Steps {
+		switch step.Kind {
+		case core.WorkflowStepApprovalGate:
+			return fmt.Errorf("unsupported_step_kind: %s", step.Kind)
+		case core.WorkflowStepToolCall:
+			if strings.TrimSpace(step.ToolName) == "" {
+				return fmt.Errorf("tool_call step requires tool_name")
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Service) runWorkflowCritic(
+	ctx context.Context,
+	record core.WorkflowRecord,
+	step core.WorkflowStep,
+	content string,
+) (core.SubagentArtifact, error) {
+	artifact, err := s.SpawnSubagent(
+		ctx,
+		record.SessionID,
+		record.Surface,
+		"critic",
+		fmt.Sprintf("Review the completed workflow step `%s` for regressions, missing verification, or unsafe assumptions.", chooseFirstNonEmpty(step.Name, step.ID)),
+		content,
+	)
+	if err != nil {
+		return core.SubagentArtifact{}, err
+	}
+	if record.SessionID != "" {
+		s.attachSubagentArtifactsToLastAssistant(record.SessionID, []core.SubagentArtifact{artifact})
+	}
+	return artifact, nil
+}
+
+func (s *Service) runWorkflowToolStep(ctx context.Context, record core.WorkflowRecord, step core.WorkflowStep) (string, error) {
+	fakeProv := &workflowToolProvider{
+		call: provider.ToolCall{
+			ID:        "workflow-" + step.ID,
+			Name:      strings.TrimSpace(step.ToolName),
+			Arguments: json.RawMessage(step.ToolArgs),
+		},
+	}
+	result, err := s.toolRuntime.Run(ctx, tooling.RunRequest{
+		SessionID:    record.SessionID,
+		Surface:      normalizeSurface(record.Surface),
+		ProviderID:   "workflow",
+		ModelID:      "direct-tool",
+		Account:      core.Account{ID: "workflow"},
+		ToolProvider: fakeProv,
+		EnableTools:  true,
+		AllowedTools: []string{strings.TrimSpace(step.ToolName)},
+		SelectorForCall: func(call provider.ToolCall) string {
+			return s.toolCallSelector(call)
+		},
+		LookupGrant: func(sessionID, toolName, selector string) (string, bool) {
+			return s.lookupToolGrant(sessionID, toolName, selector)
+		},
+		PersistGrant: func(sessionID, toolName, selector, decision string) error {
+			return s.persistToolGrant(sessionID, toolName, selector, decision)
+		},
+		PrepareMutation: func(sessionID string, call provider.ToolCall, snapshotID string) (*core.SnapshotRecord, error) {
+			return s.prepareToolMutation(sessionID, call, snapshotID)
+		},
+		OnSnapshotCreated: func(record core.SnapshotRecord) {
+			s.emitWorkflowEvent(ctx, "snapshot_created", map[string]any{
+				"session_id":  record.SessionID,
+				"snapshot_id": record.ID,
+				"tool_name":   record.ToolName,
+			})
+		},
+	})
+	output := extractWorkflowToolOutput(result.SessionMessages)
+	s.recordTrace(core.TraceRecord{
+		SessionID:  record.SessionID,
+		RunKind:    "workflow_tool_call",
+		Prompt:     step.ToolName,
+		Reply:      output,
+		ToolEvents: append([]core.ToolEvent(nil), result.Response.ToolEvents...),
+	})
+	if err != nil {
+		return output, err
+	}
+	if result.Pending || result.Response.Status == core.ChatStatusApprovalRequired {
+		return output, fmt.Errorf("workflow tool step requires prior approval")
+	}
+	for _, evt := range result.Response.ToolEvents {
+		switch evt.Phase {
+		case "failed":
+			return output, fmt.Errorf("tool_call failed: %s", chooseFirstNonEmpty(evt.Error, evt.ToolName))
+		case "denied":
+			return output, fmt.Errorf("tool_call denied: %s", evt.ToolName)
+		}
+	}
+	return output, nil
+}
+
+func extractWorkflowToolOutput(messages []core.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == core.RoleTool {
+			return strings.TrimSpace(messages[i].Content)
+		}
+	}
+	return ""
+}
+
+type workflowToolProvider struct {
+	call provider.ToolCall
+	done bool
+}
+
+func (p *workflowToolProvider) ID() string { return "workflow" }
+
+func (p *workflowToolProvider) ContextWindow(string) int { return 16_000 }
+
+func (p *workflowToolProvider) Generate(context.Context, provider.GenerateRequest) (provider.GenerateResponse, error) {
+	return provider.GenerateResponse{Text: ""}, nil
+}
+
+func (p *workflowToolProvider) ToolCapabilities() provider.ToolCapabilities {
+	return provider.ToolCapabilities{SupportsTools: true}
+}
+
+func (p *workflowToolProvider) GenerateToolTurn(context.Context, provider.ToolTurnRequest) (provider.ToolTurnResponse, error) {
+	if p.done {
+		return provider.ToolTurnResponse{Text: ""}, nil
+	}
+	p.done = true
+	return provider.ToolTurnResponse{
+		ToolCalls: []provider.ToolCall{p.call},
+	}, nil
 }
 
 func (s *Service) SpawnSubagent(

@@ -2,7 +2,10 @@ import { useAppStore } from "@/store/appStore";
 
 interface Props {
   onDecide: (
-    decisions: { approval_id: string; decision: "allow" | "deny" }[],
+    decisions: {
+      approval_id: string;
+      decision: "allow_once" | "allow_for_session" | "allow_for_workspace" | "deny";
+    }[],
     runID: string,
   ) => void;
 }
@@ -16,19 +19,12 @@ export function ToolApprovalModal({ onDecide }: Props) {
   const currentRunID = useAppStore((s) => s.currentRunID);
   const clearApprovals = useAppStore((s) => s.clearApprovals);
 
-  function handleAllowAll() {
+  function submitDecision(
+    decision: "allow_once" | "allow_for_session" | "allow_for_workspace" | "deny",
+  ) {
     const decisions = pendingApprovals.map((a) => ({
       approval_id: a.approval_id,
-      decision: "allow" as const,
-    }));
-    clearApprovals();
-    onDecide(decisions, currentRunID);
-  }
-
-  function handleDenyAll() {
-    const decisions = pendingApprovals.map((a) => ({
-      approval_id: a.approval_id,
-      decision: "deny" as const,
+      decision,
     }));
     clearApprovals();
     onDecide(decisions, currentRunID);
@@ -85,16 +81,22 @@ export function ToolApprovalModal({ onDecide }: Props) {
         </div>
 
         <div className="modal-action">
-          <button className="btn btn-ghost" onClick={handleDenyAll}>
-            全部拒絕
+          <button className="btn btn-ghost" onClick={() => submitDecision("deny")}>
+            拒絕
           </button>
-          <button className="btn btn-primary" onClick={handleAllowAll}>
-            全部允許
+          <button className="btn btn-outline" onClick={() => submitDecision("allow_once")}>
+            只允許這次
+          </button>
+          <button className="btn btn-outline" onClick={() => submitDecision("allow_for_session")}>
+            允許本 session
+          </button>
+          <button className="btn btn-primary" onClick={() => submitDecision("allow_for_workspace")}>
+            允許工作區
           </button>
         </div>
       </div>
       <form method="dialog" className="modal-backdrop">
-        <button onClick={handleDenyAll}>close</button>
+        <button onClick={() => submitDecision("deny")}>close</button>
       </form>
     </dialog>
   );

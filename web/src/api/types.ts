@@ -37,7 +37,7 @@ export interface Message {
 
 export interface ToolApprovalDecision {
   approval_id: string;
-  decision: "allow" | "deny";
+  decision: "allow_once" | "allow_for_session" | "allow_for_workspace" | "deny";
 }
 
 export interface PendingToolApproval {
@@ -133,6 +133,7 @@ export interface ChatResponse {
   pending_approvals?: PendingToolApproval[];
   tool_events?: ToolEvent[];
   reminders?: ReminderEvent[];
+  subagent_artifacts?: SubagentArtifact[];
 }
 
 export interface CreatePlanRequest {
@@ -1062,4 +1063,5 @@ export interface TranscriptEntry {
   tool_events?: ToolEvent[];
   elapsed_ms?: number;
   reminders?: ReminderEvent[];
+  subagent_artifacts?: SubagentArtifact[];
 }

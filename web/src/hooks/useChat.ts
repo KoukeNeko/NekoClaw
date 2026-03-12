@@ -91,7 +91,13 @@ export function useChat() {
 
   /** Send tool approval decisions and continue streaming. */
   const sendApprovals = useCallback(
-    (decisions: { approval_id: string; decision: "allow" | "deny" }[], runID: string) => {
+    (
+      decisions: {
+        approval_id: string;
+        decision: "allow_once" | "allow_for_session" | "allow_for_workspace" | "deny";
+      }[],
+      runID: string,
+    ) => {
       setStreaming(true);
       startTimeRef.current = Date.now();
       accumulatedTextRef.current = "";
@@ -241,6 +247,7 @@ export function useChat() {
             elapsed,
             toolEvents: resp.tool_events,
             reminders: resp.reminders,
+            subagentArtifacts: resp.subagent_artifacts,
           }));
 
           // Track usage

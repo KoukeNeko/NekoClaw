@@ -32,6 +32,9 @@ type PendingRun struct {
 	PendingCalls   []provider.ToolCall
 	PendingEvents  []core.ToolEvent
 	PendingMessage []core.Message
+	ObservedFiles  map[string]string
+	MutatedFiles   map[string]struct{}
+	SnapshotID     string
 }
 
 type ApprovalStore struct {
@@ -64,6 +67,20 @@ func (s *ApprovalStore) Put(run PendingRun) PendingRun {
 	run.PendingCalls = append([]provider.ToolCall(nil), run.PendingCalls...)
 	run.PendingEvents = append([]core.ToolEvent(nil), run.PendingEvents...)
 	run.PendingMessage = append([]core.Message(nil), run.PendingMessage...)
+	if len(run.ObservedFiles) > 0 {
+		cloned := make(map[string]string, len(run.ObservedFiles))
+		for k, v := range run.ObservedFiles {
+			cloned[k] = v
+		}
+		run.ObservedFiles = cloned
+	}
+	if len(run.MutatedFiles) > 0 {
+		cloned := make(map[string]struct{}, len(run.MutatedFiles))
+		for k := range run.MutatedFiles {
+			cloned[k] = struct{}{}
+		}
+		run.MutatedFiles = cloned
+	}
 	s.runs[run.RunID] = run
 	return run
 }
@@ -83,6 +100,20 @@ func (s *ApprovalStore) Get(runID string) (PendingRun, error) {
 	if time.Now().After(run.ExpiresAt) {
 		delete(s.runs, runID)
 		return PendingRun{}, ErrRunExpired
+	}
+	if len(run.ObservedFiles) > 0 {
+		cloned := make(map[string]string, len(run.ObservedFiles))
+		for k, v := range run.ObservedFiles {
+			cloned[k] = v
+		}
+		run.ObservedFiles = cloned
+	}
+	if len(run.MutatedFiles) > 0 {
+		cloned := make(map[string]struct{}, len(run.MutatedFiles))
+		for k := range run.MutatedFiles {
+			cloned[k] = struct{}{}
+		}
+		run.MutatedFiles = cloned
 	}
 	return run, nil
 }

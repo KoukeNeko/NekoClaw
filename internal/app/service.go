@@ -538,16 +538,17 @@ func (s *Service) RenameSession(sessionID, title string) error {
 // TranscriptMessage is a lightweight message for display (no base64 image data).
 // Assistant messages include per-message metadata (provider, model, usage, tool events).
 type TranscriptMessage struct {
-	Role       string               `json:"role"`
-	Content    string               `json:"content"`
-	ImageNames []string             `json:"image_names,omitempty"`
-	CreatedAt  string               `json:"created_at"`
-	Provider   string               `json:"provider,omitempty"`
-	Model      string               `json:"model,omitempty"`
-	Usage      *core.UsageInfo      `json:"usage,omitempty"`
-	ToolEvents []core.ToolEvent     `json:"tool_events,omitempty"`
-	ElapsedMs  int64                `json:"elapsed_ms,omitempty"`
-	Reminders  []core.ReminderEvent `json:"reminders,omitempty"`
+	Role              string                  `json:"role"`
+	Content           string                  `json:"content"`
+	ImageNames        []string                `json:"image_names,omitempty"`
+	CreatedAt         string                  `json:"created_at"`
+	Provider          string                  `json:"provider,omitempty"`
+	Model             string                  `json:"model,omitempty"`
+	Usage             *core.UsageInfo         `json:"usage,omitempty"`
+	ToolEvents        []core.ToolEvent        `json:"tool_events,omitempty"`
+	ElapsedMs         int64                   `json:"elapsed_ms,omitempty"`
+	Reminders         []core.ReminderEvent    `json:"reminders,omitempty"`
+	SubagentArtifacts []core.SubagentArtifact `json:"subagent_artifacts,omitempty"`
 }
 
 // GetSessionTranscript returns user and assistant messages for display.
@@ -583,6 +584,9 @@ func (s *Service) GetSessionTranscript(sessionID string) []TranscriptMessage {
 				}
 				if len(e.MsgReminders) > 0 {
 					tm.Reminders = append([]core.ReminderEvent(nil), e.MsgReminders...)
+				}
+				if len(e.MsgSubagentArtifacts) > 0 {
+					tm.SubagentArtifacts = append([]core.SubagentArtifact(nil), e.MsgSubagentArtifacts...)
 				}
 			}
 			display = append(display, tm)
@@ -3280,6 +3284,25 @@ func (s *Service) attemptSingleProvider(
 				Compressed:   compressed,
 				Compression:  compressionMeta,
 				Generation:   attemptGenerationParams,
+				SelectorForCall: func(call provider.ToolCall) string {
+					return s.toolCallSelector(call)
+				},
+				LookupGrant: func(sessionID, toolName, selector string) (string, bool) {
+					return s.lookupToolGrant(sessionID, toolName, selector)
+				},
+				PersistGrant: func(sessionID, toolName, selector, decision string) error {
+					return s.persistToolGrant(sessionID, toolName, selector, decision)
+				},
+				PrepareMutation: func(sessionID string, call provider.ToolCall, snapshotID string) (*core.SnapshotRecord, error) {
+					return s.prepareToolMutation(sessionID, call, snapshotID)
+				},
+				OnSnapshotCreated: func(record core.SnapshotRecord) {
+					s.emitWorkflowEvent(ctx, "snapshot_created", map[string]any{
+						"session_id":  sessionID,
+						"snapshot_id": record.ID,
+						"tool_name":   record.ToolName,
+					})
+				},
 				OnToolEvent: func(evt core.ToolEvent) {
 					switch evt.Phase {
 					case "requested":

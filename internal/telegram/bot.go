@@ -32,8 +32,10 @@ const telegramCallbackPrefix = "cmd:"
 const (
 	telegramActionPlanApprove = "plan_approve"
 	telegramActionPlanReject  = "plan_reject"
-	telegramActionToolAllow   = "tool_allow"
-	telegramActionToolDeny    = "tool_deny"
+	telegramActionToolAllowOnce      = "tool_allow_once"
+	telegramActionToolAllowSession   = "tool_allow_session"
+	telegramActionToolAllowWorkspace = "tool_allow_workspace"
+	telegramActionToolDeny           = "tool_deny"
 )
 
 // Group context buffer settings.
@@ -787,8 +789,10 @@ func buildTelegramToolApprovalKeyboard(runID string, approvals []core.PendingToo
 	rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(approvals))
 	for _, approval := range approvals {
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Allow "+approval.ToolName, encodeTelegramCallbackData(telegramActionToolAllow, runID+":"+approval.ApprovalID)),
-			tgbotapi.NewInlineKeyboardButtonData("Deny "+approval.ToolName, encodeTelegramCallbackData(telegramActionToolDeny, runID+":"+approval.ApprovalID)),
+			tgbotapi.NewInlineKeyboardButtonData("Once "+approval.ToolName, encodeTelegramCallbackData(telegramActionToolAllowOnce, runID+":"+approval.ApprovalID)),
+			tgbotapi.NewInlineKeyboardButtonData("Session", encodeTelegramCallbackData(telegramActionToolAllowSession, runID+":"+approval.ApprovalID)),
+			tgbotapi.NewInlineKeyboardButtonData("Workspace", encodeTelegramCallbackData(telegramActionToolAllowWorkspace, runID+":"+approval.ApprovalID)),
+			tgbotapi.NewInlineKeyboardButtonData("Deny", encodeTelegramCallbackData(telegramActionToolDeny, runID+":"+approval.ApprovalID)),
 		))
 	}
 	return rows
@@ -976,13 +980,18 @@ func (b *Bot) handlePlannerCallbackQuery(cq *tgbotapi.CallbackQuery) bool {
 		edit.ParseMode = tgbotapi.ModeMarkdownV2
 		_, _ = b.api.Send(edit)
 		return true
-	case telegramActionToolAllow, telegramActionToolDeny:
+	case telegramActionToolAllowOnce, telegramActionToolAllowSession, telegramActionToolAllowWorkspace, telegramActionToolDeny:
 		payload := strings.SplitN(parts[1], ":", 2)
 		if len(payload) != 2 {
 			return false
 		}
-		decision := "allow"
-		if parts[0] == telegramActionToolDeny {
+		decision := "allow_once"
+		switch parts[0] {
+		case telegramActionToolAllowSession:
+			decision = "allow_for_session"
+		case telegramActionToolAllowWorkspace:
+			decision = "allow_for_workspace"
+		case telegramActionToolDeny:
 			decision = "deny"
 		}
 		callback := tgbotapi.NewCallback(cq.ID, "")

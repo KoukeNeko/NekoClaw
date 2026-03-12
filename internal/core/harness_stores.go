@@ -561,7 +561,7 @@ func (s *PermissionStore) Match(workspaceRoot, toolName, selector string) []Perm
 		if strings.TrimSpace(grant.WorkspaceRoot) != workspaceRoot || strings.TrimSpace(grant.ToolName) != toolName {
 			continue
 		}
-		if grant.Selector != "" && selector != "" && grant.Selector != selector {
+		if grant.Selector != "" && strings.TrimSpace(grant.Selector) != selector {
 			continue
 		}
 		out = append(out, clonePermissionGrant(grant))
@@ -636,15 +636,15 @@ const (
 )
 
 type WorkflowStep struct {
-	ID          string          `json:"id"`
-	Kind        WorkflowStepKind`json:"kind"`
-	Name        string          `json:"name,omitempty"`
-	Template    string          `json:"template,omitempty"`
-	Subagent    string          `json:"subagent,omitempty"`
-	ToolName    string          `json:"tool_name,omitempty"`
-	ToolArgs    json.RawMessage `json:"tool_args,omitempty"`
-	Review      bool            `json:"review,omitempty"`
-	MessageRole MessageRole     `json:"message_role,omitempty"`
+	ID          string           `json:"id"`
+	Kind        WorkflowStepKind `json:"kind"`
+	Name        string           `json:"name,omitempty"`
+	Template    string           `json:"template,omitempty"`
+	Subagent    string           `json:"subagent,omitempty"`
+	ToolName    string           `json:"tool_name,omitempty"`
+	ToolArgs    json.RawMessage  `json:"tool_args,omitempty"`
+	Review      bool             `json:"review,omitempty"`
+	MessageRole MessageRole      `json:"message_role,omitempty"`
 }
 
 type WorkflowRecord struct {
@@ -665,16 +665,16 @@ type WorkflowRecord struct {
 }
 
 type WorkflowRun struct {
-	ID             string            `json:"id"`
-	WorkflowID     string            `json:"workflow_id"`
-	SessionID      string            `json:"session_id,omitempty"`
+	ID             string              `json:"id"`
+	WorkflowID     string              `json:"workflow_id"`
+	SessionID      string              `json:"session_id,omitempty"`
 	TriggerKind    WorkflowTriggerKind `json:"trigger_kind"`
-	Status         WorkflowRunStatus `json:"status"`
-	TriggerPayload json.RawMessage   `json:"trigger_payload,omitempty"`
-	StepOutputs    map[string]string `json:"step_outputs,omitempty"`
-	StartedAt      time.Time         `json:"started_at"`
-	FinishedAt     *time.Time        `json:"finished_at,omitempty"`
-	LastError      string            `json:"last_error,omitempty"`
+	Status         WorkflowRunStatus   `json:"status"`
+	TriggerPayload json.RawMessage     `json:"trigger_payload,omitempty"`
+	StepOutputs    map[string]string   `json:"step_outputs,omitempty"`
+	StartedAt      time.Time           `json:"started_at"`
+	FinishedAt     *time.Time          `json:"finished_at,omitempty"`
+	LastError      string              `json:"last_error,omitempty"`
 }
 
 type workflowIndexFile struct {
@@ -750,7 +750,7 @@ func (s *WorkflowStore) Put(record WorkflowRecord) (WorkflowRecord, error) {
 	}
 	record.Name = strings.TrimSpace(record.Name)
 	record.SessionID = strings.TrimSpace(record.SessionID)
-		record.Surface = normalizeWorkflowSurface(record.Surface)
+	record.Surface = normalizeWorkflowSurface(record.Surface)
 	record.TriggerKind = normalizeWorkflowTrigger(record.TriggerKind)
 	record.WebhookToken = strings.TrimSpace(record.WebhookToken)
 	record.EventName = strings.TrimSpace(record.EventName)
@@ -1035,6 +1035,14 @@ func NewSnapshotStore(dataDir string) (*SnapshotStore, error) {
 	return store, nil
 }
 
+func (s *SnapshotStore) ArtifactDir(id string) string {
+	id = strings.TrimSpace(id)
+	if s == nil || s.dataDir == "" || id == "" {
+		return ""
+	}
+	return filepath.Join(s.dataDir, "artifacts", id)
+}
+
 func (s *SnapshotStore) Put(record SnapshotRecord) (SnapshotRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1142,18 +1150,18 @@ type SubagentArtifact struct {
 }
 
 type TraceRecord struct {
-	ID               string             `json:"id"`
-	SessionID        string             `json:"session_id,omitempty"`
-	RunID            string             `json:"run_id,omitempty"`
-	RunKind          string             `json:"run_kind,omitempty"`
-	Provider         string             `json:"provider,omitempty"`
-	Model            string             `json:"model,omitempty"`
-	Prompt           string             `json:"prompt,omitempty"`
-	Reply            string             `json:"reply,omitempty"`
-	ToolEvents       []ToolEvent        `json:"tool_events,omitempty"`
-	Reminders        []ReminderEvent    `json:"reminders,omitempty"`
+	ID                string             `json:"id"`
+	SessionID         string             `json:"session_id,omitempty"`
+	RunID             string             `json:"run_id,omitempty"`
+	RunKind           string             `json:"run_kind,omitempty"`
+	Provider          string             `json:"provider,omitempty"`
+	Model             string             `json:"model,omitempty"`
+	Prompt            string             `json:"prompt,omitempty"`
+	Reply             string             `json:"reply,omitempty"`
+	ToolEvents        []ToolEvent        `json:"tool_events,omitempty"`
+	Reminders         []ReminderEvent    `json:"reminders,omitempty"`
 	SubagentArtifacts []SubagentArtifact `json:"subagent_artifacts,omitempty"`
-	CreatedAt        time.Time          `json:"created_at"`
+	CreatedAt         time.Time          `json:"created_at"`
 }
 
 type traceIndexFile struct {

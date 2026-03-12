@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -99,7 +100,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		if id == "" {
 			continue
 		}
-		decisions[id] = strings.ToLower(strings.TrimSpace(decision.Decision))
+		decisions[id] = normalizeApprovalDecision(decision.Decision)
 	}
 
 	var (
@@ -110,6 +111,9 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		events          []core.ToolEvent
 		usage           core.UsageInfo
 		sessionMsgs     []core.Message
+		observedFiles   = map[string]string{}
+		mutatedFiles    = map[string]struct{}{}
+		snapshotID      string
 		rawModelContent json.RawMessage // raw model content from current tool turn (e.g. Gemini thought_signature)
 	)
 	if modelID == "" {
@@ -139,6 +143,9 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		events = append([]core.ToolEvent(nil), run.PendingEvents...)
 		sessionMsgs = append([]core.Message(nil), run.PendingMessage...)
 		usage = run.Usage
+		observedFiles = cloneObservedFiles(run.ObservedFiles)
+		mutatedFiles = cloneMutatedFiles(run.MutatedFiles)
+		snapshotID = strings.TrimSpace(run.SnapshotID)
 		r.approvals.Delete(run.RunID)
 	} else if strings.TrimSpace(req.UserMessage.Content) != "" {
 		sessionMsgs = append(sessionMsgs, req.UserMessage)
@@ -212,6 +219,13 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 				continue
 			}
 			if _, ok := decisions[call.ID]; !ok {
+				if req.LookupGrant != nil {
+					if decision, ok := req.LookupGrant(req.SessionID, call.Name, selectorForCall(req, call)); ok {
+						decisions[call.ID] = normalizeApprovalDecision(decision)
+					}
+				}
+			}
+			if _, ok := decisions[call.ID]; !ok {
 				needsApproval = true
 				pendingApprovals = append(pendingApprovals, core.PendingToolApproval{
 					ApprovalID:       call.ID,
@@ -238,6 +252,9 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 				PendingCalls:   pending,
 				PendingEvents:  events,
 				PendingMessage: sessionMsgs,
+				ObservedFiles:  cloneObservedFiles(observedFiles),
+				MutatedFiles:   cloneMutatedFiles(mutatedFiles),
+				SnapshotID:     snapshotID,
 			})
 			return RunResult{
 				Response: core.ChatResponse{
@@ -332,15 +349,21 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			emitToolEvent(&req, reqEvt)
 
 			if mutating {
-				switch decisions[call.ID] {
-				case "allow":
+				decision := normalizeApprovalDecision(decisions[call.ID])
+				switch decision {
+				case "allow_once", "allow_for_session", "allow_for_workspace":
+					if decision != "allow_once" && req.PersistGrant != nil {
+						if err := req.PersistGrant(req.SessionID, call.Name, selectorForCall(req, call), decision); err != nil {
+							return RunResult{}, err
+						}
+					}
 					events = append(events, core.ToolEvent{
 						At:         time.Now(),
 						ToolCallID: call.ID,
 						ToolName:   call.Name,
 						Phase:      "approved",
 						Mutating:   true,
-						Decision:   "allow",
+						Decision:   decision,
 					})
 				case "deny":
 					events = append(events, core.ToolEvent{
@@ -405,6 +428,43 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 				})
 				continue
 			}
+			if mutating && req.PrepareMutation != nil {
+				record, err := req.PrepareMutation(req.SessionID, call, snapshotID)
+				if err != nil {
+					return RunResult{}, err
+				}
+				if record != nil {
+					snapshotID = strings.TrimSpace(record.ID)
+					if req.OnSnapshotCreated != nil {
+						req.OnSnapshotCreated(*record)
+					}
+				}
+			}
+			if mutating {
+				if staleErr := validateStaleRead(call, selectorForCall(req, call), observedFiles, mutatedFiles); staleErr != nil {
+					content := "tool_error: " + staleErr.Error()
+					failEvt := core.ToolEvent{
+						At:         time.Now(),
+						ToolCallID: call.ID,
+						ToolName:   call.Name,
+						Phase:      "failed",
+						Mutating:   true,
+						Error:      trimPreview(staleErr.Error(), 200),
+					}
+					events = append(events, failEvt)
+					emitToolEvent(&req, failEvt)
+					toolMsg := core.Message{
+						Role:       core.RoleTool,
+						ToolName:   call.Name,
+						ToolCallID: call.ID,
+						Content:    truncateHeadTail(content, maxToolResultBytes),
+						CreatedAt:  time.Now(),
+					}
+					messages = append(messages, assistantTool, toolMsg)
+					sessionMsgs = append(sessionMsgs, assistantTool, toolMsg)
+					continue
+				}
+			}
 			content, err := r.executor.Run(ctx, call)
 			if err != nil {
 				content = "tool_error: " + err.Error()
@@ -430,6 +490,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 				events = append(events, execEvt)
 				emitToolEvent(&req, execEvt)
 			}
+			updateObservedState(call, selectorForCall(req, call), err == nil, observedFiles, mutatedFiles)
 			// Head+tail truncate tool output to prevent oversized context.
 			// Preserves both initial context and final results/errors.
 			content = truncateHeadTail(content, maxToolResultBytes)
@@ -469,6 +530,117 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		},
 		SessionMessages: sessionMsgs,
 	}, nil
+}
+
+func normalizeApprovalDecision(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "allow", "allow_once":
+		return "allow_once"
+	case "allow_for_session":
+		return "allow_for_session"
+	case "allow_for_workspace":
+		return "allow_for_workspace"
+	case "deny":
+		return "deny"
+	default:
+		return strings.ToLower(strings.TrimSpace(raw))
+	}
+}
+
+func selectorForCall(req RunRequest, call provider.ToolCall) string {
+	if req.SelectorForCall == nil {
+		return ""
+	}
+	return strings.TrimSpace(req.SelectorForCall(call))
+}
+
+func cloneObservedFiles(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneMutatedFiles(src map[string]struct{}) map[string]struct{} {
+	if len(src) == 0 {
+		return map[string]struct{}{}
+	}
+	out := make(map[string]struct{}, len(src))
+	for k := range src {
+		out[k] = struct{}{}
+	}
+	return out
+}
+
+func validateStaleRead(call provider.ToolCall, selector string, observedFiles map[string]string, mutatedFiles map[string]struct{}) error {
+	if !isStaleReadProtectedCall(call.Name) {
+		return nil
+	}
+	path := strings.TrimSpace(selector)
+	if path == "" {
+		return nil
+	}
+	if _, ok := mutatedFiles[path]; ok {
+		return nil
+	}
+	observedHash, ok := observedFiles[path]
+	if !ok {
+		return nil
+	}
+	currentHash, err := hashFileState(path)
+	if err != nil {
+		return err
+	}
+	if currentHash == observedHash {
+		return nil
+	}
+	return fmt.Errorf("stale read detected for %s; reread the file before modifying it", path)
+}
+
+func isStaleReadProtectedCall(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "file_write", "file_replace":
+		return true
+	default:
+		return false
+	}
+}
+
+func updateObservedState(call provider.ToolCall, selector string, succeeded bool, observedFiles map[string]string, mutatedFiles map[string]struct{}) {
+	if !succeeded {
+		return
+	}
+	path := strings.TrimSpace(selector)
+	if path == "" {
+		return
+	}
+	switch strings.TrimSpace(call.Name) {
+	case "file_read":
+		if hash, err := hashFileState(path); err == nil {
+			observedFiles[path] = hash
+		}
+	case "file_write", "file_replace":
+		if hash, err := hashFileState(path); err == nil {
+			observedFiles[path] = hash
+		}
+		mutatedFiles[path] = struct{}{}
+	}
+}
+
+func hashFileState(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "__missing__", nil
+		}
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum[:]), nil
 }
 
 func describedToolNames(raw json.RawMessage) []string {

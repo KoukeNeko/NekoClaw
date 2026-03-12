@@ -37,22 +37,27 @@ type ToolSpec struct {
 }
 
 type RunRequest struct {
-	SessionID    string
-	Surface      core.Surface
-	ProviderID   string
-	ModelID      string
-	Account      core.Account
-	ToolProvider provider.ToolCallingProvider
-	Messages     []core.Message
-	UserMessage  core.Message
-	EnableTools  bool
-	ToolMode     core.ToolMode
-	RunID        string
-	Approvals    []core.ToolApprovalDecision
-	AllowedTools []string
-	Compressed   bool
-	Compression  core.CompressionMeta
-	Generation   *provider.GenerationParams // optional persona-driven sampling overrides
+	SessionID         string
+	Surface           core.Surface
+	ProviderID        string
+	ModelID           string
+	Account           core.Account
+	ToolProvider      provider.ToolCallingProvider
+	Messages          []core.Message
+	UserMessage       core.Message
+	EnableTools       bool
+	ToolMode          core.ToolMode
+	RunID             string
+	Approvals         []core.ToolApprovalDecision
+	AllowedTools      []string
+	Compressed        bool
+	Compression       core.CompressionMeta
+	Generation        *provider.GenerationParams // optional persona-driven sampling overrides
+	SelectorForCall   func(provider.ToolCall) string
+	LookupGrant       func(sessionID, toolName, selector string) (string, bool)
+	PersistGrant      func(sessionID, toolName, selector, decision string) error
+	PrepareMutation   func(sessionID string, call provider.ToolCall, snapshotID string) (*core.SnapshotRecord, error)
+	OnSnapshotCreated func(core.SnapshotRecord)
 
 	// OnToolEvent is an optional callback invoked synchronously when tool
 	// execution phases change (e.g. "requested", "executed", "failed").
