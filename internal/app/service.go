@@ -49,12 +49,20 @@ type Service struct {
 	pools             map[string]*core.AccountPool
 	sessions          *core.SessionStore
 	plans             *core.PlanStore
+	playbooks         *core.PlaybookStore
+	tasks             *core.TaskStore
+	permissions       *core.PermissionStore
+	workflows         *core.WorkflowStore
+	workflowRuns      *core.WorkflowRunStore
+	snapshots         *core.SnapshotStore
+	traces            *core.TraceStore
 	lifecycle         *core.SessionLifecycle
 	oauthManager      *auth.GeminiOAuthManager
 	anthropicLoginMgr *auth.AnthropicLoginManager
 	openAICodexLogin  *auth.OpenAICodexLoginManager
 	authStore         *auth.Store
 	memoryDir         string
+	workspaceRoot     string
 	searchIndex       *memory.SearchIndex
 	preferredProfiles map[string]string
 	fallbacks         []core.FallbackEntry // ordered fallback provider+model pairs
@@ -64,6 +72,9 @@ type Service struct {
 	telegramConfig    core.TelegramConfig  // persisted Telegram bot settings
 	toolsConfig       core.ToolsConfig     // persisted tool settings (web_search API key, etc.)
 	compactionConfig  core.CompactionConfig
+	playbookConfig    core.PlaybookConfig
+	automationConfig  core.AutomationConfig
+	permissionConfig  core.PermissionConfig
 	defaultProvider   string            // current default provider (synced from the Web UI)
 	defaultModel      string            // current default model (synced from the Web UI)
 	defaultThinking   core.ThinkingMode // current default Gemini thinking mode
@@ -85,11 +96,20 @@ type Service struct {
 	compactionQueueMu sync.Mutex
 	compactionQueued  map[string]struct{}
 	compactionRunning map[string]struct{}
+	sessionGrantsMu   sync.Mutex
+	sessionGrants     map[string]map[string]string
 }
 
 type ServiceOptions struct {
 	SessionStore     *core.SessionStore
 	PlanStore        *core.PlanStore
+	PlaybookStore    *core.PlaybookStore
+	TaskStore        *core.TaskStore
+	PermissionStore  *core.PermissionStore
+	WorkflowStore    *core.WorkflowStore
+	WorkflowRunStore *core.WorkflowRunStore
+	SnapshotStore    *core.SnapshotStore
+	TraceStore       *core.TraceStore
 	Lifecycle        *core.SessionLifecycle
 	MemoryDir        string
 	SearchIndex      *memory.SearchIndex
@@ -111,8 +131,16 @@ func NewService(opts ServiceOptions) *Service {
 		pools:             map[string]*core.AccountPool{},
 		sessions:          sessions,
 		plans:             opts.PlanStore,
+		playbooks:         opts.PlaybookStore,
+		tasks:             opts.TaskStore,
+		permissions:       opts.PermissionStore,
+		workflows:         opts.WorkflowStore,
+		workflowRuns:      opts.WorkflowRunStore,
+		snapshots:         opts.SnapshotStore,
+		traces:            opts.TraceStore,
 		lifecycle:         opts.Lifecycle,
 		memoryDir:         opts.MemoryDir,
+		workspaceRoot:     strings.TrimSpace(opts.WorkspaceRoot),
 		searchIndex:       opts.SearchIndex,
 		preferredProfiles: map[string]string{},
 		defaultThinking:   core.ThinkingModeAuto,
@@ -121,9 +149,31 @@ func NewService(opts ServiceOptions) *Service {
 		compactionQueue:   make(chan string, 256),
 		compactionQueued:  map[string]struct{}{},
 		compactionRunning: map[string]struct{}{},
+		sessionGrants:     map[string]map[string]string{},
 	}
 	if svc.plans == nil {
 		svc.plans, _ = core.NewPlanStore("")
+	}
+	if svc.playbooks == nil {
+		svc.playbooks, _ = core.NewPlaybookStore("")
+	}
+	if svc.tasks == nil {
+		svc.tasks, _ = core.NewTaskStore("")
+	}
+	if svc.permissions == nil {
+		svc.permissions, _ = core.NewPermissionStore("")
+	}
+	if svc.workflows == nil {
+		svc.workflows, _ = core.NewWorkflowStore("")
+	}
+	if svc.workflowRuns == nil {
+		svc.workflowRuns, _ = core.NewWorkflowRunStore("")
+	}
+	if svc.snapshots == nil {
+		svc.snapshots, _ = core.NewSnapshotStore("")
+	}
+	if svc.traces == nil {
+		svc.traces, _ = core.NewTraceStore("")
 	}
 	if opts.CompactionConfig != (core.CompactionConfig{}) {
 		cfg := normalizeCompactionConfig(opts.CompactionConfig)
@@ -2553,6 +2603,11 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		return core.ChatResponse{}, fmt.Errorf("message is required")
 	}
 	requestReminders := s.requestReminders(sessionID, req.ToolMode)
+	s.emitWorkflowEvent(ctx, "run_started", map[string]any{
+		"session_id": sessionID,
+		"surface":    surface,
+		"tool_mode":  req.ToolMode,
+	})
 
 	// Build provider+model chain: primary first, then configured fallbacks.
 	type fallbackCandidate struct {
@@ -2634,6 +2689,40 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 				)
 			}
 			s.recordReminderCompletion(sessionID, req.ToolMode, resp)
+			s.recordTrace(core.TraceRecord{
+				SessionID:  sessionID,
+				RunID:      resp.RunID,
+				RunKind:    "chat",
+				Provider:   resp.Provider,
+				Model:      resp.Model,
+				Prompt:     prompt,
+				Reply:      resp.Reply,
+				ToolEvents: append([]core.ToolEvent(nil), resp.ToolEvents...),
+				Reminders:  append([]core.ReminderEvent(nil), resp.Reminders...),
+			})
+			s.maybeCreatePlaybookCandidate("chat:"+sessionID, resp.Reply, core.PlaybookScopeWorkspace, workspaceScopeValue(s.workspaceRoot))
+			s.emitWorkflowEvent(ctx, "run_finished", map[string]any{
+				"session_id": sessionID,
+				"surface":    surface,
+				"status":     resp.Status,
+				"provider":   resp.Provider,
+				"model":      resp.Model,
+			})
+			for _, evt := range resp.ToolEvents {
+				switch evt.Phase {
+				case "denied":
+					s.emitWorkflowEvent(ctx, "approval_denied", map[string]any{
+						"session_id": sessionID,
+						"tool_name":  evt.ToolName,
+					})
+				case "failed":
+					s.emitWorkflowEvent(ctx, "tool_failed", map[string]any{
+						"session_id": sessionID,
+						"tool_name":  evt.ToolName,
+						"error":      evt.Error,
+					})
+				}
+			}
 			return resp, nil
 		}
 		lastErr = err
@@ -2654,6 +2743,12 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 	if lastErr == nil {
 		lastErr = ErrNoAvailableAccount
 	}
+	s.emitWorkflowEvent(ctx, "run_finished", map[string]any{
+		"session_id": sessionID,
+		"surface":    surface,
+		"status":     "failed",
+		"error":      lastErr.Error(),
+	})
 	s.recordReminderFailure(sessionID, req.ToolMode, lastErr)
 	return core.ChatResponse{}, lastErr
 }
@@ -2974,11 +3069,19 @@ func (s *Service) attemptSingleProvider(
 	} else {
 		memoryPrompt = memResult.prompt
 	}
+	activePersona := s.activePersona()
+	playbookPrompt := renderPlaybookPrompt(s.ActivePlaybooks(sessionID, params.surface, func() string {
+		if activePersona == nil {
+			return ""
+		}
+		return activePersona.DirName
+	}(), 8))
+	mergedMemoryPrompt := strings.TrimSpace(strings.Join([]string{memoryPrompt, playbookPrompt}, "\n\n"))
 
 	// Inject system prompt: persona template (with embedded memory) or plain memory.
 	var baseGenerationParams *provider.GenerationParams
-	if activePersona := s.activePersona(); activePersona != nil {
-		rendered, renderErr := persona.RenderSystemPrompt(activePersona, memoryPrompt, providerID)
+	if activePersona != nil {
+		rendered, renderErr := persona.RenderSystemPrompt(activePersona, mergedMemoryPrompt, providerID)
 		if renderErr != nil {
 			logService.Errorf("persona render: persona=%s error=%q", activePersona.DirName, renderErr)
 		} else {
@@ -2989,10 +3092,10 @@ func (s *Service) attemptSingleProvider(
 			compressedMessages = append([]core.Message{systemMsg}, compressedMessages...)
 		}
 		baseGenerationParams = s.personaGenerationParams(activePersona)
-	} else if memoryPrompt != "" {
+	} else if mergedMemoryPrompt != "" {
 		systemMsg := core.Message{
 			Role:    core.RoleSystem,
-			Content: memoryPrompt,
+			Content: mergedMemoryPrompt,
 		}
 		compressedMessages = append([]core.Message{systemMsg}, compressedMessages...)
 	}
@@ -3170,6 +3273,7 @@ func (s *Service) attemptSingleProvider(
 				Messages:     modelMessages,
 				UserMessage:  userMessage,
 				EnableTools:  true,
+				ToolMode:     params.toolMode,
 				AllowedTools: allowedTools,
 				RunID:        params.runID,
 				Approvals:    params.toolApprovals,
@@ -4628,6 +4732,52 @@ func (b serviceToolBackend) SaveMemory(content string) error {
 		return fmt.Errorf("memory not configured")
 	}
 	return memory.AppendDailyLog(b.svc.memoryDir, content)
+}
+
+func (b serviceToolBackend) TaskList(sessionID string) core.TaskList {
+	if b.svc == nil {
+		return core.TaskList{SessionID: sessionID}
+	}
+	return b.svc.TaskList(sessionID)
+}
+
+func (b serviceToolBackend) SaveTaskList(list core.TaskList) (core.TaskList, error) {
+	if b.svc == nil {
+		return core.TaskList{}, fmt.Errorf("service not available")
+	}
+	return b.svc.SaveTaskList(list)
+}
+
+func (b serviceToolBackend) ToolCatalog() []tooling.ToolCatalogEntry {
+	if b.svc == nil {
+		return nil
+	}
+	entries := b.svc.BuiltinToolCatalog()
+	if b.svc.mcpManager != nil {
+		for _, info := range b.svc.MCPToolDefinitions() {
+			entries = append(entries, tooling.ToolCatalogEntry{
+				Name:        info.Name,
+				Description: info.Description,
+				Mutating:    true,
+				Configured:  true,
+			})
+		}
+	}
+	return entries
+}
+
+func (b serviceToolBackend) SpawnSubagent(
+	ctx context.Context,
+	sessionID string,
+	surface core.Surface,
+	subagentType string,
+	goal string,
+	contextHint string,
+) (core.SubagentArtifact, error) {
+	if b.svc == nil {
+		return core.SubagentArtifact{}, fmt.Errorf("service not available")
+	}
+	return b.svc.SpawnSubagent(ctx, sessionID, surface, subagentType, goal, contextHint)
 }
 
 func (b serviceToolBackend) Providers() []string {

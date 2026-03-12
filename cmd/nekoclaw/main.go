@@ -121,6 +121,7 @@ func main() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		service.StartBackgroundCompaction(ctx)
+		service.StartAutomationLoop(ctx)
 
 		var wg sync.WaitGroup
 		if discordBot != nil {
@@ -152,6 +153,7 @@ func main() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		service.StartBackgroundCompaction(ctx)
+		service.StartAutomationLoop(ctx)
 
 		var wg sync.WaitGroup
 
@@ -355,11 +357,46 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	workspaceRoot, _ := os.Getwd()
 	stateDir := resolveStateDir()
 	var planStore *core.PlanStore
+	var playbookStore *core.PlaybookStore
+	var taskStore *core.TaskStore
+	var permissionStore *core.PermissionStore
+	var workflowStore *core.WorkflowStore
+	var workflowRunStore *core.WorkflowRunStore
+	var snapshotStore *core.SnapshotStore
+	var traceStore *core.TraceStore
 	if stateDir != "" {
 		var err error
 		planStore, err = core.NewPlanStore(filepath.Join(stateDir, "plans"))
 		if err != nil {
 			return nil, fmt.Errorf("init plan store: %w", err)
+		}
+		playbookStore, err = core.NewPlaybookStore(filepath.Join(stateDir, "playbooks"))
+		if err != nil {
+			return nil, fmt.Errorf("init playbook store: %w", err)
+		}
+		taskStore, err = core.NewTaskStore(filepath.Join(stateDir, "tasks"))
+		if err != nil {
+			return nil, fmt.Errorf("init task store: %w", err)
+		}
+		permissionStore, err = core.NewPermissionStore(filepath.Join(stateDir, "permissions"))
+		if err != nil {
+			return nil, fmt.Errorf("init permission store: %w", err)
+		}
+		workflowStore, err = core.NewWorkflowStore(filepath.Join(stateDir, "workflows"))
+		if err != nil {
+			return nil, fmt.Errorf("init workflow store: %w", err)
+		}
+		workflowRunStore, err = core.NewWorkflowRunStore(filepath.Join(stateDir, "workflow-runs"))
+		if err != nil {
+			return nil, fmt.Errorf("init workflow run store: %w", err)
+		}
+		snapshotStore, err = core.NewSnapshotStore(filepath.Join(stateDir, "snapshots"))
+		if err != nil {
+			return nil, fmt.Errorf("init snapshot store: %w", err)
+		}
+		traceStore, err = core.NewTraceStore(filepath.Join(stateDir, "traces"))
+		if err != nil {
+			return nil, fmt.Errorf("init trace store: %w", err)
 		}
 	}
 
@@ -394,6 +431,13 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	svc := app.NewService(app.ServiceOptions{
 		SessionStore:     sessionStore,
 		PlanStore:        planStore,
+		PlaybookStore:    playbookStore,
+		TaskStore:        taskStore,
+		PermissionStore:  permissionStore,
+		WorkflowStore:    workflowStore,
+		WorkflowRunStore: workflowRunStore,
+		SnapshotStore:    snapshotStore,
+		TraceStore:       traceStore,
 		Lifecycle:        lifecycle,
 		MemoryDir:        memoryDir,
 		SearchIndex:      searchIndex,
@@ -472,6 +516,9 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	svc.SetConfigDir(configDir)
 	svc.SetGeneralConfig(appConfig.General)
 	svc.SetCompactionConfig(appConfig.Compaction)
+	svc.SetPlaybookConfig(appConfig.Playbooks)
+	svc.SetAutomationConfig(appConfig.Automations)
+	svc.SetPermissionConfig(appConfig.Permissions)
 	svc.SetSecurityConfig(appConfig.Security)
 	svc.SetDiscordConfig(appConfig.Discord)
 	svc.SetTelegramConfig(appConfig.Telegram)

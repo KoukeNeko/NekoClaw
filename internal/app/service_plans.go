@@ -105,6 +105,11 @@ func (s *Service) ApprovePlan(planID string) (core.PlanRecord, error) {
 	if err := s.plans.Update(record); err != nil {
 		return core.PlanRecord{}, err
 	}
+	if tasks := taskListFromPlan(record); len(tasks.Items) > 0 {
+		if _, taskErr := s.SaveTaskList(tasks); taskErr != nil {
+			logService.Warnf("plan tasks: plan_id=%s error=%v", planID, taskErr)
+		}
+	}
 	return record, nil
 }
 
@@ -398,6 +403,18 @@ func (s *Service) updatePlanExecutionResult(planID string, resp core.ChatRespons
 	if err := s.plans.Update(record); err != nil {
 		return core.PlanRecord{}, err
 	}
+	s.recordTrace(core.TraceRecord{
+		SessionID:  record.SessionID,
+		RunID:      planID,
+		RunKind:    "plan_execution",
+		Provider:   resp.Provider,
+		Model:      resp.Model,
+		Prompt:     record.RequestPrompt,
+		Reply:      resp.Reply,
+		ToolEvents: append([]core.ToolEvent(nil), resp.ToolEvents...),
+		Reminders:  append([]core.ReminderEvent(nil), resp.Reminders...),
+	})
+	s.maybeCreatePlaybookCandidate("plan:"+planID, record.PlanMarkdown, core.PlaybookScopeWorkspace, workspaceScopeValue(s.workspaceRoot))
 	return record, nil
 }
 

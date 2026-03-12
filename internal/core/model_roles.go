@@ -9,6 +9,9 @@ const (
 	ModelRolePlanner    ModelRole = "planner"
 	ModelRoleCompaction ModelRole = "compaction"
 	ModelRoleTitle      ModelRole = "title"
+	ModelRoleExplorer   ModelRole = "explorer"
+	ModelRoleCritic     ModelRole = "critic"
+	ModelRoleAutomation ModelRole = "automation"
 )
 
 type ModelRoleConfig struct {
@@ -22,6 +25,9 @@ type ModelRolesConfig struct {
 	Planner    ModelRoleConfig `json:"planner,omitempty"`
 	Compaction ModelRoleConfig `json:"compaction,omitempty"`
 	Title      ModelRoleConfig `json:"title,omitempty"`
+	Explorer   ModelRoleConfig `json:"explorer,omitempty"`
+	Critic     ModelRoleConfig `json:"critic,omitempty"`
+	Automation ModelRoleConfig `json:"automation,omitempty"`
 }
 
 func (cfg ModelRolesConfig) Get(role ModelRole) ModelRoleConfig {
@@ -32,6 +38,12 @@ func (cfg ModelRolesConfig) Get(role ModelRole) ModelRoleConfig {
 		return cfg.Compaction
 	case ModelRoleTitle:
 		return cfg.Title
+	case ModelRoleExplorer:
+		return cfg.Explorer
+	case ModelRoleCritic:
+		return cfg.Critic
+	case ModelRoleAutomation:
+		return cfg.Automation
 	default:
 		return cfg.Action
 	}
@@ -45,6 +57,12 @@ func (cfg *ModelRolesConfig) Set(role ModelRole, value ModelRoleConfig) {
 		cfg.Compaction = value
 	case ModelRoleTitle:
 		cfg.Title = value
+	case ModelRoleExplorer:
+		cfg.Explorer = value
+	case ModelRoleCritic:
+		cfg.Critic = value
+	case ModelRoleAutomation:
+		cfg.Automation = value
 	default:
 		cfg.Action = value
 	}
@@ -67,6 +85,9 @@ func NormalizeModelRolesConfig(cfg ModelRolesConfig) ModelRolesConfig {
 	cfg.Planner = NormalizeModelRoleConfig(cfg.Planner)
 	cfg.Compaction = NormalizeModelRoleConfig(cfg.Compaction)
 	cfg.Title = NormalizeModelRoleConfig(cfg.Title)
+	cfg.Explorer = NormalizeModelRoleConfig(cfg.Explorer)
+	cfg.Critic = NormalizeModelRoleConfig(cfg.Critic)
+	cfg.Automation = NormalizeModelRoleConfig(cfg.Automation)
 	return cfg
 }
 

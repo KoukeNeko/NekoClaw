@@ -2,6 +2,7 @@ package tooling
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -18,6 +19,7 @@ const maxToolRounds = 8
 // messages. Outputs exceeding this are head+tail truncated to preserve
 // both the initial context and the final result/error.
 const maxToolResultBytes = 30 * 1024 // 30 KB ≈ ~7500 tokens
+const doomLoopWindow = 20
 
 type Runtime struct {
 	executor  Executor
@@ -42,6 +44,26 @@ func (r *Runtime) ReadOnlyToolNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func (r *Runtime) DefaultActionToolNames() []string {
+	return []string{
+		"file_list",
+		"file_read",
+		"file_search",
+		"git_status",
+		"git_diff",
+		"sessions_list",
+		"memory_search",
+		"providers_list",
+		"accounts_list",
+		"datetime",
+		"task_list",
+		"task_update",
+		"tool_catalog_search",
+		"tool_catalog_describe",
+		"spawn_subagent",
+	}
 }
 
 func (r *Runtime) GetPendingRun(runID string) (PendingRun, error) {
@@ -93,6 +115,13 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	if modelID == "" {
 		modelID = "default"
 	}
+	if len(req.AllowedTools) == 0 {
+		if req.ToolMode == core.ToolModePlanner {
+			req.AllowedTools = r.ReadOnlyToolNames()
+		} else {
+			req.AllowedTools = append([]string(nil), r.DefaultActionToolNames()...)
+		}
+	}
 	if strings.TrimSpace(req.RunID) != "" {
 		run, err := r.approvals.Get(req.RunID)
 		if err != nil {
@@ -116,6 +145,8 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	}
 
 	lastReply := ""
+	recentFingerprints := make([]string, 0, doomLoopWindow)
+	warnedFingerprints := map[string]struct{}{}
 	for round := 0; round < maxToolRounds; round++ {
 		if len(pending) == 0 {
 			toolDefs := r.filterDefinitions(req.AllowedTools)
@@ -174,7 +205,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			if !r.executor.HasTool(call.Name) {
 				continue
 			}
-			if !r.toolAllowed(req.AllowedTools, call.Name) {
+			if !r.toolAllowed(req.ToolMode, req.AllowedTools, call.Name) {
 				continue
 			}
 			if !r.executor.IsCallMutating(call) {
@@ -266,7 +297,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 				sessionMsgs = append(sessionMsgs, assistantTool, toolMsg)
 				continue
 			}
-			if !r.toolAllowed(req.AllowedTools, call.Name) {
+			if !r.toolAllowed(req.ToolMode, req.AllowedTools, call.Name) {
 				errMsg := fmt.Sprintf("tool not allowed for current run: %s", call.Name)
 				events = append(events, core.ToolEvent{
 					At:         time.Now(),
@@ -351,6 +382,29 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 				ProviderMeta: consumeRawModel(),
 				CreatedAt:    time.Now(),
 			}
+			fingerprint := toolFingerprint(call)
+			count := fingerprintCount(recentFingerprints, fingerprint)
+			if count >= 3 {
+				if _, ok := warnedFingerprints[fingerprint]; ok {
+					return RunResult{}, fmt.Errorf("doom loop detected for tool %s", call.Name)
+				}
+				warnedFingerprints[fingerprint] = struct{}{}
+				warnMsg := fmt.Sprintf("[SYSTEM WARNING] repeated tool call detected for %s; choose a different approach before retrying.", call.Name)
+				messages = append(messages, core.Message{
+					Role:      core.RoleSystem,
+					Content:   warnMsg,
+					CreatedAt: time.Now(),
+				})
+				events = append(events, core.ToolEvent{
+					At:         time.Now(),
+					ToolCallID: call.ID,
+					ToolName:   call.Name,
+					Phase:      "failed",
+					Mutating:   mutating,
+					Error:      "doom_loop_warning",
+				})
+				continue
+			}
 			content, err := r.executor.Run(ctx, call)
 			if err != nil {
 				content = "tool_error: " + err.Error()
@@ -389,6 +443,13 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			}
 			messages = append(messages, assistantTool, toolMsg)
 			sessionMsgs = append(sessionMsgs, assistantTool, toolMsg)
+			recentFingerprints = append(recentFingerprints, fingerprint)
+			if len(recentFingerprints) > doomLoopWindow {
+				recentFingerprints = recentFingerprints[len(recentFingerprints)-doomLoopWindow:]
+			}
+			if call.Name == "tool_catalog_describe" {
+				req.AllowedTools = expandAllowedTools(req.AllowedTools, describedToolNames(call.Arguments))
+			}
 		}
 		pending = nil
 	}
@@ -408,6 +469,70 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		},
 		SessionMessages: sessionMsgs,
 	}, nil
+}
+
+func describedToolNames(raw json.RawMessage) []string {
+	var args struct {
+		Names []string `json:"names"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(args.Names))
+	for _, name := range args.Names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
+func expandAllowedTools(existing []string, names []string) []string {
+	if len(names) == 0 {
+		return existing
+	}
+	set := make(map[string]struct{}, len(existing)+len(names))
+	out := make([]string, 0, len(existing)+len(names))
+	for _, name := range existing {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, ok := set[name]; ok {
+			continue
+		}
+		set[name] = struct{}{}
+		out = append(out, name)
+	}
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, ok := set[name]; ok {
+			continue
+		}
+		set[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
+}
+
+func toolFingerprint(call provider.ToolCall) string {
+	sum := sha256.Sum256(append([]byte(strings.TrimSpace(call.Name)+"|"), []byte(strings.TrimSpace(string(call.Arguments)))...))
+	return fmt.Sprintf("%x", sum[:8])
+}
+
+func fingerprintCount(window []string, fingerprint string) int {
+	count := 0
+	for _, item := range window {
+		if item == fingerprint {
+			count++
+		}
+	}
+	return count
 }
 
 func (r *Runtime) filterDefinitions(allowed []string) []provider.ToolDefinition {
@@ -432,7 +557,10 @@ func (r *Runtime) filterDefinitions(allowed []string) []provider.ToolDefinition 
 	return filtered
 }
 
-func (r *Runtime) toolAllowed(allowed []string, toolName string) bool {
+func (r *Runtime) toolAllowed(mode core.ToolMode, allowed []string, toolName string) bool {
+	if mode != core.ToolModePlanner && r.executor.HasTool(toolName) {
+		return true
+	}
 	if len(allowed) == 0 {
 		return true
 	}

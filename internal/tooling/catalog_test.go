@@ -1,6 +1,7 @@
 package tooling
 
 import (
+	"context"
 	"sort"
 	"testing"
 
@@ -16,6 +17,16 @@ func (stubToolBackend) SearchMemory(string, int) ([]MemoryResult, error) { retur
 func (stubToolBackend) ReadMemoryFile(string, int, int) (string, error) { return "", nil }
 
 func (stubToolBackend) SaveMemory(string) error { return nil }
+
+func (stubToolBackend) TaskList(string) core.TaskList { return core.TaskList{} }
+
+func (stubToolBackend) SaveTaskList(list core.TaskList) (core.TaskList, error) { return list, nil }
+
+func (stubToolBackend) ToolCatalog() []ToolCatalogEntry { return nil }
+
+func (stubToolBackend) SpawnSubagent(context.Context, string, core.Surface, string, string, string) (core.SubagentArtifact, error) {
+	return core.SubagentArtifact{}, nil
+}
 
 func (stubToolBackend) Providers() []string { return nil }
 

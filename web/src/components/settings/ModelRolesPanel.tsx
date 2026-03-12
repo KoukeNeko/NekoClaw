@@ -14,7 +14,7 @@ import type {
 type StatusTone = "success" | "error" | "info";
 type StatusState = { tone: StatusTone; message: string } | null;
 type BusyAction = "" | "reload" | "save" | "provider";
-type EditableRoleKey = "planner" | "compaction" | "title";
+type EditableRoleKey = "planner" | "compaction" | "title" | "explorer" | "critic" | "automation";
 type DraftThinkingMode = ThinkingMode | "";
 
 interface DraftRoleConfig {
@@ -28,9 +28,12 @@ interface DraftModelRolesConfig {
   planner: DraftRoleConfig;
   compaction: DraftRoleConfig;
   title: DraftRoleConfig;
+  explorer: DraftRoleConfig;
+  critic: DraftRoleConfig;
+  automation: DraftRoleConfig;
 }
 
-const ROLE_ORDER: EditableRoleKey[] = ["planner", "compaction", "title"];
+const ROLE_ORDER: EditableRoleKey[] = ["planner", "compaction", "title", "explorer", "critic", "automation"];
 const THINKING_OPTIONS: ThinkingMode[] = [
   "auto",
   "off",
@@ -43,11 +46,17 @@ const ROLE_LABELS: Record<EditableRoleKey, string> = {
   planner: "Planner",
   compaction: "Compaction",
   title: "Title",
+  explorer: "Explorer",
+  critic: "Critic",
+  automation: "Automation",
 };
 const ROLE_DESCRIPTIONS: Record<EditableRoleKey, string> = {
   planner: "建立 plan 時使用的模型角色。未設定時會 fallback 到 Action。",
   compaction: "背景 transcript 摘要與 startup catch-up 使用的模型角色。",
   title: "首次回合的 session title generation 使用的模型角色。",
+  explorer: "Code Explorer subagent 使用的模型角色。",
+  critic: "Critic subagent 與計畫完成前 review 使用的模型角色。",
+  automation: "Automation workflow 的 agent_run 預設模型角色。",
 };
 const EMPTY_DRAFT_ROLE: DraftRoleConfig = {
   provider: "",
@@ -100,6 +109,9 @@ function normalizeDraftModelRolesConfig(
     planner: normalizeDraftRoleConfig(config?.planner),
     compaction: normalizeDraftRoleConfig(config?.compaction),
     title: normalizeDraftRoleConfig(config?.title),
+    explorer: normalizeDraftRoleConfig(config?.explorer),
+    critic: normalizeDraftRoleConfig(config?.critic),
+    automation: normalizeDraftRoleConfig(config?.automation),
   };
 }
 
@@ -125,6 +137,9 @@ function serializeDraftModelRolesConfig(
     planner: serializeDraftRoleConfig(config.planner),
     compaction: serializeDraftRoleConfig(config.compaction),
     title: serializeDraftRoleConfig(config.title),
+    explorer: serializeDraftRoleConfig(config.explorer),
+    critic: serializeDraftRoleConfig(config.critic),
+    automation: serializeDraftRoleConfig(config.automation),
   };
 }
 
@@ -158,6 +173,9 @@ async function loadRoleModelOptions(
     planner: providerModels.get(config.planner.provider) ?? [],
     compaction: providerModels.get(config.compaction.provider) ?? [],
     title: providerModels.get(config.title.provider) ?? [],
+    explorer: providerModels.get(config.explorer.provider) ?? [],
+    critic: providerModels.get(config.critic.provider) ?? [],
+    automation: providerModels.get(config.automation.provider) ?? [],
   };
 }
 
@@ -178,17 +196,26 @@ export function ModelRolesPanel() {
     planner: EMPTY_DRAFT_ROLE,
     compaction: EMPTY_DRAFT_ROLE,
     title: EMPTY_DRAFT_ROLE,
+    explorer: EMPTY_DRAFT_ROLE,
+    critic: EMPTY_DRAFT_ROLE,
+    automation: EMPTY_DRAFT_ROLE,
   });
   const [draftConfig, setDraftConfig] = useState<DraftModelRolesConfig>({
     action: EMPTY_DRAFT_ROLE,
     planner: EMPTY_DRAFT_ROLE,
     compaction: EMPTY_DRAFT_ROLE,
     title: EMPTY_DRAFT_ROLE,
+    explorer: EMPTY_DRAFT_ROLE,
+    critic: EMPTY_DRAFT_ROLE,
+    automation: EMPTY_DRAFT_ROLE,
   });
   const [modelOptions, setModelOptions] = useState<Record<EditableRoleKey, string[]>>({
     planner: [],
     compaction: [],
     title: [],
+    explorer: [],
+    critic: [],
+    automation: [],
   });
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<BusyAction>("");

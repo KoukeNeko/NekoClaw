@@ -66,6 +66,13 @@ import type {
   TranscriptEntry,
   CreatePlanRequest,
   PlanRecord,
+  PlaybookEntry,
+  TaskList,
+  PermissionGrant,
+  WorkflowRecord,
+  WorkflowRun,
+  SnapshotRecord,
+  TraceRecord,
 } from "./types";
 import { dispatchBrowserAuthEvent } from "./authEvents";
 
@@ -776,6 +783,76 @@ export function getModelRolesConfig(): Promise<ModelRolesConfig> {
 
 export function setModelRolesConfig(config: ModelRolesConfig): Promise<void> {
   return put("/v1/model-roles/config", config);
+}
+
+export async function listPlaybooks(status?: string): Promise<PlaybookEntry[]> {
+  const suffix = status ? `?status=${encodeURIComponent(status)}` : "";
+  const resp = await get<{ entries: PlaybookEntry[] }>(`/v1/playbooks${suffix}`);
+  return resp.entries ?? [];
+}
+
+export function savePlaybook(entry: Partial<PlaybookEntry>): Promise<PlaybookEntry> {
+  return post("/v1/playbooks", entry);
+}
+
+export function approvePlaybook(id: string): Promise<PlaybookEntry> {
+  return post(`/v1/playbooks/${encodeURIComponent(id)}/approve`);
+}
+
+export function archivePlaybook(id: string): Promise<PlaybookEntry> {
+  return post(`/v1/playbooks/${encodeURIComponent(id)}/archive`);
+}
+
+export function getTasks(sessionID: string): Promise<TaskList> {
+  return get(`/v1/tasks?session_id=${encodeURIComponent(sessionID)}`);
+}
+
+export function saveTasks(list: TaskList): Promise<TaskList> {
+  return put("/v1/tasks", list);
+}
+
+export async function getPermissions(): Promise<PermissionGrant[]> {
+  const resp = await get<{ grants: PermissionGrant[] }>("/v1/permissions");
+  return resp.grants ?? [];
+}
+
+export async function savePermissions(grants: PermissionGrant[]): Promise<PermissionGrant[]> {
+  const resp = await put<{ grants: PermissionGrant[] }>("/v1/permissions", { grants });
+  return resp.grants ?? [];
+}
+
+export async function listAutomations(): Promise<WorkflowRecord[]> {
+  const resp = await get<{ automations: WorkflowRecord[] }>("/v1/automations");
+  return resp.automations ?? [];
+}
+
+export function saveAutomation(record: Partial<WorkflowRecord>): Promise<WorkflowRecord> {
+  if (record.id) {
+    return put(`/v1/automations/${encodeURIComponent(record.id)}`, record);
+  }
+  return post("/v1/automations", record);
+}
+
+export function deleteAutomation(id: string): Promise<void> {
+  return del(`/v1/automations/${encodeURIComponent(id)}`);
+}
+
+export function runAutomation(id: string, payload?: unknown): Promise<WorkflowRun> {
+  return post(`/v1/automations/${encodeURIComponent(id)}/runs`, { payload });
+}
+
+export async function listSnapshots(sessionID: string): Promise<SnapshotRecord[]> {
+  const resp = await get<{ snapshots: SnapshotRecord[] }>(
+    `/v1/snapshots?session_id=${encodeURIComponent(sessionID)}`,
+  );
+  return resp.snapshots ?? [];
+}
+
+export async function listTraces(sessionID: string): Promise<TraceRecord[]> {
+  const resp = await get<{ traces: TraceRecord[] }>(
+    `/v1/traces?session_id=${encodeURIComponent(sessionID)}`,
+  );
+  return resp.traces ?? [];
 }
 
 export function getDiscordConfig(): Promise<DiscordConfig> {

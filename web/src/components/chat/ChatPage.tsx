@@ -5,6 +5,7 @@ import { getDefaultProvider } from "@/api/client";
 import { MessageList } from "./MessageList";
 import { ChatInput } from "./ChatInput";
 import { ChatHeader } from "./ChatHeader";
+import { TaskStrip } from "./TaskStrip";
 import { ToolApprovalModal } from "./ToolApprovalModal";
 
 /**
@@ -51,6 +52,7 @@ export function ChatPage() {
   return (
     <div className="flex flex-col h-full">
       <ChatHeader />
+      <TaskStrip sessionID={sessionID} />
 
       <div className="flex-1 overflow-hidden">
         <MessageList onApprovePlan={approvePlan} onRejectPlan={rejectPlan} />

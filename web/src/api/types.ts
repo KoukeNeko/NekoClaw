@@ -592,6 +592,9 @@ export interface ModelRolesConfig {
   planner: ModelRoleConfig;
   compaction: ModelRoleConfig;
   title: ModelRoleConfig;
+  explorer?: ModelRoleConfig;
+  critic?: ModelRoleConfig;
+  automation?: ModelRoleConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -911,6 +914,135 @@ export interface ToolCatalogEntry {
 
 export interface ToolsConfig {
   brave_search_api_key: string;
+}
+
+export type PlaybookKind = "instruction" | "preference" | "workflow";
+export type PlaybookScope = "global" | "workspace" | "persona" | "surface" | "session";
+export type PlaybookStatus = "candidate" | "active" | "archived";
+
+export interface PlaybookEntry {
+  id: string;
+  kind: PlaybookKind;
+  scope: PlaybookScope;
+  scope_value?: string;
+  status: PlaybookStatus;
+  content: string;
+  source?: string;
+  helpful_count: number;
+  harmful_count: number;
+  created_at: string;
+  updated_at: string;
+  approved_at?: string;
+}
+
+export type TaskStatus = "pending" | "in_progress" | "completed" | "blocked";
+
+export interface TaskItem {
+  id: string;
+  content: string;
+  status: TaskStatus;
+  order: number;
+  updated_at?: string;
+}
+
+export interface TaskList {
+  session_id: string;
+  plan_id?: string;
+  items: TaskItem[];
+  updated_at?: string;
+}
+
+export interface PermissionGrant {
+  id: string;
+  workspace_root: string;
+  tool_name: string;
+  selector?: string;
+  decision: string;
+  created_at: string;
+  expires_at?: string;
+}
+
+export type WorkflowTriggerKind = "schedule" | "webhook" | "event";
+export type WorkflowStepKind =
+  | "agent_run"
+  | "subagent_run"
+  | "tool_call"
+  | "approval_gate"
+  | "emit_message";
+export type WorkflowRunStatus = "pending" | "running" | "completed" | "failed";
+
+export interface WorkflowStep {
+  id: string;
+  kind: WorkflowStepKind;
+  name?: string;
+  template?: string;
+  subagent?: string;
+  tool_name?: string;
+  tool_args?: unknown;
+  review?: boolean;
+  message_role?: MessageRole;
+}
+
+export interface WorkflowRecord {
+  id: string;
+  name: string;
+  session_id?: string;
+  surface?: Surface;
+  enabled: boolean;
+  trigger_kind: WorkflowTriggerKind;
+  schedule_interval_mins?: number;
+  webhook_token?: string;
+  event_name?: string;
+  steps: WorkflowStep[];
+  created_at: string;
+  updated_at: string;
+  last_run_at?: string;
+  next_run_at?: string;
+}
+
+export interface WorkflowRun {
+  id: string;
+  workflow_id: string;
+  session_id?: string;
+  trigger_kind: WorkflowTriggerKind;
+  status: WorkflowRunStatus;
+  trigger_payload?: unknown;
+  step_outputs?: Record<string, string>;
+  started_at: string;
+  finished_at?: string;
+  last_error?: string;
+}
+
+export interface SnapshotRecord {
+  id: string;
+  session_id: string;
+  workspace_root?: string;
+  tool_name?: string;
+  artifact?: string;
+  created_at: string;
+  restored_at?: string;
+}
+
+export interface SubagentArtifact {
+  type: string;
+  goal: string;
+  markdown: string;
+  created_at: string;
+}
+
+export interface TraceRecord {
+  id: string;
+  session_id?: string;
+  run_id?: string;
+  run_kind?: string;
+  provider?: string;
+  model?: string;
+  prompt?: string;
+  reply?: string;
+  tool_events?: ToolEvent[];
+  reminders?: ReminderEvent[];
+  subagent_artifacts?: SubagentArtifact[];
+  created_at: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -12,6 +12,10 @@ type Backend interface {
 	SearchMemory(query string, limit int) ([]MemoryResult, error)
 	ReadMemoryFile(relPath string, from, lines int) (string, error)
 	SaveMemory(content string) error
+	TaskList(sessionID string) core.TaskList
+	SaveTaskList(list core.TaskList) (core.TaskList, error)
+	ToolCatalog() []ToolCatalogEntry
+	SpawnSubagent(ctx context.Context, sessionID string, surface core.Surface, subagentType string, goal string, contextHint string) (core.SubagentArtifact, error)
 	Providers() []string
 	Accounts(providerID string) []core.AccountSnapshot
 }
@@ -42,6 +46,7 @@ type RunRequest struct {
 	Messages     []core.Message
 	UserMessage  core.Message
 	EnableTools  bool
+	ToolMode     core.ToolMode
 	RunID        string
 	Approvals    []core.ToolApprovalDecision
 	AllowedTools []string

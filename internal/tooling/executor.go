@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/doeshing/nekoclaw/internal/core"
 	"github.com/doeshing/nekoclaw/internal/provider"
 )
 
@@ -101,6 +102,16 @@ func (e *RuntimeExecutor) Run(ctx context.Context, call provider.ToolCall) (stri
 		return e.runMemoryGet(call.Arguments)
 	case "memory_save":
 		return e.runMemorySave(call.Arguments)
+	case "task_list":
+		return e.runTaskList(call.Arguments)
+	case "task_update":
+		return e.runTaskUpdate(call.Arguments)
+	case "tool_catalog_search":
+		return e.runToolCatalogSearch(call.Arguments)
+	case "tool_catalog_describe":
+		return e.runToolCatalogDescribe(call.Arguments)
+	case "spawn_subagent":
+		return e.runSpawnSubagent(ctx, call.Arguments)
 	case "providers_list":
 		return e.runProvidersList()
 	case "accounts_list":
@@ -349,6 +360,141 @@ func (e *RuntimeExecutor) runMemorySave(raw json.RawMessage) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("Saved to memory: %s", content), nil
+}
+
+func (e *RuntimeExecutor) runTaskList(raw json.RawMessage) (string, error) {
+	var args struct {
+		SessionID string `json:"session_id"`
+	}
+	_ = json.Unmarshal(raw, &args)
+	if strings.TrimSpace(args.SessionID) == "" {
+		args.SessionID = "main"
+	}
+	list := e.backend.TaskList(args.SessionID)
+	payload, _ := json.MarshalIndent(list.Items, "", "  ")
+	return string(payload), nil
+}
+
+func (e *RuntimeExecutor) runTaskUpdate(raw json.RawMessage) (string, error) {
+	var args struct {
+		SessionID string `json:"session_id"`
+		Items     []struct {
+			ID      string `json:"id"`
+			Content string `json:"content"`
+			Status  string `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(args.SessionID) == "" {
+		args.SessionID = "main"
+	}
+	list := core.TaskList{
+		SessionID: args.SessionID,
+		Items:     make([]core.TaskItem, 0, len(args.Items)),
+	}
+	for i, item := range args.Items {
+		list.Items = append(list.Items, core.TaskItem{
+			ID:      strings.TrimSpace(item.ID),
+			Content: strings.TrimSpace(item.Content),
+			Status:  core.TaskStatus(strings.TrimSpace(item.Status)),
+			Order:   i,
+		})
+	}
+	saved, err := e.backend.SaveTaskList(list)
+	if err != nil {
+		return "", err
+	}
+	payload, _ := json.MarshalIndent(saved.Items, "", "  ")
+	return string(payload), nil
+}
+
+func (e *RuntimeExecutor) runToolCatalogSearch(raw json.RawMessage) (string, error) {
+	var args struct {
+		Query string `json:"query"`
+		Limit int    `json:"limit"`
+	}
+	_ = json.Unmarshal(raw, &args)
+	query := strings.ToLower(strings.TrimSpace(args.Query))
+	limit := args.Limit
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	type summary struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Mutating    bool   `json:"mutating"`
+	}
+	out := make([]summary, 0, limit)
+	for _, entry := range e.backend.ToolCatalog() {
+		if query != "" {
+			haystack := strings.ToLower(entry.Name + " " + entry.Description)
+			if !strings.Contains(haystack, query) {
+				continue
+			}
+		}
+		out = append(out, summary{
+			Name:        entry.Name,
+			Description: entry.Description,
+			Mutating:    entry.Mutating,
+		})
+		if len(out) >= limit {
+			break
+		}
+	}
+	payload, _ := json.MarshalIndent(out, "", "  ")
+	return string(payload), nil
+}
+
+func (e *RuntimeExecutor) runToolCatalogDescribe(raw json.RawMessage) (string, error) {
+	var args struct {
+		Names []string `json:"names"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return "", err
+	}
+	requested := map[string]struct{}{}
+	for _, name := range args.Names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		requested[name] = struct{}{}
+	}
+	entries := make([]ToolCatalogEntry, 0, len(requested))
+	for _, entry := range e.backend.ToolCatalog() {
+		if _, ok := requested[entry.Name]; ok {
+			entries = append(entries, entry)
+		}
+	}
+	payload, _ := json.MarshalIndent(entries, "", "  ")
+	return string(payload), nil
+}
+
+func (e *RuntimeExecutor) runSpawnSubagent(ctx context.Context, raw json.RawMessage) (string, error) {
+	var args struct {
+		SessionID   string `json:"session_id"`
+		Surface     string `json:"surface"`
+		Type        string `json:"type"`
+		Goal        string `json:"goal"`
+		ContextHint string `json:"context_hint"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return "", err
+	}
+	artifact, err := e.backend.SpawnSubagent(
+		ctx,
+		strings.TrimSpace(args.SessionID),
+		core.Surface(strings.TrimSpace(args.Surface)),
+		args.Type,
+		args.Goal,
+		args.ContextHint,
+	)
+	if err != nil {
+		return "", err
+	}
+	return artifact.Markdown, nil
 }
 
 func (e *RuntimeExecutor) runProvidersList() (string, error) {

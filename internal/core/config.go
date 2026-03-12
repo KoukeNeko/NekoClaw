@@ -108,6 +108,9 @@ type AppConfig struct {
 	ModelRoles          ModelRolesConfig `json:"model_roles,omitempty"`
 	General             GeneralConfig    `json:"general,omitempty"`
 	Compaction          CompactionConfig `json:"compaction,omitempty"`
+	Playbooks           PlaybookConfig   `json:"playbooks,omitempty"`
+	Automations         AutomationConfig `json:"automations,omitempty"`
+	Permissions         PermissionConfig `json:"permissions,omitempty"`
 	Security            SecurityConfig   `json:"security,omitempty"`
 	Discord             DiscordConfig    `json:"discord,omitempty"`
 	Telegram            TelegramConfig   `json:"telegram,omitempty"`
