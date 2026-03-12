@@ -3278,13 +3278,13 @@ func (s *Service) attemptSingleProvider(
 		}
 
 		if providerID == "google-gemini-cli" {
-			account, err = s.ensureGeminiProject(ctx, prov, pool, account)
+			requestedModelID := attemptModelID
+			var usable bool
+			account, attemptModelID, usable, err = s.prepareGeminiRuntimeTarget(ctx, prov, pool, account, attemptModelID)
 			if err != nil {
 				lastErr = err
 				break
 			}
-			requestedModelID := attemptModelID
-			resolvedModel, source, usable := s.resolveRuntimeModel(ctx, prov, providerID, account, attemptModelID)
 			if !usable {
 				s.handleGeminiModelNotFound(pool, account, requestedModelID, false)
 				lastErr = &provider.FailureError{
@@ -3296,56 +3296,26 @@ func (s *Service) attemptSingleProvider(
 				excludedAccounts[account.ID] = struct{}{}
 				continue
 			}
-			if resolvedModel != attemptModelID {
-				logService.Logf(
-					"runtime model resolved: provider=%s profile_id=%s source=%s requested_model=%s resolved_model=%s",
-					providerID,
-					account.ID,
-					source,
-					attemptModelID,
-					resolvedModel,
-				)
-				attemptModelID = resolvedModel
-			}
 		}
 
 		attemptGenerationParams := withThinkingMode(baseGenerationParams, effectiveThinkingMode)
 
-		if s.shouldUseGeminiCLIHeadless(providerID, params, account, modelMessages) {
-			store := s.authStoreSafe()
-			var cliErr error
-			var cliResp geminiCLIHeadlessResponse
-			if store == nil {
-				cliErr = &provider.FailureError{
-					Reason:   core.FailureAuthPermanent,
-					Message:  "auth store not configured",
-					Endpoint: geminiCLIProviderID,
-				}
-			} else {
-				credential, credentialErr := s.loadGeminiCLICredential(account.ID, account.Token)
-				if credentialErr != nil {
-					cliErr = &provider.FailureError{
-						Reason:   core.FailureAuthPermanent,
-						Message:  credentialErr.Error(),
-						Endpoint: geminiCLIProviderID,
-					}
-				} else {
-					cliReq := geminiCLIHeadlessRequest{
-						ProfileID:     account.ID,
-						Model:         attemptModelID,
-						Prompt:        renderGeminiCLIHeadlessPrompt(modelMessages),
-						Credential:    credential,
-						WorkspaceRoot: s.workspaceRoot,
-						AuthBaseDir:   store.BaseDir(),
-					}
-					if params.onStreamText != nil {
-						cliResp, cliErr = s.geminiCLIRunner.GenerateStream(ctx, cliReq, params.onStreamText)
-					} else {
-						cliResp, cliErr = s.geminiCLIRunner.Generate(ctx, cliReq)
-					}
-				}
-			}
-
+		cliSurface := "chat"
+		if params.toolMode == core.ToolModePlanner {
+			cliSurface = "planner"
+		} else if params.isFallback {
+			cliSurface = "chat_fallback"
+		}
+		if cliResp, cliRouted, cliErr := s.maybeGenerateWithGeminiCLIHeadless(ctx, geminiCLIExecutionRequest{
+			Surface:     cliSurface,
+			ProviderID:  providerID,
+			ModelID:     attemptModelID,
+			Account:     account,
+			Messages:    modelMessages,
+			EnableTools: params.enableTools,
+			ToolMode:    params.toolMode,
+			OnText:      params.onStreamText,
+		}); cliRouted {
 			if cliErr == nil {
 				responseElapsedMs := elapsedMs()
 				replyText := cliResp.Text
@@ -4208,24 +4178,6 @@ func (s *Service) loadGeminiCLICredential(profileID string, accessToken string) 
 		return auth.Credential{}, auth.ErrCredentialNotFound
 	}
 	return credential, nil
-}
-
-func (s *Service) shouldUseGeminiCLIHeadless(
-	providerID string,
-	params attemptSingleProviderParams,
-	account core.Account,
-	modelMessages []core.Message,
-) bool {
-	if providerID != geminiCLIProviderID || params.isFallback || params.enableTools {
-		return false
-	}
-	if s.geminiCLIRunner == nil {
-		return false
-	}
-	if !canUseGeminiCLIHeadless(modelMessages) {
-		return false
-	}
-	return s.geminiExecutionModeForAccount(account) == geminiExecutionModeCLIHeadless
 }
 
 func (s *Service) maybeRefreshAccountCredential(
@@ -5143,22 +5095,49 @@ func (s *Service) generateSessionTitleAsync(
 		userSnippet := truncateRunes(userContent, 500)
 		assistantSnippet := truncateRunes(assistantContent, 500)
 		prompt := fmt.Sprintf("User: %s\nAssistant: %s", userSnippet, assistantSnippet)
-
-		resp, err := prov.Generate(ctx, provider.GenerateRequest{
-			Model: titleModelID,
-			Messages: []core.Message{
-				{Role: core.RoleSystem, Content: titleGenSystemPrompt},
-				{Role: core.RoleUser, Content: prompt},
-			},
-			Account:    titleAccount,
-			Generation: titleGeneration,
-		})
+		titleMessages := []core.Message{
+			{Role: core.RoleSystem, Content: titleGenSystemPrompt},
+			{Role: core.RoleUser, Content: prompt},
+		}
+		titlePool := s.Pool(prov.ID())
+		titleAccount, titleModelID, usable, err := s.prepareGeminiRuntimeTarget(ctx, prov, titlePool, titleAccount, titleModelID)
 		if err != nil {
 			logService.Errorf("title gen: session_id=%s error=%q", sessionID, err)
 			return
 		}
+		if !usable {
+			logService.Warnf("title gen skipped: session_id=%s provider=%s model=%s", sessionID, prov.ID(), titleModelID)
+			return
+		}
 
-		title := strings.TrimSpace(resp.Text)
+		titleText := ""
+		if cliResp, cliRouted, cliErr := s.maybeGenerateWithGeminiCLIHeadless(ctx, geminiCLIExecutionRequest{
+			Surface:    "title",
+			ProviderID: prov.ID(),
+			ModelID:    titleModelID,
+			Account:    titleAccount,
+			Messages:   titleMessages,
+		}); cliRouted {
+			if cliErr != nil {
+				logService.Errorf("title gen: session_id=%s error=%q", sessionID, cliErr)
+				return
+			}
+			titleText = cliResp.Text
+		} else {
+			resp, err := prov.Generate(ctx, provider.GenerateRequest{
+				Model:      titleModelID,
+				Messages:   titleMessages,
+				Account:    titleAccount,
+				Generation: titleGeneration,
+			})
+			if err != nil {
+				logService.Errorf("title gen: session_id=%s error=%q", sessionID, err)
+				return
+			}
+			titleText = resp.Text
+		}
+
+		title := strings.TrimSpace(titleText)
 		if title == "" {
 			return
 		}
@@ -5186,45 +5165,6 @@ func (s *Service) resolveTitleGenerationTarget(
 
 	if titleProviderID == "" {
 		return nil, "", core.Account{}, nil, false
-	}
-
-	if titleProviderID != "google-gemini-cli" {
-		prov, pool, err := s.resolveProviderPool(titleProviderID)
-		if err != nil {
-			return nil, "", core.Account{}, nil, false
-		}
-		titleGeneration := workflowThinkingGenerationParams(titleProviderID, titleThinkingMode)
-		if account.Provider == titleProviderID && strings.TrimSpace(account.ID) != "" {
-			return prov, titleModelID, account, titleGeneration, true
-		}
-		if pool == nil {
-			return nil, "", core.Account{}, nil, false
-		}
-		titleAccount, ok := pool.Acquire(s.preferredProfile(titleProviderID))
-		if !ok {
-			return nil, "", core.Account{}, nil, false
-		}
-		return prov, titleModelID, titleAccount, titleGeneration, true
-	}
-
-	for _, fallback := range s.GetFallbacks() {
-		fallbackProviderID := strings.TrimSpace(fallback.Provider)
-		if fallbackProviderID == "" || fallbackProviderID == "google-gemini-cli" {
-			continue
-		}
-		prov, pool, err := s.resolveProviderPool(fallbackProviderID)
-		if err != nil || pool == nil {
-			continue
-		}
-		titleAccount, ok := pool.Acquire(s.preferredProfile(fallbackProviderID))
-		if !ok {
-			continue
-		}
-		fallbackModelID := strings.TrimSpace(fallback.Model)
-		if fallbackModelID == "" {
-			fallbackModelID = "default"
-		}
-		return prov, fallbackModelID, titleAccount, workflowThinkingGenerationParams(fallbackProviderID, titleThinkingMode), true
 	}
 
 	prov, _, err := s.resolveProviderPool(titleProviderID)

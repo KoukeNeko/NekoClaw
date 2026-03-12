@@ -241,7 +241,7 @@ func (s *Service) compactSessionInBackground(ctx context.Context, sessionID stri
 		return
 	}
 
-	runtime := resolveCompactionRuntime(s, compactable, cfg)
+	runtime := resolveCompactionRuntime(ctx, s, compactable, cfg)
 	if !s.shouldCompactLoadedSession(sessionID, compactable, runtime.ContextWindow, cfg) {
 		return
 	}
@@ -301,7 +301,7 @@ type compactionRuntimeTarget struct {
 	Generation      *provider.GenerationParams
 }
 
-func resolveCompactionRuntime(s *Service, entries []core.SessionEntry, cfg core.CompactionConfig) compactionRuntimeTarget {
+func resolveCompactionRuntime(ctx context.Context, s *Service, entries []core.SessionEntry, cfg core.CompactionConfig) compactionRuntimeTarget {
 	resolved := s.ResolveModelRole(core.ModelRoleCompaction)
 	providerID := strings.TrimSpace(resolved.Provider)
 	modelID := strings.TrimSpace(resolved.Model)
@@ -359,8 +359,37 @@ func resolveCompactionRuntime(s *Service, entries []core.SessionEntry, cfg core.
 			Generation:    generation,
 		}
 	}
+	account, modelID, usable, err := s.prepareGeminiRuntimeTarget(ctx, prov, pool, account, modelID)
+	if err != nil {
+		logService.Warnf("compaction runtime prepare failed: provider=%s profile_id=%s error=%q", providerID, account.ID, err)
+		return compactionRuntimeTarget{
+			ModelID:       modelID,
+			ContextWindow: contextWindow,
+			Generation:    generation,
+		}
+	}
+	if !usable {
+		return compactionRuntimeTarget{
+			ModelID:       modelID,
+			ContextWindow: contextWindow,
+			Generation:    generation,
+		}
+	}
+	if prov != nil {
+		if cw := prov.ContextWindow(modelID); cw > 0 {
+			contextWindow = cw
+		}
+	}
+	wrappedProvider := prov
+	if strings.TrimSpace(providerID) == geminiCLIProviderID {
+		wrappedProvider = &geminiCLIProviderAdapter{
+			service: s,
+			base:    prov,
+			surface: "compaction",
+		}
+	}
 	return compactionRuntimeTarget{
-		Provider:        prov,
+		Provider:        wrappedProvider,
 		ModelID:         modelID,
 		Account:         account,
 		ContextWindow:   contextWindow,

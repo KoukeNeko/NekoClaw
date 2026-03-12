@@ -163,7 +163,7 @@ func TestResolveCompactionRuntimeUsesCompactionRole(t *testing.T) {
 		},
 	})
 
-	got := resolveCompactionRuntime(svc, nil, core.DefaultCompactionConfig())
+	got := resolveCompactionRuntime(context.Background(), svc, nil, core.DefaultCompactionConfig())
 	if got.Provider == nil || got.Provider.ID() != "google-ai-studio" {
 		t.Fatalf("compaction provider = %#v, want google-ai-studio", got.Provider)
 	}

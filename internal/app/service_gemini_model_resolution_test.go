@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -12,14 +13,16 @@ import (
 )
 
 type geminiResolutionProvider struct {
-	mu             sync.Mutex
-	models         []string
-	runtimeModels  []string
-	listErr        error
-	generateReqs   []provider.GenerateRequest
-	streamReqs     []provider.GenerateRequest
-	toolTurnReqs   []provider.ToolTurnRequest
-	streamEndpoint string
+	mu              sync.Mutex
+	models          []string
+	runtimeModels   []string
+	listErr         error
+	preferredModel  string
+	preferredSource string
+	generateReqs    []provider.GenerateRequest
+	streamReqs      []provider.GenerateRequest
+	toolTurnReqs    []provider.ToolTurnRequest
+	streamEndpoint  string
 }
 
 func (p *geminiResolutionProvider) ID() string {
@@ -84,6 +87,16 @@ func (p *geminiResolutionProvider) ListModels(_ context.Context, _ core.Account)
 	return append([]string(nil), p.models...), nil
 }
 
+func (p *geminiResolutionProvider) DiscoverPreferredModel(_ context.Context, _ core.Account) (string, string, error) {
+	if strings.TrimSpace(p.preferredModel) != "" {
+		return strings.TrimSpace(p.preferredModel), chooseFirstNonEmpty(strings.TrimSpace(p.preferredSource), "discovery"), nil
+	}
+	if len(p.models) > 0 {
+		return strings.TrimSpace(p.models[0]), "models", nil
+	}
+	return "", "", errors.New("no preferred model")
+}
+
 func (p *geminiResolutionProvider) ListRuntimeModels(_ context.Context, _ core.Account) ([]string, error) {
 	if p.listErr != nil {
 		return nil, p.listErr
@@ -123,7 +136,7 @@ func (p *geminiResolutionProvider) lastToolTurnRequest() provider.ToolTurnReques
 
 func newGeminiResolutionService(t *testing.T, prov *geminiResolutionProvider) *Service {
 	t.Helper()
-	svc := NewService(ServiceOptions{})
+	svc := NewService(ServiceOptions{WorkspaceRoot: t.TempDir()})
 	svc.RegisterProvider(prov)
 	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", []core.Account{
 		{
@@ -188,6 +201,45 @@ func TestHandleChatKeepsExplicitGemini31WhenAvailable(t *testing.T) {
 	prov := svc.providers["google-gemini-cli"].(*geminiResolutionProvider)
 	if got := prov.lastGenerateRequest().Model; got != "gemini-3.1-pro-preview" {
 		t.Fatalf("GenerateRequest.Model = %q, want %q", got, "gemini-3.1-pro-preview")
+	}
+}
+
+func TestHandleChatDefaultModelResolvedToGemini31UsesCLIHeadless(t *testing.T) {
+	svc := newGeminiResolutionService(t, &geminiResolutionProvider{
+		preferredModel:  geminiCLI31ProModelID,
+		preferredSource: "discovery",
+		runtimeModels:   []string{geminiCLI31ProModelID, "gemini-3-pro-preview"},
+	})
+	cliRunner := &recordingGeminiCLIRunner{
+		resp: geminiCLIHeadlessResponse{Text: "cli"},
+	}
+	svc.geminiCLIRunner = cliRunner
+
+	store := newGeminiCLIAuthStore(t)
+	seedGeminiCLIProfile(t, store, geminiExecutionModeCLIHeadless)
+	svc.SetAuthIntegration(nil, store)
+	svc.syncGeminiPoolExecutionMode("g1", geminiExecutionModeCLIHeadless)
+
+	resp, err := svc.HandleChat(context.Background(), core.ChatRequest{
+		SessionID:      "gemini-default-cli",
+		DisableSession: true,
+		Surface:        core.SurfaceWeb,
+		Provider:       geminiCLIProviderID,
+		Model:          "default",
+		Message:        "hello",
+	})
+	if err != nil {
+		t.Fatalf("HandleChat() error = %v", err)
+	}
+	if resp.Model != geminiCLI31ProModelID {
+		t.Fatalf("ChatResponse.Model = %q, want %q", resp.Model, geminiCLI31ProModelID)
+	}
+	if cliRunner.generateCalls != 1 {
+		t.Fatalf("cli generate calls = %d, want 1", cliRunner.generateCalls)
+	}
+	prov := svc.providers[geminiCLIProviderID].(*geminiResolutionProvider)
+	if got := len(prov.generateReqs); got != 0 {
+		t.Fatalf("provider generate calls = %d, want 0", got)
 	}
 }
 

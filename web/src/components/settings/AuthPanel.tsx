@@ -257,7 +257,7 @@ function profileBadges(profile: {
 }
 
 function geminiExecutionModeLabel(mode: GeminiExecutionMode): string {
-  return mode === "cli_headless" ? "CLI Headless" : "Internal API";
+  return mode === "cli_headless" ? "CLI for 3.1 Pro" : "Internal API";
 }
 
 function upsertGeminiProfile(
@@ -1073,8 +1073,8 @@ export function AuthPanel() {
         tone: "success",
         message:
           mode === "cli_headless"
-            ? "Gemini profile 已切換為 CLI headless 模式"
-            : "Gemini profile 已切回 internal API 模式",
+            ? "Gemini profile 已切換為 Gemini 3.1 Pro CLI 模式"
+            : "Gemini profile 已切回 Internal API 模式",
       });
     } catch {
       setStatus({ tone: "error", message: "更新 Gemini execution mode 失敗" });
@@ -1867,13 +1867,14 @@ export function AuthPanel() {
                                   {geminiExecutionModeLabel(selectedGemini.execution_mode)}
                                 </div>
                                 <div className="text-xs text-base-content/50">
-                                  開啟後，主聊天且未啟用工具時會改走 `gemini -p`
-                                  headless subprocess。
+                                  開啟後，只有 `gemini-3.1-pro-preview` 會改走
+                                  `gemini -p` headless subprocess；其他 Gemini 模型仍使用
+                                  Internal API。
                                 </div>
                               </div>
                               <label className="flex items-center gap-3 self-start lg:self-center">
                                 <span className="text-xs font-medium text-base-content/60">
-                                  CLI Headless
+                                  CLI for 3.1 Pro
                                 </span>
                                 <input
                                   type="checkbox"

@@ -211,12 +211,13 @@ func TestHandleChatFallsBackAfterAllGeminiAccountsExhausted(t *testing.T) {
 	}
 }
 
-func TestGenerateSessionTitleAsyncUsesFallbackInsteadOfGeminiPrimary(t *testing.T) {
+func TestGenerateSessionTitleAsyncUsesGeminiPrimaryByDefault(t *testing.T) {
 	svc := NewService(ServiceOptions{})
 	geminiProv := &scriptedGenerateProvider{
-		id: "google-gemini-cli",
+		id:      "google-gemini-cli",
+		titleCh: make(chan provider.GenerateRequest, 1),
 		results: map[string]scriptedGenerateResult{
-			"g1": {text: "primary"},
+			"g1": {text: "title"},
 		},
 	}
 	fallbackProv := &scriptedGenerateProvider{
@@ -252,18 +253,18 @@ func TestGenerateSessionTitleAsyncUsesFallbackInsteadOfGeminiPrimary(t *testing.
 	}
 
 	select {
-	case req := <-fallbackProv.titleCh:
-		if req.Account.ID != "fb-1" {
-			t.Fatalf("title generation account = %q, want fb-1", req.Account.ID)
+	case req := <-geminiProv.titleCh:
+		if req.Account.ID != "g1" {
+			t.Fatalf("title generation account = %q, want g1", req.Account.ID)
 		}
-		if req.Model != "gemini-3.1-flash-lite-preview" {
-			t.Fatalf("title generation model = %q, want gemini-3.1-flash-lite-preview", req.Model)
+		if req.Model != "gemini-3.1-pro-preview" {
+			t.Fatalf("title generation model = %q, want gemini-3.1-pro-preview", req.Model)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for fallback title generation")
+		t.Fatal("timed out waiting for Gemini title generation")
 	}
 
-	if geminiProv.totalCalls() != 1 {
-		t.Fatalf("expected primary Gemini provider to handle only chat request, got %d calls", geminiProv.totalCalls())
+	if fallbackProv.totalCalls() != 0 {
+		t.Fatalf("expected fallback provider to remain unused, got %d calls", fallbackProv.totalCalls())
 	}
 }

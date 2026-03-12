@@ -23,6 +23,7 @@ const (
 	geminiCLIProviderID        = "google-gemini-cli"
 	geminiCLIHomeDirName       = "gemini-cli-home"
 	geminiCLIOAuthFilename     = "oauth_creds.json"
+	geminiCLIProjectsFilename  = "projects.json"
 	geminiCLIOutputJSON        = "json"
 	geminiCLIOutputStreamJSON  = "stream-json"
 	geminiCLIDefaultBinaryName = "gemini"
@@ -45,6 +46,10 @@ type geminiCLIHeadlessRequest struct {
 type geminiCLIHeadlessResponse struct {
 	Text  string
 	Usage core.UsageInfo
+}
+
+type geminiCLIProjectsFile struct {
+	Projects map[string]string `json:"projects"`
 }
 
 type geminiCLIProcessRunner struct {
@@ -78,6 +83,13 @@ type geminiCLIStreamResultEvent struct {
 	Stats     json.RawMessage     `json:"stats"`
 	Error     *geminiCLIJSONError `json:"error"`
 	Timestamp string              `json:"timestamp,omitempty"`
+}
+
+type geminiCLIRouteUnavailableError struct {
+	Reason        string
+	WorkspaceRoot string
+	ProfileID     string
+	Cause         error
 }
 
 func newGeminiCLIHeadlessRunner() geminiCLIHeadlessRunner {
@@ -287,15 +299,22 @@ func (r *geminiCLIProcessRunner) buildCommand(
 ) (*exec.Cmd, error) {
 	workspaceRoot := strings.TrimSpace(req.WorkspaceRoot)
 	if workspaceRoot == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return nil, err
+		return nil, &geminiCLIRouteUnavailableError{
+			Reason:    geminiCLIRouteSkipWorkspaceMissing,
+			ProfileID: strings.TrimSpace(req.ProfileID),
 		}
-		workspaceRoot = cwd
+	}
+	workspaceRoot, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return nil, err
 	}
 
 	geminiHome := geminiCLIHomeDir(req.AuthBaseDir, req.ProfileID)
-	if err := writeGeminiCLIOAuthCreds(geminiHome, req.Credential); err != nil {
+	workspaceProject, err := readGeminiCLIWorkspaceProject(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeGeminiCLIHome(geminiHome, strings.TrimSpace(req.ProfileID), req.Credential, workspaceRoot, workspaceProject); err != nil {
 		return nil, err
 	}
 
@@ -315,6 +334,22 @@ func (r *geminiCLIProcessRunner) buildCommand(
 
 func geminiCLIHomeDir(authBaseDir, profileID string) string {
 	return filepath.Join(strings.TrimSpace(authBaseDir), geminiCLIHomeDirName, sanitizeProfileSlug(profileID))
+}
+
+func writeGeminiCLIHome(homeDir string, profileID string, credential auth.Credential, workspaceRoot string, workspaceProject string) error {
+	if err := writeGeminiCLIOAuthCreds(homeDir, credential); err != nil {
+		return err
+	}
+	if err := writeGeminiCLIProjects(homeDir, workspaceRoot, workspaceProject); err != nil {
+		return err
+	}
+	logService.Logf(
+		"cli project mapping synced: profile_id=%s workspace=%s project=%s",
+		profileID,
+		workspaceRoot,
+		workspaceProject,
+	)
+	return nil
 }
 
 func writeGeminiCLIOAuthCreds(homeDir string, credential auth.Credential) error {
@@ -352,6 +387,100 @@ func writeGeminiCLIOAuthCreds(homeDir string, credential auth.Credential) error 
 		return err
 	}
 	return os.Chmod(path, 0o600)
+}
+
+func writeGeminiCLIProjects(homeDir string, workspaceRoot string, workspaceProject string) error {
+	geminiDir := filepath.Join(homeDir, ".gemini")
+	if err := os.MkdirAll(geminiDir, 0o700); err != nil {
+		return err
+	}
+
+	payload := geminiCLIProjectsFile{
+		Projects: map[string]string{
+			workspaceRoot: workspaceProject,
+		},
+	}
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	path := filepath.Join(geminiDir, geminiCLIProjectsFilename)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
+}
+
+func readGeminiCLIWorkspaceProject(workspaceRoot string) (string, error) {
+	workspaceRoot = strings.TrimSpace(workspaceRoot)
+	if workspaceRoot == "" {
+		return "", &geminiCLIRouteUnavailableError{
+			Reason: geminiCLIRouteSkipWorkspaceMissing,
+		}
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	raw, err := os.ReadFile(filepath.Join(homeDir, ".gemini", geminiCLIProjectsFilename))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", &geminiCLIRouteUnavailableError{
+				Reason:        "project_mapping_missing",
+				WorkspaceRoot: workspaceRoot,
+			}
+		}
+		return "", err
+	}
+
+	var payload geminiCLIProjectsFile
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "", &geminiCLIRouteUnavailableError{
+			Reason:        "project_mapping_invalid",
+			WorkspaceRoot: workspaceRoot,
+			Cause:         err,
+		}
+	}
+
+	projectID := strings.TrimSpace(payload.Projects[workspaceRoot])
+	if projectID == "" {
+		return "", &geminiCLIRouteUnavailableError{
+			Reason:        "project_mapping_missing",
+			WorkspaceRoot: workspaceRoot,
+		}
+	}
+	return projectID, nil
+}
+
+func (e *geminiCLIRouteUnavailableError) Error() string {
+	if e == nil {
+		return ""
+	}
+	reason := strings.TrimSpace(e.Reason)
+	if reason == "" {
+		reason = "gemini cli route unavailable"
+	}
+	if e.Cause != nil {
+		return reason + ": " + e.Cause.Error()
+	}
+	return reason
+}
+
+func (e *geminiCLIRouteUnavailableError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+func asGeminiCLIRouteUnavailable(err error) (*geminiCLIRouteUnavailableError, bool) {
+	var routeErr *geminiCLIRouteUnavailableError
+	if errors.As(err, &routeErr) {
+		return routeErr, true
+	}
+	return nil, false
 }
 
 func mapGeminiCLIRunError(exitCode int, stdout, stderr []byte, runErr error) error {

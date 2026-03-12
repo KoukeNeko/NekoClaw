@@ -25,13 +25,35 @@ func writeGeminiTestScript(t *testing.T, body string) string {
 	return path
 }
 
+func seedLocalGeminiProjects(t *testing.T, projects map[string]string) string {
+	t.Helper()
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	geminiDir := filepath.Join(homeDir, ".gemini")
+	if err := os.MkdirAll(geminiDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	raw, err := json.MarshalIndent(geminiCLIProjectsFile{Projects: projects}, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(geminiDir, geminiCLIProjectsFilename), raw, 0o600); err != nil {
+		t.Fatalf("WriteFile(projects.json) error = %v", err)
+	}
+	return homeDir
+}
+
 func newGeminiCLIRequest(t *testing.T) geminiCLIHeadlessRequest {
 	t.Helper()
 	workspaceRoot := t.TempDir()
 	authBaseDir := t.TempDir()
+	seedLocalGeminiProjects(t, map[string]string{
+		workspaceRoot:          "nekoclaw",
+		"/Users/example/other": "ignored",
+	})
 	return geminiCLIHeadlessRequest{
 		ProfileID:     "profile:main",
-		Model:         "gemini-2.5-pro",
+		Model:         geminiCLI31ProModelID,
 		Prompt:        "hello from test",
 		WorkspaceRoot: workspaceRoot,
 		AuthBaseDir:   authBaseDir,
@@ -43,7 +65,7 @@ func newGeminiCLIRequest(t *testing.T) geminiCLIHeadlessRequest {
 	}
 }
 
-func TestGeminiCLIProcessRunnerBuildCommandWritesOAuthCreds(t *testing.T) {
+func TestGeminiCLIProcessRunnerBuildCommandWritesOAuthCredsAndProjects(t *testing.T) {
 	runner := &geminiCLIProcessRunner{binary: writeGeminiTestScript(t, `exit 0`)}
 	req := newGeminiCLIRequest(t)
 
@@ -80,25 +102,40 @@ func TestGeminiCLIProcessRunnerBuildCommandWritesOAuthCreds(t *testing.T) {
 		t.Fatalf("GEMINI_CLI_HOME missing from env: %v", cmd.Env)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(expectedHome, ".gemini", geminiCLIOAuthFilename))
+	rawCreds, err := os.ReadFile(filepath.Join(expectedHome, ".gemini", geminiCLIOAuthFilename))
 	if err != nil {
 		t.Fatalf("ReadFile(oauth_creds.json) error = %v", err)
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
+	var creds map[string]any
+	if err := json.Unmarshal(rawCreds, &creds); err != nil {
+		t.Fatalf("json.Unmarshal(oauth_creds.json) error = %v", err)
 	}
-	if payload["access_token"] != "access-token" {
-		t.Fatalf("access_token = %#v, want access-token", payload["access_token"])
+	if creds["access_token"] != "access-token" {
+		t.Fatalf("access_token = %#v, want access-token", creds["access_token"])
 	}
-	if payload["refresh_token"] != "refresh-token" {
-		t.Fatalf("refresh_token = %#v, want refresh-token", payload["refresh_token"])
+	if creds["refresh_token"] != "refresh-token" {
+		t.Fatalf("refresh_token = %#v, want refresh-token", creds["refresh_token"])
 	}
-	if payload["token_type"] != "Bearer" {
-		t.Fatalf("token_type = %#v, want Bearer", payload["token_type"])
+	if creds["token_type"] != "Bearer" {
+		t.Fatalf("token_type = %#v, want Bearer", creds["token_type"])
 	}
-	if got, ok := payload["expiry_date"].(float64); !ok || int64(got) != req.Credential.ExpiresAt.UnixMilli() {
-		t.Fatalf("expiry_date = %#v, want %d", payload["expiry_date"], req.Credential.ExpiresAt.UnixMilli())
+	if got, ok := creds["expiry_date"].(float64); !ok || int64(got) != req.Credential.ExpiresAt.UnixMilli() {
+		t.Fatalf("expiry_date = %#v, want %d", creds["expiry_date"], req.Credential.ExpiresAt.UnixMilli())
+	}
+
+	rawProjects, err := os.ReadFile(filepath.Join(expectedHome, ".gemini", geminiCLIProjectsFilename))
+	if err != nil {
+		t.Fatalf("ReadFile(projects.json) error = %v", err)
+	}
+	var projects geminiCLIProjectsFile
+	if err := json.Unmarshal(rawProjects, &projects); err != nil {
+		t.Fatalf("json.Unmarshal(projects.json) error = %v", err)
+	}
+	if len(projects.Projects) != 1 {
+		t.Fatalf("len(projects.Projects) = %d, want 1", len(projects.Projects))
+	}
+	if got := projects.Projects[req.WorkspaceRoot]; got != "nekoclaw" {
+		t.Fatalf("projects[%q] = %q, want nekoclaw", req.WorkspaceRoot, got)
 	}
 }
 
@@ -180,4 +217,48 @@ EOF
 			t.Fatalf("Message = %q, want %q", failureErr.Message, "rate limit hit")
 		}
 	})
+}
+
+func TestGeminiCLIProcessRunnerBuildCommandWithoutWorkspaceProjectReturnsRouteUnavailable(t *testing.T) {
+	runner := &geminiCLIProcessRunner{binary: writeGeminiTestScript(t, `exit 0`)}
+	req := newGeminiCLIRequest(t)
+	seedLocalGeminiProjects(t, map[string]string{
+		"/Users/example/other": "other-project",
+	})
+
+	_, err := runner.buildCommand(context.Background(), req, geminiCLIOutputJSON)
+	if err == nil {
+		t.Fatal("expected buildCommand() error")
+	}
+	routeErr, ok := asGeminiCLIRouteUnavailable(err)
+	if !ok {
+		t.Fatalf("error = %T, want route unavailable", err)
+	}
+	if routeErr.Reason != "project_mapping_missing" {
+		t.Fatalf("Reason = %q, want project_mapping_missing", routeErr.Reason)
+	}
+}
+
+func TestReadGeminiCLIWorkspaceProjectInvalidJSONReturnsRouteUnavailable(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	geminiDir := filepath.Join(homeDir, ".gemini")
+	if err := os.MkdirAll(geminiDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(geminiDir, geminiCLIProjectsFilename), []byte("{not-json"), 0o600); err != nil {
+		t.Fatalf("WriteFile(projects.json) error = %v", err)
+	}
+
+	_, err := readGeminiCLIWorkspaceProject(t.TempDir())
+	if err == nil {
+		t.Fatal("expected readGeminiCLIWorkspaceProject() error")
+	}
+	routeErr, ok := asGeminiCLIRouteUnavailable(err)
+	if !ok {
+		t.Fatalf("error = %T, want route unavailable", err)
+	}
+	if routeErr.Reason != "project_mapping_invalid" {
+		t.Fatalf("Reason = %q, want project_mapping_invalid", routeErr.Reason)
+	}
 }
