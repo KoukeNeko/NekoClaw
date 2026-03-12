@@ -32,8 +32,10 @@ type MemoryResult struct {
 }
 
 type ToolSpec struct {
-	Definition provider.ToolDefinition
-	Mutating   bool
+	Definition       provider.ToolDefinition
+	Mutating         bool
+	ReadOnlySafe     bool
+	RequiresApproval bool
 }
 
 type RunRequest struct {
@@ -76,6 +78,8 @@ type Executor interface {
 	Run(ctx context.Context, call provider.ToolCall) (content string, err error)
 	IsMutating(toolName string) bool
 	IsCallMutating(call provider.ToolCall) bool
+	IsReadOnlySafe(toolName string) bool
+	RequiresApproval(call provider.ToolCall) bool
 	Definitions() []provider.ToolDefinition
 	HasTool(toolName string) bool
 	ArgumentPreview(call provider.ToolCall) string

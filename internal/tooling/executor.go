@@ -64,6 +64,11 @@ func (e *RuntimeExecutor) IsMutating(toolName string) bool {
 	return ok && spec.Mutating
 }
 
+func (e *RuntimeExecutor) IsReadOnlySafe(toolName string) bool {
+	spec, ok := e.specs[strings.TrimSpace(toolName)]
+	return ok && spec.ReadOnlySafe
+}
+
 func (e *RuntimeExecutor) IsCallMutating(call provider.ToolCall) bool {
 	name := strings.TrimSpace(call.Name)
 	if name == "exec_command" {
@@ -80,6 +85,28 @@ func (e *RuntimeExecutor) IsCallMutating(call provider.ToolCall) bool {
 		return mutating
 	}
 	return e.IsMutating(name)
+}
+
+func (e *RuntimeExecutor) RequiresApproval(call provider.ToolCall) bool {
+	name := strings.TrimSpace(call.Name)
+	if name == "exec_command" {
+		argv := struct {
+			Argv []string `json:"argv"`
+		}{}
+		if err := json.Unmarshal(call.Arguments, &argv); err != nil {
+			return true
+		}
+		mutating, err := e.policy.ValidateCommand(argv.Argv)
+		if err != nil {
+			return true
+		}
+		return mutating
+	}
+	spec, ok := e.specs[name]
+	if !ok {
+		return true
+	}
+	return spec.RequiresApproval
 }
 
 func (e *RuntimeExecutor) ArgumentPreview(call provider.ToolCall) string {
@@ -422,9 +449,11 @@ func (e *RuntimeExecutor) runToolCatalogSearch(raw json.RawMessage) (string, err
 		limit = 20
 	}
 	type summary struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Mutating    bool   `json:"mutating"`
+		Name             string `json:"name"`
+		Description      string `json:"description"`
+		Mutating         bool   `json:"mutating"`
+		ReadOnlySafe     bool   `json:"read_only_safe"`
+		RequiresApproval bool   `json:"requires_approval"`
 	}
 	out := make([]summary, 0, limit)
 	for _, entry := range e.backend.ToolCatalog() {
@@ -435,9 +464,11 @@ func (e *RuntimeExecutor) runToolCatalogSearch(raw json.RawMessage) (string, err
 			}
 		}
 		out = append(out, summary{
-			Name:        entry.Name,
-			Description: entry.Description,
-			Mutating:    entry.Mutating,
+			Name:             entry.Name,
+			Description:      entry.Description,
+			Mutating:         entry.Mutating,
+			ReadOnlySafe:     entry.ReadOnlySafe,
+			RequiresApproval: entry.RequiresApproval,
 		})
 		if len(out) >= limit {
 			break

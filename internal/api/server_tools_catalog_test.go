@@ -47,6 +47,26 @@ func TestToolsCatalogEndpointReturnsBuiltins(t *testing.T) {
 	if !fileWrite.Mutating {
 		t.Fatalf("expected file_write mutating")
 	}
+	if fileWrite.ReadOnlySafe {
+		t.Fatalf("expected file_write to be excluded from read-only profiles")
+	}
+	if !fileWrite.RequiresApproval {
+		t.Fatalf("expected file_write to require approval")
+	}
+
+	memorySave := findToolCatalogEntry(payload.Tools, "memory_save")
+	if memorySave == nil {
+		t.Fatalf("expected memory_save in tools catalog")
+	}
+	if !memorySave.Mutating {
+		t.Fatalf("expected memory_save mutating")
+	}
+	if memorySave.ReadOnlySafe {
+		t.Fatalf("expected memory_save to stay out of read-only profiles")
+	}
+	if memorySave.RequiresApproval {
+		t.Fatalf("expected memory_save to skip approval")
+	}
 }
 
 func findToolCatalogEntry(

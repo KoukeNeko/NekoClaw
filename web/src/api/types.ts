@@ -318,6 +318,13 @@ export interface GeminiAuthCompleteResponse {
   active_endpoint?: string;
 }
 
+export type GeminiExecutionMode = "internal_api" | "cli_headless";
+
+export interface GeminiProfileConfigRequest {
+  profile_id: string;
+  execution_mode: GeminiExecutionMode;
+}
+
 export interface GeminiAuthProfile {
   profile_id: string;
   provider: string;
@@ -327,6 +334,7 @@ export interface GeminiAuthProfile {
   project_ready: boolean;
   unavailable_reason?: string;
   endpoint?: string;
+  execution_mode: GeminiExecutionMode;
   created_at: string;
   updated_at: string;
   available: boolean;
@@ -904,6 +912,8 @@ export interface ToolCatalogEntry {
   description: string;
   input_schema: unknown;
   mutating: boolean;
+  read_only_safe: boolean;
+  requires_approval: boolean;
   configurable: boolean;
   configured: boolean;
   config_fields?: ToolConfigField[];

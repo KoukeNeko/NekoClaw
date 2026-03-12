@@ -51,6 +51,34 @@ func TestBuiltinToolCatalogIncludesConditionalTools(t *testing.T) {
 	if webSearch.ConfigFields[0].Key != "brave_search_api_key" {
 		t.Fatalf("unexpected config field key: %q", webSearch.ConfigFields[0].Key)
 	}
+
+	memorySave := findCatalogTool(tools, "memory_save")
+	if memorySave == nil {
+		t.Fatalf("expected memory_save in catalog")
+	}
+	if !memorySave.Mutating {
+		t.Fatalf("expected memory_save mutating")
+	}
+	if memorySave.ReadOnlySafe {
+		t.Fatalf("expected memory_save not read-only safe")
+	}
+	if memorySave.RequiresApproval {
+		t.Fatalf("expected memory_save to skip approval")
+	}
+
+	taskUpdate := findCatalogTool(tools, "task_update")
+	if taskUpdate == nil {
+		t.Fatalf("expected task_update in catalog")
+	}
+	if !taskUpdate.Mutating {
+		t.Fatalf("expected task_update mutating")
+	}
+	if taskUpdate.ReadOnlySafe {
+		t.Fatalf("expected task_update not read-only safe")
+	}
+	if taskUpdate.RequiresApproval {
+		t.Fatalf("expected task_update to skip approval")
+	}
 }
 
 func TestRuntimeDefinitionsMatchCatalogRegistration(t *testing.T) {

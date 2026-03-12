@@ -61,6 +61,7 @@ type Service struct {
 	anthropicLoginMgr *auth.AnthropicLoginManager
 	openAICodexLogin  *auth.OpenAICodexLoginManager
 	authStore         *auth.Store
+	geminiCLIRunner   geminiCLIHeadlessRunner
 	memoryDir         string
 	workspaceRoot     string
 	searchIndex       *memory.SearchIndex
@@ -142,6 +143,7 @@ func NewService(opts ServiceOptions) *Service {
 		memoryDir:         opts.MemoryDir,
 		workspaceRoot:     strings.TrimSpace(opts.WorkspaceRoot),
 		searchIndex:       opts.SearchIndex,
+		geminiCLIRunner:   newGeminiCLIHeadlessRunner(),
 		preferredProfiles: map[string]string{},
 		defaultThinking:   core.ThinkingModeAuto,
 		compactionConfig:  core.DefaultCompactionConfig(),
@@ -927,6 +929,7 @@ type GeminiProfileStatus struct {
 	Email             string    `json:"email,omitempty"`
 	ProjectID         string    `json:"project_id,omitempty"`
 	Endpoint          string    `json:"endpoint,omitempty"`
+	ExecutionMode     string    `json:"execution_mode"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 	Available         bool      `json:"available"`
@@ -1241,48 +1244,61 @@ func (s *Service) ListGeminiProfiles() ([]GeminiProfileStatus, error) {
 	result := make([]GeminiProfileStatus, 0, len(profiles))
 	now := time.Now()
 	for _, profile := range profiles {
-		status := GeminiProfileStatus{
-			ProfileID: profile.ProfileID,
-			Provider:  profile.Provider,
-			Type:      profile.Type,
-			Email:     profile.Email,
-			ProjectID: profile.ProjectID,
-			Endpoint:  profile.Endpoint,
-			CreatedAt: profile.CreatedAt,
-			UpdatedAt: profile.UpdatedAt,
-			Preferred: profile.ProfileID == preferred,
-		}
-		if snap, ok := snapByID[profile.ProfileID]; ok {
-			if projectID := strings.TrimSpace(snap.Metadata["project_id"]); projectID != "" {
-				status.ProjectID = projectID
-			}
-			if endpoint := strings.TrimSpace(snap.Metadata["endpoint"]); endpoint != "" {
-				status.Endpoint = endpoint
-			}
-			if snap.Usage != nil {
-				status.CooldownUntil = snap.Usage.CooldownUntil
-				status.DisabledUntil = snap.Usage.DisabledUntil
-				status.DisabledReason = string(snap.Usage.DisabledReason)
-				status.Available = (snap.Usage.CooldownUntil.IsZero() || now.After(snap.Usage.CooldownUntil)) &&
-					(snap.Usage.DisabledUntil.IsZero() || now.After(snap.Usage.DisabledUntil))
-			} else {
-				status.Available = true
-			}
-		} else {
-			status.CooldownUntil = profile.CooldownUntil
-			status.DisabledUntil = profile.DisabledUntil
-			status.DisabledReason = profile.DisabledReason
-			status.Available = (profile.CooldownUntil.IsZero() || now.After(profile.CooldownUntil)) &&
-				(profile.DisabledUntil.IsZero() || now.After(profile.DisabledUntil))
-		}
-		status.ProjectReady = strings.TrimSpace(status.ProjectID) != ""
-		if !status.ProjectReady {
-			status.UnavailableReason = "missing_project"
-			status.Available = false
-		}
-		result = append(result, status)
+		result = append(result, buildGeminiProfileStatus(profile, snapByID, preferred, now))
 	}
 	return result, nil
+}
+
+func buildGeminiProfileStatus(
+	profile auth.ProfileMetadata,
+	snapByID map[string]core.AccountSnapshot,
+	preferred string,
+	now time.Time,
+) GeminiProfileStatus {
+	status := GeminiProfileStatus{
+		ProfileID:     profile.ProfileID,
+		Provider:      profile.Provider,
+		Type:          profile.Type,
+		Email:         profile.Email,
+		ProjectID:     profile.ProjectID,
+		Endpoint:      profile.Endpoint,
+		ExecutionMode: normalizeGeminiExecutionMode(profile.ExecutionMode),
+		CreatedAt:     profile.CreatedAt,
+		UpdatedAt:     profile.UpdatedAt,
+		Preferred:     profile.ProfileID == preferred,
+	}
+	if snap, ok := snapByID[profile.ProfileID]; ok {
+		if projectID := strings.TrimSpace(snap.Metadata["project_id"]); projectID != "" {
+			status.ProjectID = projectID
+		}
+		if endpoint := strings.TrimSpace(snap.Metadata["endpoint"]); endpoint != "" {
+			status.Endpoint = endpoint
+		}
+		if executionMode := strings.TrimSpace(snap.Metadata["execution_mode"]); executionMode != "" {
+			status.ExecutionMode = normalizeGeminiExecutionMode(executionMode)
+		}
+		if snap.Usage != nil {
+			status.CooldownUntil = snap.Usage.CooldownUntil
+			status.DisabledUntil = snap.Usage.DisabledUntil
+			status.DisabledReason = string(snap.Usage.DisabledReason)
+			status.Available = (snap.Usage.CooldownUntil.IsZero() || now.After(snap.Usage.CooldownUntil)) &&
+				(snap.Usage.DisabledUntil.IsZero() || now.After(snap.Usage.DisabledUntil))
+		} else {
+			status.Available = true
+		}
+	} else {
+		status.CooldownUntil = profile.CooldownUntil
+		status.DisabledUntil = profile.DisabledUntil
+		status.DisabledReason = profile.DisabledReason
+		status.Available = (profile.CooldownUntil.IsZero() || now.After(profile.CooldownUntil)) &&
+			(profile.DisabledUntil.IsZero() || now.After(profile.DisabledUntil))
+	}
+	status.ProjectReady = strings.TrimSpace(status.ProjectID) != ""
+	if !status.ProjectReady {
+		status.UnavailableReason = "missing_project"
+		status.Available = false
+	}
+	return status
 }
 
 func (s *Service) UseGeminiProfile(profileID string) error {
@@ -1319,6 +1335,43 @@ func (s *Service) UseGeminiProfile(profileID string) error {
 		}
 	}
 	return nil
+}
+
+func (s *Service) UpdateGeminiProfileConfig(profileID string, executionMode string) (GeminiProfileStatus, error) {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		return GeminiProfileStatus{}, fmt.Errorf("profile_id is required")
+	}
+	mode, ok := parseGeminiExecutionMode(executionMode)
+	if !ok {
+		return GeminiProfileStatus{}, fmt.Errorf("invalid execution_mode")
+	}
+
+	store := s.authStoreSafe()
+	if store == nil {
+		return GeminiProfileStatus{}, fmt.Errorf("auth store not configured")
+	}
+
+	profile, err := store.GetProfile(geminiCLIProviderID, profileID)
+	if err != nil {
+		return GeminiProfileStatus{}, err
+	}
+	profile.ExecutionMode = mode
+	if err := s.upsertProfileMetadata(profile); err != nil {
+		return GeminiProfileStatus{}, err
+	}
+	s.syncGeminiPoolExecutionMode(profileID, mode)
+
+	profiles, err := s.ListGeminiProfiles()
+	if err != nil {
+		return GeminiProfileStatus{}, err
+	}
+	for _, item := range profiles {
+		if item.ProfileID == profileID {
+			return item, nil
+		}
+	}
+	return GeminiProfileStatus{}, auth.ErrProfileNotFound
 }
 
 func (s *Service) AddAIStudioKey(ctx context.Context, req AIStudioAddKeyRequest) (AIStudioAddKeyResult, error) {
@@ -3258,6 +3311,109 @@ func (s *Service) attemptSingleProvider(
 
 		attemptGenerationParams := withThinkingMode(baseGenerationParams, effectiveThinkingMode)
 
+		if s.shouldUseGeminiCLIHeadless(providerID, params, account, modelMessages) {
+			store := s.authStoreSafe()
+			var cliErr error
+			var cliResp geminiCLIHeadlessResponse
+			if store == nil {
+				cliErr = &provider.FailureError{
+					Reason:   core.FailureAuthPermanent,
+					Message:  "auth store not configured",
+					Endpoint: geminiCLIProviderID,
+				}
+			} else {
+				credential, credentialErr := s.loadGeminiCLICredential(account.ID, account.Token)
+				if credentialErr != nil {
+					cliErr = &provider.FailureError{
+						Reason:   core.FailureAuthPermanent,
+						Message:  credentialErr.Error(),
+						Endpoint: geminiCLIProviderID,
+					}
+				} else {
+					cliReq := geminiCLIHeadlessRequest{
+						ProfileID:     account.ID,
+						Model:         attemptModelID,
+						Prompt:        renderGeminiCLIHeadlessPrompt(modelMessages),
+						Credential:    credential,
+						WorkspaceRoot: s.workspaceRoot,
+						AuthBaseDir:   store.BaseDir(),
+					}
+					if params.onStreamText != nil {
+						cliResp, cliErr = s.geminiCLIRunner.GenerateStream(ctx, cliReq, params.onStreamText)
+					} else {
+						cliResp, cliErr = s.geminiCLIRunner.Generate(ctx, cliReq)
+					}
+				}
+			}
+
+			if cliErr == nil {
+				responseElapsedMs := elapsedMs()
+				replyText := cliResp.Text
+				trimmedReply := strings.TrimSpace(replyText)
+				if !params.disableSession && trimmedReply != "" {
+					assistantEntry := core.NewAssistantEntryWithMeta(trimmedReply, core.AssistantResponseMeta{
+						Provider:  providerID,
+						Model:     attemptModelID,
+						Usage:     cliResp.Usage,
+						ElapsedMs: responseElapsedMs,
+						Reminders: cloneReminderEvents(params.reminders),
+					})
+					sessionEntries := make([]core.SessionEntry, 0, 2)
+					if hasUserMessage {
+						sessionEntries = append(sessionEntries, core.MessageToEntry(userMessage))
+					}
+					sessionEntries = append(sessionEntries, assistantEntry)
+					s.appendSessionEntries(sessionID, contextWindow, sessionEntries)
+					if hasUserMessage {
+						s.generateSessionTitleAsync(providerID, attemptModelID, sessionID, account, userMessage.Content, trimmedReply)
+					}
+				}
+				pool.MarkUsed(account.ID)
+				s.syncProfileState(providerID, account.ID)
+				return core.ChatResponse{
+					SessionID:   sessionID,
+					Provider:    providerID,
+					Model:       attemptModelID,
+					Reply:       trimmedReply,
+					Compressed:  compressed,
+					Compression: compressionMeta,
+					AccountID:   account.ID,
+					Usage:       cliResp.Usage,
+					ElapsedMs:   responseElapsedMs,
+					Status:      core.ChatStatusCompleted,
+					Reminders:   cloneReminderEvents(params.reminders),
+				}, nil
+			}
+
+			reason := deriveFailureReason(cliErr)
+			retryHint := extractRetryHint(cliErr)
+			if s.shouldRotateGeminiAccount(providerID, reason) {
+				s.handleGeminiModelNotFound(pool, account, attemptModelID, true)
+			} else {
+				pool.MarkFailureWithRetryHint(account.ID, reason, retryHint)
+				logFailureEvent(providerID, account.ID, reason, pool)
+				s.syncProfileState(providerID, account.ID)
+			}
+			cliFailStatus := fmt.Sprintf("⚠️ %s/%s 失敗（%s），嘗試下一個帳號...", providerID, attemptModelID, reason)
+			s.activeRetryStatus.Store(sessionID, cliFailStatus)
+			if params.onStreamRetry != nil {
+				params.onStreamRetry(cliFailStatus)
+			}
+			lastErr = cliErr
+			if s.shouldRotateGeminiAccount(providerID, reason) {
+				preferredProfile = ""
+				excludedAccounts[account.ID] = struct{}{}
+				continue
+			}
+			if !core.IsRetriable(reason) {
+				break
+			}
+			if preferredProfile == account.ID {
+				preferredProfile = ""
+			}
+			continue
+		}
+
 		if params.enableTools {
 			toolProv, ok := prov.(provider.ToolCallingProvider)
 			if !ok || !toolProv.ToolCapabilities().SupportsTools {
@@ -3488,16 +3644,14 @@ func (s *Service) attemptSingleProvider(
 									if strings.TrimSpace(account.Metadata["endpoint"]) != endpoint {
 										account.Metadata["endpoint"] = endpoint
 										pool.SetCredential(account.ID, account)
-										if store := s.authStoreSafe(); store != nil {
-											_ = store.UpsertProfile(auth.ProfileMetadata{
-												ProfileID: account.ID,
-												Provider:  providerID,
-												Type:      string(core.AccountOAuth),
-												Email:     account.Email,
-												ProjectID: strings.TrimSpace(account.Metadata["project_id"]),
-												Endpoint:  streamEndpoint,
-											})
-										}
+										_ = s.upsertProfileMetadata(auth.ProfileMetadata{
+											ProfileID: account.ID,
+											Provider:  providerID,
+											Type:      string(core.AccountOAuth),
+											Email:     account.Email,
+											ProjectID: strings.TrimSpace(account.Metadata["project_id"]),
+											Endpoint:  streamEndpoint,
+										})
 									}
 								}
 							}
@@ -3583,16 +3737,14 @@ func (s *Service) attemptSingleProvider(
 					if strings.TrimSpace(account.Metadata["endpoint"]) != endpoint {
 						account.Metadata["endpoint"] = endpoint
 						pool.SetCredential(account.ID, account)
-						if store := s.authStoreSafe(); store != nil {
-							_ = store.UpsertProfile(auth.ProfileMetadata{
-								ProfileID: account.ID,
-								Provider:  providerID,
-								Type:      string(core.AccountOAuth),
-								Email:     account.Email,
-								ProjectID: strings.TrimSpace(account.Metadata["project_id"]),
-								Endpoint:  endpoint,
-							})
-						}
+						_ = s.upsertProfileMetadata(auth.ProfileMetadata{
+							ProfileID: account.ID,
+							Provider:  providerID,
+							Type:      string(core.AccountOAuth),
+							Email:     account.Email,
+							ProjectID: strings.TrimSpace(account.Metadata["project_id"]),
+							Endpoint:  endpoint,
+						})
 					}
 				}
 			}
@@ -3843,11 +3995,13 @@ func (s *Service) completeGeminiOAuth(
 		ProjectID: credential.ProjectID,
 		Endpoint:  strings.TrimSpace(credential.ActiveEndpoint),
 	}
-	if err := store.UpsertProfile(meta); err != nil {
+	if err := s.upsertProfileMetadata(meta); err != nil {
 		_ = store.DeleteCredential("google-gemini-cli", profileID)
 		logService.Errorf("oauth complete: provider=google-gemini-cli profile_id=%s status=metadata_store_failed error=%q", profileID, err)
 		return GeminiOAuthCompleteResult{}, err
 	}
+	storedMeta, _ := store.GetProfile(geminiCLIProviderID, profileID)
+	executionMode := normalizeGeminiExecutionMode(storedMeta.ExecutionMode)
 
 	s.mu.Lock()
 	pool := s.pools["google-gemini-cli"]
@@ -3861,9 +4015,10 @@ func (s *Service) completeGeminiOAuth(
 			Token:    credential.AccessToken,
 			Email:    strings.TrimSpace(credential.Email),
 			Metadata: core.Metadata{
-				"project_id": credential.ProjectID,
-				"endpoint":   strings.TrimSpace(credential.ActiveEndpoint),
-				"profile_id": profileID,
+				"project_id":     credential.ProjectID,
+				"endpoint":       strings.TrimSpace(credential.ActiveEndpoint),
+				"profile_id":     profileID,
+				"execution_mode": executionMode,
 			},
 		})
 		pool.SetPreferred(profileID)
@@ -3943,6 +4098,136 @@ func (s *Service) preferredProfile(providerID string) string {
 	return s.preferredProfiles[providerID]
 }
 
+func mergeProfileMetadata(existing, incoming auth.ProfileMetadata) auth.ProfileMetadata {
+	merged := existing
+	if incoming.ProfileID != "" {
+		merged.ProfileID = incoming.ProfileID
+	}
+	if incoming.Provider != "" {
+		merged.Provider = incoming.Provider
+	}
+	if incoming.Type != "" {
+		merged.Type = incoming.Type
+	}
+	if incoming.DisplayName != "" {
+		merged.DisplayName = incoming.DisplayName
+	}
+	if incoming.KeyHint != "" {
+		merged.KeyHint = incoming.KeyHint
+	}
+	if incoming.Email != "" {
+		merged.Email = incoming.Email
+	}
+	if incoming.ProjectID != "" {
+		merged.ProjectID = incoming.ProjectID
+	}
+	if incoming.Endpoint != "" {
+		merged.Endpoint = incoming.Endpoint
+	}
+	if incoming.ExecutionMode != "" {
+		merged.ExecutionMode = incoming.ExecutionMode
+	}
+	if !incoming.CreatedAt.IsZero() {
+		merged.CreatedAt = incoming.CreatedAt
+	}
+	if !incoming.CooldownUntil.IsZero() || existing.CooldownUntil.IsZero() {
+		merged.CooldownUntil = incoming.CooldownUntil
+	}
+	if !incoming.DisabledUntil.IsZero() || existing.DisabledUntil.IsZero() {
+		merged.DisabledUntil = incoming.DisabledUntil
+	}
+	if incoming.DisabledReason != "" || existing.DisabledReason == "" {
+		merged.DisabledReason = incoming.DisabledReason
+	}
+	return merged
+}
+
+func (s *Service) upsertProfileMetadata(meta auth.ProfileMetadata) error {
+	store := s.authStoreSafe()
+	if store == nil {
+		return fmt.Errorf("auth store not configured")
+	}
+	if meta.Provider == geminiCLIProviderID {
+		meta.ExecutionMode = normalizeGeminiExecutionMode(meta.ExecutionMode)
+	}
+	existing, err := store.GetProfile(meta.Provider, meta.ProfileID)
+	if err == nil {
+		meta = mergeProfileMetadata(existing, meta)
+	} else if !errors.Is(err, auth.ErrProfileNotFound) {
+		return err
+	}
+	return store.UpsertProfile(meta)
+}
+
+func (s *Service) syncGeminiPoolExecutionMode(profileID string, executionMode string) {
+	s.mu.RLock()
+	pool := s.pools[geminiCLIProviderID]
+	s.mu.RUnlock()
+	if pool == nil {
+		return
+	}
+	account, ok := pool.GetAccount(profileID)
+	if !ok {
+		return
+	}
+	if account.Metadata == nil {
+		account.Metadata = core.Metadata{}
+	}
+	account.Metadata["execution_mode"] = normalizeGeminiExecutionMode(executionMode)
+	pool.SetCredential(profileID, account)
+}
+
+func (s *Service) geminiExecutionModeForAccount(account core.Account) string {
+	if executionMode := strings.TrimSpace(account.Metadata["execution_mode"]); executionMode != "" {
+		return normalizeGeminiExecutionMode(executionMode)
+	}
+	store := s.authStoreSafe()
+	if store == nil {
+		return geminiExecutionModeInternalAPI
+	}
+	profile, err := store.GetProfile(geminiCLIProviderID, account.ID)
+	if err != nil {
+		return geminiExecutionModeInternalAPI
+	}
+	return normalizeGeminiExecutionMode(profile.ExecutionMode)
+}
+
+func (s *Service) loadGeminiCLICredential(profileID string, accessToken string) (auth.Credential, error) {
+	store := s.authStoreSafe()
+	if store == nil {
+		return auth.Credential{}, fmt.Errorf("auth store not configured")
+	}
+	credential, err := store.LoadCredential(geminiCLIProviderID, profileID)
+	if err != nil {
+		return auth.Credential{}, err
+	}
+	if strings.TrimSpace(credential.AccessToken) == "" {
+		credential.AccessToken = strings.TrimSpace(accessToken)
+	}
+	if strings.TrimSpace(credential.AccessToken) == "" {
+		return auth.Credential{}, auth.ErrCredentialNotFound
+	}
+	return credential, nil
+}
+
+func (s *Service) shouldUseGeminiCLIHeadless(
+	providerID string,
+	params attemptSingleProviderParams,
+	account core.Account,
+	modelMessages []core.Message,
+) bool {
+	if providerID != geminiCLIProviderID || params.isFallback || params.enableTools {
+		return false
+	}
+	if s.geminiCLIRunner == nil {
+		return false
+	}
+	if !canUseGeminiCLIHeadless(modelMessages) {
+		return false
+	}
+	return s.geminiExecutionModeForAccount(account) == geminiExecutionModeCLIHeadless
+}
+
 func (s *Service) maybeRefreshAccountCredential(
 	ctx context.Context,
 	providerID string,
@@ -4010,7 +4295,7 @@ func (s *Service) maybeRefreshAccountCredential(
 	if err := store.SaveCredential(providerID, account.ID, saved); err != nil {
 		return account, err
 	}
-	if err := store.UpsertProfile(auth.ProfileMetadata{
+	if err := s.upsertProfileMetadata(auth.ProfileMetadata{
 		ProfileID: account.ID,
 		Provider:  providerID,
 		Type:      string(core.AccountOAuth),
@@ -4079,16 +4364,14 @@ func (s *Service) ensureGeminiProject(
 	}
 
 	pool.SetCredential(account.ID, account)
-	if store := s.authStoreSafe(); store != nil {
-		_ = store.UpsertProfile(auth.ProfileMetadata{
-			ProfileID: account.ID,
-			Provider:  "google-gemini-cli",
-			Type:      string(core.AccountOAuth),
-			Email:     account.Email,
-			ProjectID: projectID,
-			Endpoint:  strings.TrimSpace(account.Metadata["endpoint"]),
-		})
-	}
+	_ = s.upsertProfileMetadata(auth.ProfileMetadata{
+		ProfileID: account.ID,
+		Provider:  "google-gemini-cli",
+		Type:      string(core.AccountOAuth),
+		Email:     account.Email,
+		ProjectID: projectID,
+		Endpoint:  strings.TrimSpace(account.Metadata["endpoint"]),
+	})
 	return account, nil
 }
 
@@ -4778,11 +5061,15 @@ func (b serviceToolBackend) ToolCatalog() []tooling.ToolCatalogEntry {
 	entries := b.svc.BuiltinToolCatalog()
 	if b.svc.mcpManager != nil {
 		for _, info := range b.svc.MCPToolDefinitions() {
+			namespaced := mcp.NamespacedToolName(info.Server, info.Name)
+			trusted := b.svc.mcpManager.IsTrusted(namespaced)
 			entries = append(entries, tooling.ToolCatalogEntry{
-				Name:        info.Name,
-				Description: info.Description,
-				Mutating:    true,
-				Configured:  true,
+				Name:             info.Name,
+				Description:      info.Description,
+				Mutating:         !trusted,
+				ReadOnlySafe:     trusted,
+				RequiresApproval: !trusted,
+				Configured:       true,
 			})
 		}
 	}

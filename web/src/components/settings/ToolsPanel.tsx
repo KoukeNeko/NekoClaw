@@ -494,6 +494,11 @@ export function ToolsPanel() {
                                 Mutating
                               </span>
                             )}
+                            {tool.read_only_safe && (
+                              <span className="badge badge-success badge-xs">
+                                Read-only safe
+                              </span>
+                            )}
                             <span
                               className={`badge badge-xs ${configBadgeClass(tool)}`}
                             >
@@ -523,6 +528,12 @@ export function ToolsPanel() {
                   )}
                   {selectedTool.mutating && (
                     <div className="badge badge-warning badge-sm">Mutating</div>
+                  )}
+                  {selectedTool.read_only_safe && (
+                    <div className="badge badge-success badge-sm">Read-only safe</div>
+                  )}
+                  {selectedTool.requires_approval && (
+                    <div className="badge badge-error badge-sm">Needs approval</div>
                   )}
                   <div className={`badge badge-sm ${configBadgeClass(selectedTool)}`}>
                     {configBadgeLabel(selectedTool)}
@@ -563,6 +574,12 @@ export function ToolsPanel() {
                     </div>
                     <div className="badge badge-ghost badge-sm">
                       {selectedTool.mutating ? "Mutating" : "Non-mutating"}
+                    </div>
+                    <div className="badge badge-ghost badge-sm">
+                      {selectedTool.read_only_safe ? "Read-only safe" : "Action-only"}
+                    </div>
+                    <div className="badge badge-ghost badge-sm">
+                      {selectedTool.requires_approval ? "Approval required" : "No approval"}
                     </div>
                     <div className={`badge badge-sm ${configBadgeClass(selectedTool)}`}>
                       {configBadgeLabel(selectedTool)}
@@ -691,9 +708,11 @@ export function ToolsPanel() {
                         Safety
                       </div>
                       <div className="text-sm text-base-content/75">
-                        {selectedTool.mutating
-                          ? "可能改動 workspace 或 git 狀態。"
-                          : "執行時不應修改 workspace 狀態。"}
+                        {selectedTool.requires_approval
+                          ? "執行時可能改動 workspace 或 git 狀態，會先要求核准。"
+                          : selectedTool.read_only_safe
+                            ? "可用於 read-only profiles，不應修改 workspace 狀態。"
+                            : "不屬於 read-only tool，但執行時不需要額外核准。"}
                       </div>
                     </div>
                   </li>

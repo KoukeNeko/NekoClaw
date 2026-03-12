@@ -38,7 +38,7 @@ func (r *Runtime) ReadOnlyToolNames() []string {
 	defs := r.executor.Definitions()
 	names := make([]string, 0, len(defs))
 	for _, def := range defs {
-		if r.executor.IsMutating(def.Name) {
+		if !r.executor.IsReadOnlySafe(def.Name) {
 			continue
 		}
 		names = append(names, def.Name)
@@ -56,6 +56,8 @@ func (r *Runtime) DefaultActionToolNames() []string {
 		"git_diff",
 		"sessions_list",
 		"memory_search",
+		"memory_get",
+		"memory_save",
 		"providers_list",
 		"accounts_list",
 		"datetime",
@@ -215,7 +217,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			if !r.toolAllowed(req.ToolMode, req.AllowedTools, call.Name) {
 				continue
 			}
-			if !r.executor.IsCallMutating(call) {
+			if !r.executor.RequiresApproval(call) {
 				continue
 			}
 			if _, ok := decisions[call.ID]; !ok {
@@ -344,11 +346,12 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			}
 
 			mutating := r.executor.IsCallMutating(call)
+			requiresApproval := r.executor.RequiresApproval(call)
 			reqEvt := newToolEvent(call.ID, call.Name, "requested", mutating)
 			events = append(events, reqEvt)
 			emitToolEvent(&req, reqEvt)
 
-			if mutating {
+			if requiresApproval {
 				decision := normalizeApprovalDecision(decisions[call.ID])
 				switch decision {
 				case "allow_once", "allow_for_session", "allow_for_workspace":
@@ -362,7 +365,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 						ToolCallID: call.ID,
 						ToolName:   call.Name,
 						Phase:      "approved",
-						Mutating:   true,
+						Mutating:   mutating,
 						Decision:   decision,
 					})
 				case "deny":
@@ -371,7 +374,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 						ToolCallID: call.ID,
 						ToolName:   call.Name,
 						Phase:      "denied",
-						Mutating:   true,
+						Mutating:   mutating,
 						Decision:   "deny",
 					})
 					assistantTool := core.Message{
@@ -428,7 +431,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 				})
 				continue
 			}
-			if mutating && req.PrepareMutation != nil {
+			if requiresApproval && req.PrepareMutation != nil {
 				record, err := req.PrepareMutation(req.SessionID, call, snapshotID)
 				if err != nil {
 					return RunResult{}, err
@@ -440,7 +443,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 					}
 				}
 			}
-			if mutating {
+			if requiresApproval {
 				if staleErr := validateStaleRead(call, selectorForCall(req, call), observedFiles, mutatedFiles); staleErr != nil {
 					content := "tool_error: " + staleErr.Error()
 					failEvt := core.ToolEvent{

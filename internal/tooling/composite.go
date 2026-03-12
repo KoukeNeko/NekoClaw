@@ -21,8 +21,8 @@ type MCPToolSource interface {
 // CompositeExecutor routes tool calls to either the built-in executor
 // or the MCP manager based on the tool name prefix.
 type CompositeExecutor struct {
-	builtin    *RuntimeExecutor
-	mcpSource  MCPToolSource
+	builtin   *RuntimeExecutor
+	mcpSource MCPToolSource
 }
 
 // NewCompositeExecutor wraps a built-in executor and an MCP source.
@@ -62,6 +62,13 @@ func (c *CompositeExecutor) IsMutating(toolName string) bool {
 	return c.builtin.IsMutating(toolName)
 }
 
+func (c *CompositeExecutor) IsReadOnlySafe(toolName string) bool {
+	if mcp.IsMCPTool(toolName) {
+		return c.mcpSource != nil && c.mcpSource.IsTrusted(toolName)
+	}
+	return c.builtin.IsReadOnlySafe(toolName)
+}
+
 // IsCallMutating delegates to built-in for built-in tools.
 // For MCP tools, returns true for untrusted servers.
 func (c *CompositeExecutor) IsCallMutating(call provider.ToolCall) bool {
@@ -73,6 +80,17 @@ func (c *CompositeExecutor) IsCallMutating(call provider.ToolCall) bool {
 		return !c.mcpSource.IsTrusted(name)
 	}
 	return c.builtin.IsCallMutating(call)
+}
+
+func (c *CompositeExecutor) RequiresApproval(call provider.ToolCall) bool {
+	name := strings.TrimSpace(call.Name)
+	if mcp.IsMCPTool(name) {
+		if c.mcpSource == nil {
+			return true
+		}
+		return !c.mcpSource.IsTrusted(name)
+	}
+	return c.builtin.RequiresApproval(call)
 }
 
 // Run routes to built-in executor or MCP manager.
