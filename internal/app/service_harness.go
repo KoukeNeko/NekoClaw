@@ -169,7 +169,7 @@ func (s *Service) ActivePlaybooks(sessionID string, surface core.Surface, person
 
 func (s *Service) TaskList(sessionID string) core.TaskList {
 	if s.tasks == nil {
-		return core.TaskList{SessionID: sessionID}
+		return core.TaskList{SessionID: sessionID, Items: []core.TaskItem{}}
 	}
 	return s.tasks.Get(sessionID)
 }

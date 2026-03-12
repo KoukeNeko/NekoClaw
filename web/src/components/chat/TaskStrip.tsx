@@ -19,7 +19,8 @@ export function TaskStrip({ sessionID }: { sessionID: string }) {
     };
   }, [sessionID]);
 
-  if (!tasks || tasks.items.length === 0) return null;
+  const items = Array.isArray(tasks?.items) ? tasks.items : [];
+  if (!tasks || items.length === 0) return null;
 
   return (
     <div className="border-b border-base-300 bg-base-200/40 px-4 py-2">
@@ -27,7 +28,7 @@ export function TaskStrip({ sessionID }: { sessionID: string }) {
         Session Tasks
       </div>
       <div className="flex flex-wrap gap-2">
-        {tasks.items.map((task) => (
+        {items.map((task) => (
           <span
             key={task.id}
             className={`badge badge-outline ${

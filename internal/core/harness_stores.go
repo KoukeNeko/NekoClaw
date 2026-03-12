@@ -361,7 +361,14 @@ func NewTaskStore(dataDir string) (*TaskStore, error) {
 func (s *TaskStore) Get(sessionID string) TaskList {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	list := s.lists[strings.TrimSpace(sessionID)]
+	sessionID = strings.TrimSpace(sessionID)
+	list, ok := s.lists[sessionID]
+	if !ok {
+		return TaskList{
+			SessionID: sessionID,
+			Items:     []TaskItem{},
+		}
+	}
 	return cloneTaskList(list)
 }
 
@@ -415,6 +422,9 @@ func (s *TaskStore) load() error {
 		if list.SessionID == "" {
 			list.SessionID = sessionID
 		}
+		if list.Items == nil {
+			list.Items = []TaskItem{}
+		}
 		s.lists[list.SessionID] = list
 	}
 	return nil
@@ -436,6 +446,8 @@ func cloneTaskList(list TaskList) TaskList {
 	clone := list
 	if len(list.Items) > 0 {
 		clone.Items = append([]TaskItem(nil), list.Items...)
+	} else {
+		clone.Items = []TaskItem{}
 	}
 	return clone
 }

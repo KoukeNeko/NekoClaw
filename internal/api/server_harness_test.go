@@ -91,6 +91,30 @@ func TestSnapshotsUndoRestoresWorkspaceAndPersistsGrant(t *testing.T) {
 	}
 }
 
+func TestTasksEndpointReturnsEmptyItemsArrayForMissingSession(t *testing.T) {
+	svc := app.NewService(app.ServiceOptions{})
+	handler := NewServer(svc).Handler()
+
+	resp := performJSONRequest(t, handler, http.MethodGet, "/v1/tasks?session_id=missing-session", "")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	var payload core.TaskList
+	if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.SessionID != "missing-session" {
+		t.Fatalf("session_id = %q, want missing-session", payload.SessionID)
+	}
+	if payload.Items == nil {
+		t.Fatalf("items should be [], got nil")
+	}
+	if len(payload.Items) != 0 {
+		t.Fatalf("len(items) = %d, want 0", len(payload.Items))
+	}
+}
+
 func mustReadFile(t *testing.T, path string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(path)
