@@ -36,6 +36,7 @@ type ProfileMetadata struct {
 	Email          string    `json:"email,omitempty"`
 	ProjectID      string    `json:"project_id,omitempty"`
 	Endpoint       string    `json:"endpoint,omitempty"`
+	ExecutionMode  string    `json:"execution_mode,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 	CooldownUntil  time.Time `json:"cooldown_until,omitempty"`

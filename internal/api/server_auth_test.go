@@ -72,6 +72,9 @@ func TestGeminiOAuthManualFlowEndToEnd(t *testing.T) {
 	if !strings.Contains(profilesResp.Body.String(), `"profile_id":"p1"`) {
 		t.Fatalf("profiles response missing p1: %s", profilesResp.Body.String())
 	}
+	if !strings.Contains(profilesResp.Body.String(), `"execution_mode":"internal_api"`) {
+		t.Fatalf("profiles response missing default execution_mode: %s", profilesResp.Body.String())
+	}
 
 	chatReq := `{"session_id":"s1","surface":"web","provider":"google-gemini-cli","model":"gemini-test","message":"hello"}`
 	chatResp := performJSONRequest(t, handler, http.MethodPost, "/v1/chat", chatReq)
@@ -121,6 +124,84 @@ func TestOAuthCallbackStateMismatchShowsManualRecovery(t *testing.T) {
 	}
 	if !strings.Contains(callbackResp.Body.String(), "wrong-"+state) {
 		t.Fatalf("expected callback state to be shown, got body=%s", callbackResp.Body.String())
+	}
+}
+
+func TestGeminiProfileConfigUpdatesExecutionMode(t *testing.T) {
+	svc := app.NewService(app.ServiceOptions{})
+	svc.RegisterProvider(fakeGeminiProvider{})
+	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", []core.Account{
+		{
+			ID:       "p1",
+			Provider: "google-gemini-cli",
+			Type:     core.AccountOAuth,
+			Token:    "token-1",
+			Metadata: core.Metadata{
+				"project_id": "proj-1",
+				"endpoint":   "https://cloudcode-pa.googleapis.com",
+			},
+		},
+	}, nil, core.DefaultCooldownConfig()))
+
+	store, err := auth.NewStore(auth.StoreOptions{
+		BaseDir: t.TempDir(),
+		Keyring: newMemoryKeyring(),
+	})
+	if err != nil {
+		t.Fatalf("new auth store: %v", err)
+	}
+	svc.SetAuthIntegration(nil, store)
+
+	if err := store.UpsertProfile(auth.ProfileMetadata{
+		ProfileID: "p1",
+		Provider:  "google-gemini-cli",
+		Type:      string(core.AccountOAuth),
+		Email:     "p1@example.com",
+		ProjectID: "proj-1",
+	}); err != nil {
+		t.Fatalf("UpsertProfile() error = %v", err)
+	}
+
+	server := NewServer(svc)
+	handler := server.Handler()
+
+	resp := performJSONRequest(
+		t,
+		handler,
+		http.MethodPost,
+		"/v1/auth/gemini/profile-config",
+		`{"profile_id":"p1","execution_mode":"cli_headless"}`,
+	)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `"execution_mode":"cli_headless"`) {
+		t.Fatalf("response missing cli_headless: %s", resp.Body.String())
+	}
+
+	profile, err := store.GetProfile("google-gemini-cli", "p1")
+	if err != nil {
+		t.Fatalf("GetProfile() error = %v", err)
+	}
+	if profile.ExecutionMode != "cli_headless" {
+		t.Fatalf("ExecutionMode = %q, want cli_headless", profile.ExecutionMode)
+	}
+
+	pool := svc.Pool("google-gemini-cli")
+	account, ok := pool.GetAccount("p1")
+	if !ok {
+		t.Fatal("expected runtime pool account p1")
+	}
+	if got := strings.TrimSpace(account.Metadata["execution_mode"]); got != "cli_headless" {
+		t.Fatalf("pool execution_mode = %q, want cli_headless", got)
+	}
+
+	profilesResp := performJSONRequest(t, handler, http.MethodGet, "/v1/auth/gemini/profiles", "")
+	if profilesResp.Code != http.StatusOK {
+		t.Fatalf("unexpected profiles status: %d body=%s", profilesResp.Code, profilesResp.Body.String())
+	}
+	if !strings.Contains(profilesResp.Body.String(), `"execution_mode":"cli_headless"`) {
+		t.Fatalf("profiles response missing cli_headless: %s", profilesResp.Body.String())
 	}
 }
 

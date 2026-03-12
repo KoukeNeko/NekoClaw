@@ -124,6 +124,13 @@ func TestManagerCreateListAndRestoreRoundTrip(t *testing.T) {
 	if credential.AccessToken != "backup-secret" {
 		t.Fatalf("credential.AccessToken = %q, want %q", credential.AccessToken, "backup-secret")
 	}
+	restoredProfile, err := env.authStore.GetProfile(profile.Provider, profile.ProfileID)
+	if err != nil {
+		t.Fatalf("GetProfile failed: %v", err)
+	}
+	if restoredProfile.ExecutionMode != profile.ExecutionMode {
+		t.Fatalf("restored execution_mode = %q, want %q", restoredProfile.ExecutionMode, profile.ExecutionMode)
+	}
 	if got := strings.TrimSpace(readFile(t, filepath.Join(env.root, "state", "discord-bindings.json"))); !strings.Contains(got, "discord:alpha") {
 		t.Fatalf("discord binding not restored: %s", got)
 	}
@@ -334,11 +341,12 @@ func seedState(t *testing.T, env testEnv, token string, timezone string) auth.Pr
 	writeFile(t, filepath.Join(env.root, "config.json"), `{"general":{"timezone":"`+timezone+`"}}`)
 
 	profile := auth.ProfileMetadata{
-		ProfileID:   "openai:main",
-		Provider:    "openai",
-		Type:        "api_key",
-		DisplayName: "Main",
-		KeyHint:     "****main",
+		ProfileID:     "openai:main",
+		Provider:      "openai",
+		Type:          "api_key",
+		DisplayName:   "Main",
+		KeyHint:       "****main",
+		ExecutionMode: "cli_headless",
 	}
 	if err := env.authStore.UpsertProfile(profile); err != nil {
 		t.Fatalf("UpsertProfile failed: %v", err)

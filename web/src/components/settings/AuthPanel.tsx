@@ -25,6 +25,7 @@ import {
   startAnthropicBrowserLogin,
   startGeminiOAuth,
   startOpenAICodexBrowserLogin,
+  updateGeminiProfileConfig,
   useAIStudioProfile,
   useAnthropicProfile,
   useGeminiProfile,
@@ -37,6 +38,7 @@ import type {
   AnthropicBrowserStartResponse,
   AnthropicProfile,
   GeminiAuthProfile,
+  GeminiExecutionMode,
   GeminiAuthStartResponse,
   OpenAICodexBrowserJobResponse,
   OpenAICodexBrowserStartResponse,
@@ -252,6 +254,23 @@ function profileBadges(profile: {
     badges.unshift({ label: "Preferred", className: "badge-primary" });
   }
   return badges;
+}
+
+function geminiExecutionModeLabel(mode: GeminiExecutionMode): string {
+  return mode === "cli_headless" ? "CLI Headless" : "Internal API";
+}
+
+function upsertGeminiProfile(
+  profiles: GeminiAuthProfile[],
+  nextProfile: GeminiAuthProfile,
+): GeminiAuthProfile[] {
+  const exists = profiles.some((profile) => profile.profile_id === nextProfile.profile_id);
+  const next = exists
+    ? profiles.map((profile) =>
+        profile.profile_id === nextProfile.profile_id ? nextProfile : profile,
+      )
+    : [...profiles, nextProfile];
+  return sortGeminiProfiles(next);
 }
 
 function geminiNavProfiles(profiles: GeminiAuthProfile[]): NavProfile[] {
@@ -1040,6 +1059,30 @@ export function AuthPanel() {
     }
   }
 
+  async function handleSetGeminiExecutionMode(mode: GeminiExecutionMode) {
+    if (!selectedGemini || selectedGemini.execution_mode === mode) return;
+    setBusyAction("gemini-execution-mode");
+    try {
+      const updated = await updateGeminiProfileConfig({
+        profile_id: selectedGemini.profile_id,
+        execution_mode: mode,
+      });
+      setGeminiProfiles((current) => upsertGeminiProfile(current, updated));
+      setSelectedKeys((current) => ({ ...current, gemini: updated.profile_id }));
+      setStatus({
+        tone: "success",
+        message:
+          mode === "cli_headless"
+            ? "Gemini profile 已切換為 CLI headless 模式"
+            : "Gemini profile 已切回 internal API 模式",
+      });
+    } catch {
+      setStatus({ tone: "error", message: "更新 Gemini execution mode 失敗" });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
   async function handleAddAIStudioKey() {
     if (!aiStudioDraft.secret.trim()) return;
     setBusyAction("ai-studio-add");
@@ -1812,6 +1855,42 @@ export function AuthPanel() {
                               <div className="break-all font-mono text-sm">
                                 {fallback(selectedGemini.endpoint)}
                               </div>
+                            </div>
+                          </li>
+                          <li className="list-row">
+                            <div className="flex w-full flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                              <div className="min-w-0">
+                                <div className="text-xs uppercase tracking-wide text-base-content/50">
+                                  Execution Mode
+                                </div>
+                                <div className="text-sm">
+                                  {geminiExecutionModeLabel(selectedGemini.execution_mode)}
+                                </div>
+                                <div className="text-xs text-base-content/50">
+                                  開啟後，主聊天且未啟用工具時會改走 `gemini -p`
+                                  headless subprocess。
+                                </div>
+                              </div>
+                              <label className="flex items-center gap-3 self-start lg:self-center">
+                                <span className="text-xs font-medium text-base-content/60">
+                                  CLI Headless
+                                </span>
+                                <input
+                                  type="checkbox"
+                                  className="toggle toggle-primary"
+                                  checked={
+                                    selectedGemini.execution_mode === "cli_headless"
+                                  }
+                                  disabled={busyAction !== ""}
+                                  onChange={(event) => {
+                                    void handleSetGeminiExecutionMode(
+                                      event.target.checked
+                                        ? "cli_headless"
+                                        : "internal_api",
+                                    );
+                                  }}
+                                />
+                              </label>
                             </div>
                           </li>
                           <li className="list-row">

@@ -82,6 +82,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/auth/gemini/start", s.handleGeminiAuthStart)
 	mux.HandleFunc("/v1/auth/gemini/manual/complete", s.handleGeminiAuthManualComplete)
 	mux.HandleFunc("/v1/auth/gemini/profiles", s.handleGeminiAuthProfiles)
+	mux.HandleFunc("/v1/auth/gemini/profile-config", s.handleGeminiAuthProfileConfig)
 	mux.HandleFunc("/v1/auth/gemini/use", s.handleGeminiAuthUse)
 	mux.HandleFunc("/v1/auth/ai-studio/add-key", s.handleAIStudioAddKey)
 	mux.HandleFunc("/v1/auth/ai-studio/profiles", s.handleAIStudioProfiles)
@@ -634,6 +635,34 @@ func (s *Server) handleGeminiAuthProfiles(w http.ResponseWriter, r *http.Request
 
 type useProfileRequest struct {
 	ProfileID string `json:"profile_id"`
+}
+
+type geminiProfileConfigRequest struct {
+	ProfileID     string `json:"profile_id"`
+	ExecutionMode string `json:"execution_mode"`
+}
+
+func (s *Server) handleGeminiAuthProfileConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req geminiProfileConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	profile, err := s.svc.UpdateGeminiProfileConfig(req.ProfileID, req.ExecutionMode)
+	if err != nil {
+		switch {
+		case errors.Is(err, app.ErrProfileNotFound), errors.Is(err, auth.ErrProfileNotFound):
+			respondErrorDetail(w, http.StatusNotFound, "profile_not_found", err.Error())
+		default:
+			respondError(w, http.StatusBadRequest, err.Error())
+		}
+		return
+	}
+	respondJSON(w, http.StatusOK, profile)
 }
 
 func (s *Server) handleGeminiAuthUse(w http.ResponseWriter, r *http.Request) {

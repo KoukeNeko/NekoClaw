@@ -18,6 +18,7 @@ import type {
   GeminiAuthManualCompleteRequest,
   GeminiAuthCompleteResponse,
   GeminiAuthProfile,
+  GeminiProfileConfigRequest,
   AIStudioAddKeyRequest,
   AIStudioAddKeyResponse,
   AIStudioProfile,
@@ -349,6 +350,12 @@ export async function listGeminiProfiles(): Promise<GeminiAuthProfile[]> {
 
 export function useGeminiProfile(profileID: string): Promise<void> {
   return post("/v1/auth/gemini/use", { profile_id: profileID });
+}
+
+export function updateGeminiProfileConfig(
+  req: GeminiProfileConfigRequest,
+): Promise<GeminiAuthProfile> {
+  return post("/v1/auth/gemini/profile-config", req);
 }
 
 // ---------------------------------------------------------------------------
