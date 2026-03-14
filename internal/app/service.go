@@ -2649,6 +2649,9 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 	// Validate image MIME types by inspecting actual content bytes.
 	// This prevents API errors when declared MIME types don't match the real format.
 	core.ValidateImageMimeTypes(req.Images)
+	for i := range ephemeralMessages {
+		core.ValidateImageMimeTypes(ephemeralMessages[i].Images)
+	}
 
 	// Check session lifecycle before processing.
 	if !disableSession && s.lifecycle != nil && s.lifecycle.ShouldReset(sessionID) {
@@ -2852,6 +2855,12 @@ func (s *Service) HandleChatStream(ctx context.Context, req core.ChatRequest) <-
 		}
 		runID := strings.TrimSpace(req.RunID)
 		ephemeralMessages := cloneMessages(req.EphemeralMessages)
+
+		// Validate image MIME types by inspecting actual content bytes.
+		core.ValidateImageMimeTypes(req.Images)
+		for i := range ephemeralMessages {
+			core.ValidateImageMimeTypes(ephemeralMessages[i].Images)
+		}
 
 		// Session lifecycle check.
 		if !disableSession && s.lifecycle != nil && s.lifecycle.ShouldReset(sessionID) {

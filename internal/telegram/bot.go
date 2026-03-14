@@ -596,6 +596,11 @@ func (b *Bot) downloadTelegramFile(fileID, fileName, mimeType string) (core.Imag
 		return core.ImageData{}, fmt.Errorf("file exceeds 20 MB limit")
 	}
 
+	// Detect MIME type from actual image bytes to avoid mismatches.
+	if detected := core.DetectImageMimeType(data); detected != "" {
+		mimeType = detected
+	}
+
 	return core.ImageData{
 		MimeType: mimeType,
 		Data:     base64.StdEncoding.EncodeToString(data),
