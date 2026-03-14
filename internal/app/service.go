@@ -2646,6 +2646,10 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 	runID := strings.TrimSpace(req.RunID)
 	ephemeralMessages := cloneMessages(req.EphemeralMessages)
 
+	// Validate image MIME types by inspecting actual content bytes.
+	// This prevents API errors when declared MIME types don't match the real format.
+	core.ValidateImageMimeTypes(req.Images)
+
 	// Check session lifecycle before processing.
 	if !disableSession && s.lifecycle != nil && s.lifecycle.ShouldReset(sessionID) {
 		logService.Logf("session auto reset: session_id=%s", sessionID)
