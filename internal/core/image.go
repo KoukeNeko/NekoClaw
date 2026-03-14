@@ -132,3 +132,14 @@ func ValidateImageMimeTypes(images []ImageData) {
 		}
 	}
 }
+
+// ValidateMessageImageMimeTypes validates and corrects MIME types for images
+// in all messages. This covers images stored in conversation history that may
+// have been persisted with incorrect MIME types.
+func ValidateMessageImageMimeTypes(messages []Message) {
+	for i := range messages {
+		if len(messages[i].Images) > 0 {
+			ValidateImageMimeTypes(messages[i].Images)
+		}
+	}
+}

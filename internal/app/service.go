@@ -3194,6 +3194,10 @@ func (s *Service) attemptSingleProvider(
 	}
 	compressionMeta.CompressedTokens = contextwindow.EstimateMessagesTokens(modelMessages)
 
+	// Validate MIME types for images in all messages (including conversation history).
+	// Historical messages may have been stored with incorrect MIME types.
+	core.ValidateMessageImageMimeTypes(modelMessages)
+
 	attemptLimit := len(pool.Snapshot())
 	if attemptLimit < 1 {
 		attemptLimit = 1
