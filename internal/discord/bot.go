@@ -1775,6 +1775,12 @@ func extractDiscordImagesLimited(attachments []*discordgo.MessageAttachment, lim
 			continue
 		}
 
+		// Detect MIME type from actual image bytes to avoid mismatches
+		// (e.g. Discord reports image/jpeg but file is actually PNG).
+		if detected := core.DetectImageMimeType(data); detected != "" {
+			mime = detected
+		}
+
 		images = append(images, core.ImageData{
 			MimeType: mime,
 			Data:     base64.StdEncoding.EncodeToString(data),
