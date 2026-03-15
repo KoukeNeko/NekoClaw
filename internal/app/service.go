@@ -229,6 +229,13 @@ func (s *Service) backgroundIndex() {
 	}
 }
 
+func (s *Service) reindexMemoryFiles() error {
+	if s == nil || s.searchIndex == nil || strings.TrimSpace(s.memoryDir) == "" {
+		return nil
+	}
+	return s.searchIndex.IndexMemoryFiles(s.memoryDir)
+}
+
 func (s *Service) ListSessions() []core.SessionMetadata {
 	return s.sessions.ListSessions()
 }
@@ -3092,18 +3099,10 @@ func (s *Service) attemptSingleProvider(
 
 	compactionCfg := s.GetCompactionConfig()
 
-	// Memory flush is still only attempted on the primary request path.
-	if !params.isFallback && compactionCfg.Enabled {
-		// Pre-compaction memory flush: extract durable notes before messages are dropped.
-		if !params.disableSession && s.memoryDir != "" {
-			flusher := compaction.NewMemoryFlusher(prov, modelID, core.Account{}, s.memoryDir)
-			if flusher.ShouldFlush(estimatedTokens, contextWindow, compaction.DefaultReserveTokens) {
-				if _, flushErr := flusher.Flush(ctx, entries); flushErr != nil {
-					logService.Errorf("memory flush: session_id=%s error=%q", sessionID, flushErr)
-				}
-			}
-		}
-	}
+	// Memory flush is only attempted on the primary request path, and only
+	// after a real provider account has been acquired inside the request loop.
+	memoryFlushPending := !params.isFallback && compactionCfg.Enabled && !params.disableSession &&
+		s.memoryDir != "" && len(entries) > 0
 
 	baseMessages := []core.Message{}
 	if !params.disableSession {
@@ -3308,6 +3307,22 @@ func (s *Service) attemptSingleProvider(
 				preferredProfile = ""
 				excludedAccounts[account.ID] = struct{}{}
 				continue
+			}
+		}
+
+		if memoryFlushPending {
+			memoryFlushPending = false
+			attemptContextWindow := contextWindow
+			if resolvedContextWindow := prov.ContextWindow(attemptModelID); resolvedContextWindow > 0 {
+				attemptContextWindow = resolvedContextWindow
+			}
+			flusher := compaction.NewMemoryFlusher(prov, attemptModelID, account, s.memoryDir)
+			if flusher.ShouldFlush(estimatedTokens, attemptContextWindow, compaction.DefaultReserveTokens) {
+				if _, flushErr := flusher.Flush(ctx, entries); flushErr != nil {
+					logService.Errorf("memory flush: session_id=%s error=%q", sessionID, flushErr)
+				} else if err := s.reindexMemoryFiles(); err != nil {
+					logService.Warnf("memory reindex after flush: session_id=%s error=%q", sessionID, err)
+				}
 			}
 		}
 
@@ -4898,13 +4913,9 @@ func (s *Service) flushMemoryBeforeRotate(ctx context.Context, sessionID string)
 		logService.Warnf("session save: session_id=%s error=%q", sessionID, err)
 	}
 
-	// Re-index memory files to pick up newly created files.
-	if s.searchIndex != nil {
-		go func() {
-			if err := s.searchIndex.IndexMemoryFiles(s.memoryDir); err != nil {
-				logService.Warnf("post-rotate memory reindex: %v", err)
-			}
-		}()
+	// Re-index memory files so newly saved notes are searchable immediately.
+	if err := s.reindexMemoryFiles(); err != nil {
+		logService.Warnf("post-rotate memory reindex: %v", err)
 	}
 }
 
@@ -5002,7 +5013,10 @@ func (b serviceToolBackend) SaveMemory(content string) error {
 	if b.svc == nil || b.svc.memoryDir == "" {
 		return fmt.Errorf("memory not configured")
 	}
-	return memory.AppendDailyLog(b.svc.memoryDir, content)
+	if err := memory.AppendDailyLog(b.svc.memoryDir, content); err != nil {
+		return err
+	}
+	return b.svc.reindexMemoryFiles()
 }
 
 func (b serviceToolBackend) TaskList(sessionID string) core.TaskList {
