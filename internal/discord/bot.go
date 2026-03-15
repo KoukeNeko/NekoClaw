@@ -55,8 +55,8 @@ const (
 )
 
 const (
-	discordPlanApprovePrefix = "plan:approve:"
-	discordPlanRejectPrefix  = "plan:reject:"
+	discordPlanApprovePrefix        = "plan:approve:"
+	discordPlanRejectPrefix         = "plan:reject:"
 	discordToolAllowOncePrefix      = "tool:allow-once:"
 	discordToolAllowSessionPrefix   = "tool:allow-session:"
 	discordToolAllowWorkspacePrefix = "tool:allow-workspace:"
@@ -355,13 +355,9 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// --- Context building ---
 	var contextParts []string
 
-	// Sender identity so the LLM knows who is speaking.
-	//    Include Discord user ID so the LLM can mention them with <@ID>.
-	senderName := m.Author.Username
-	if m.Member != nil && m.Member.Nick != "" {
-		senderName = m.Member.Nick
-	}
-	contextParts = append(contextParts, fmt.Sprintf("[發送者: %s (ID:<@%s>)]", senderName, m.Author.ID))
+	// Sender identity so the LLM knows who is speaking right now.
+	// Include a stable Discord mention to reduce confusion in multi-user channels.
+	contextParts = append(contextParts, fmt.Sprintf("[目前發送者: %s]", formatDiscordActor(m.Author, m.Member)))
 
 	// Prepend context to the user message.
 	if len(contextParts) > 0 {
@@ -1227,7 +1223,7 @@ func buildChannelHistoryEntriesFromMessages(
 
 		isBot := strings.TrimSpace(msg.Author.ID) == strings.TrimSpace(botID)
 		ts := formatHistoryTimestamp(msg.Timestamp)
-		sender := resolveHistorySenderName(msg.Author)
+		sender := formatDiscordActor(msg.Author, msg.Member)
 
 		formatted := content
 		if !isBot {
@@ -1305,7 +1301,7 @@ func (b *Bot) buildReplyReferenceEntry(
 
 	isBot := strings.TrimSpace(refMsg.Author.ID) == strings.TrimSpace(s.State.User.ID)
 	ts := formatHistoryTimestamp(refMsg.Timestamp)
-	sender := resolveHistorySenderName(refMsg.Author)
+	sender := formatDiscordActor(refMsg.Author, refMsg.Member)
 
 	formatted := content
 	if !isBot {
@@ -1356,7 +1352,10 @@ func formatHistoryTimestamp(ts time.Time) string {
 	return ts.Local().Format("01/02 15:04")
 }
 
-func resolveHistorySenderName(user *discordgo.User) string {
+func resolveDiscordDisplayName(user *discordgo.User, member *discordgo.Member) string {
+	if member != nil && strings.TrimSpace(member.Nick) != "" {
+		return member.Nick
+	}
 	if user == nil {
 		return "Unknown"
 	}
@@ -1367,6 +1366,14 @@ func resolveHistorySenderName(user *discordgo.User) string {
 		return user.Username
 	}
 	return "Unknown"
+}
+
+func formatDiscordActor(user *discordgo.User, member *discordgo.Member) string {
+	name := resolveDiscordDisplayName(user, member)
+	if user == nil || strings.TrimSpace(user.ID) == "" {
+		return name
+	}
+	return fmt.Sprintf("%s (<@%s>)", name, user.ID)
 }
 
 func buildAttachmentPlaceholder(attachments []*discordgo.MessageAttachment) string {

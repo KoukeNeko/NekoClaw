@@ -162,8 +162,52 @@ func TestBuildEphemeralMessages_RoleMapping_BotAsAssistant(t *testing.T) {
 	if !strings.Contains(ephemeral[1].Content, "hello from user") {
 		t.Fatalf("expected user content in formatted history, got %q", ephemeral[1].Content)
 	}
-	if !strings.HasPrefix(ephemeral[1].Content, "[Alice · ") {
+	if !strings.HasPrefix(ephemeral[1].Content, "[Alice (<@user-1>) · ") {
 		t.Fatalf("expected user history prefix, got %q", ephemeral[1].Content)
+	}
+}
+
+func TestBuildChannelHistoryEntriesFromMessages_UsesStableUserIdentity(t *testing.T) {
+	now := time.Now().UTC()
+	message := makeTestMessage("u1", "user-1", "Alice", "hello", now, 0)
+	message.Author.GlobalName = "Alice Global"
+	message.Member = &discordgo.Member{Nick: "Alice Nick"}
+
+	entries := buildChannelHistoryEntriesFromMessages([]*discordgo.Message{message}, "bot-id", nil, now)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+
+	if !strings.HasPrefix(entries[0].FormattedText, "[Alice Nick (<@user-1>) · ") {
+		t.Fatalf("expected stable history identity, got %q", entries[0].FormattedText)
+	}
+}
+
+func TestBuildReplyReferenceEntry_UsesStableUserIdentity(t *testing.T) {
+	now := time.Now().UTC()
+	bot := &Bot{}
+	state := discordgo.NewState()
+	state.User = &discordgo.User{ID: "bot-id"}
+	session := &discordgo.Session{State: state}
+	replyTarget := makeTestMessage("reply-1", "user-1", "Alice", "quoted hello", now.Add(-time.Minute), 0)
+	replyTarget.Author.GlobalName = "Alice Global"
+	replyTarget.Member = &discordgo.Member{Nick: "Alice Nick"}
+	create := &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			ChannelID: "chan-1",
+			MessageReference: &discordgo.MessageReference{
+				MessageID: "reply-1",
+			},
+			ReferencedMessage: replyTarget,
+		},
+	}
+
+	entry := bot.buildReplyReferenceEntry(session, create, nil)
+	if entry == nil {
+		t.Fatal("expected reply reference entry")
+	}
+	if !strings.HasPrefix(entry.FormattedText, "[↩ Alice Nick (<@user-1>) · ") {
+		t.Fatalf("expected stable reply identity, got %q", entry.FormattedText)
 	}
 }
 
