@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,7 +27,7 @@ func TestGeminiOAuthManualFlowEndToEnd(t *testing.T) {
 	svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
 
 	store, err := auth.NewStore(auth.StoreOptions{
-		BaseDir: t.TempDir(),
+		BaseDir: newRetryTempDir(t),
 		Keyring: newMemoryKeyring(),
 	})
 	if err != nil {
@@ -618,6 +619,32 @@ type memoryKeyring struct {
 
 func newMemoryKeyring() *memoryKeyring {
 	return &memoryKeyring{data: map[string]string{}}
+}
+
+func newRetryTempDir(t *testing.T) string {
+	t.Helper()
+
+	dir, err := os.MkdirTemp("", "nekoclaw-test-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp() error = %v", err)
+	}
+
+	t.Cleanup(func() {
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			err := os.RemoveAll(dir)
+			if err == nil || errors.Is(err, os.ErrNotExist) {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Errorf("RemoveAll(%q) error = %v", dir, err)
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+
+	return dir
 }
 
 func (k *memoryKeyring) Available() bool {

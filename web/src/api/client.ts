@@ -23,6 +23,12 @@ import type {
   AIStudioAddKeyResponse,
   AIStudioProfile,
   AIStudioModelsResponse,
+  OpenCodeAddKeyRequest,
+  OpenCodeAddKeyResponse,
+  OpenCodeProfile,
+  GitHubModelsAddTokenRequest,
+  GitHubModelsAddTokenResponse,
+  GitHubModelsProfile,
   AnthropicAddTokenRequest,
   AnthropicAddAPIKeyRequest,
   AnthropicAddCredentialResponse,
@@ -142,10 +148,7 @@ function parseErrorJSON(statusCode: number, raw: string): ApiError {
   return new ApiError(statusCode, code, message);
 }
 
-async function fetchJSON<T>(
-  path: string,
-  init?: RequestInit,
-): Promise<T> {
+async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   const method = (init?.method ?? "GET").toUpperCase();
   const isFormData =
@@ -307,10 +310,7 @@ export function deleteSession(sessionID: string): Promise<void> {
   return post("/v1/sessions/delete", { session_id: sessionID });
 }
 
-export function renameSession(
-  sessionID: string,
-  title: string,
-): Promise<void> {
+export function renameSession(sessionID: string, title: string): Promise<void> {
   return post("/v1/sessions/rename", { session_id: sessionID, title });
 }
 
@@ -344,7 +344,9 @@ export function completeGeminiOAuthManual(
 }
 
 export async function listGeminiProfiles(): Promise<GeminiAuthProfile[]> {
-  const resp = await get<{ profiles: GeminiAuthProfile[] }>("/v1/auth/gemini/profiles");
+  const resp = await get<{ profiles: GeminiAuthProfile[] }>(
+    "/v1/auth/gemini/profiles",
+  );
   return resp.profiles ?? [];
 }
 
@@ -369,7 +371,9 @@ export function addAIStudioKey(
 }
 
 export async function listAIStudioProfiles(): Promise<AIStudioProfile[]> {
-  const resp = await get<{ profiles: AIStudioProfile[] }>("/v1/auth/ai-studio/profiles");
+  const resp = await get<{ profiles: AIStudioProfile[] }>(
+    "/v1/auth/ai-studio/profiles",
+  );
   return resp.profiles ?? [];
 }
 
@@ -383,6 +387,58 @@ export function deleteAIStudioProfile(profileID: string): Promise<void> {
 
 export function listAIStudioModels(): Promise<AIStudioModelsResponse> {
   return get("/v1/ai-studio/models");
+}
+
+// ---------------------------------------------------------------------------
+// Auth — OpenCode
+// ---------------------------------------------------------------------------
+
+export function addOpenCodeKey(
+  req: OpenCodeAddKeyRequest,
+): Promise<OpenCodeAddKeyResponse> {
+  return post("/v1/auth/opencode/add-key", req);
+}
+
+export async function listOpenCodeProfiles(): Promise<OpenCodeProfile[]> {
+  const resp = await get<{ profiles: OpenCodeProfile[] }>(
+    "/v1/auth/opencode/profiles",
+  );
+  return resp.profiles ?? [];
+}
+
+export function useOpenCodeProfile(profileID: string): Promise<void> {
+  return post("/v1/auth/opencode/use", { profile_id: profileID });
+}
+
+export function deleteOpenCodeProfile(profileID: string): Promise<void> {
+  return post("/v1/auth/opencode/delete", { profile_id: profileID });
+}
+
+// ---------------------------------------------------------------------------
+// Auth — GitHub Models
+// ---------------------------------------------------------------------------
+
+export function addGitHubModelsToken(
+  req: GitHubModelsAddTokenRequest,
+): Promise<GitHubModelsAddTokenResponse> {
+  return post("/v1/auth/github-models/add-token", req);
+}
+
+export async function listGitHubModelsProfiles(): Promise<
+  GitHubModelsProfile[]
+> {
+  const resp = await get<{ profiles: GitHubModelsProfile[] }>(
+    "/v1/auth/github-models/profiles",
+  );
+  return resp.profiles ?? [];
+}
+
+export function useGitHubModelsProfile(profileID: string): Promise<void> {
+  return post("/v1/auth/github-models/use", { profile_id: profileID });
+}
+
+export function deleteGitHubModelsProfile(profileID: string): Promise<void> {
+  return post("/v1/auth/github-models/delete", { profile_id: profileID });
 }
 
 // ---------------------------------------------------------------------------
@@ -402,7 +458,9 @@ export function addAnthropicAPIKey(
 }
 
 export async function listAnthropicProfiles(): Promise<AnthropicProfile[]> {
-  const resp = await get<{ profiles: AnthropicProfile[] }>("/v1/auth/anthropic/profiles");
+  const resp = await get<{ profiles: AnthropicProfile[] }>(
+    "/v1/auth/anthropic/profiles",
+  );
   return resp.profiles ?? [];
 }
 
@@ -447,7 +505,9 @@ export function addOpenAIKey(
 }
 
 export async function listOpenAIProfiles(): Promise<OpenAIProfile[]> {
-  const resp = await get<{ profiles: OpenAIProfile[] }>("/v1/auth/openai/profiles");
+  const resp = await get<{ profiles: OpenAIProfile[] }>(
+    "/v1/auth/openai/profiles",
+  );
   return resp.profiles ?? [];
 }
 
@@ -470,7 +530,9 @@ export function addOpenAICodexToken(
 }
 
 export async function listOpenAICodexProfiles(): Promise<OpenAIProfile[]> {
-  const resp = await get<{ profiles: OpenAIProfile[] }>("/v1/auth/openai-codex/profiles");
+  const resp = await get<{ profiles: OpenAIProfile[] }>(
+    "/v1/auth/openai-codex/profiles",
+  );
   return resp.profiles ?? [];
 }
 
@@ -491,9 +553,7 @@ export function startOpenAICodexBrowserLogin(
 export function getOpenAICodexBrowserJob(
   jobID: string,
 ): Promise<OpenAICodexBrowserJobResponse> {
-  return get(
-    `/v1/auth/openai-codex/browser/jobs/${encodeURIComponent(jobID)}`,
-  );
+  return get(`/v1/auth/openai-codex/browser/jobs/${encodeURIComponent(jobID)}`);
 }
 
 export function completeOpenAICodexBrowserManual(
@@ -502,9 +562,7 @@ export function completeOpenAICodexBrowserManual(
   return post("/v1/auth/openai-codex/browser/manual/complete", req);
 }
 
-export function cancelOpenAICodexBrowserLogin(
-  jobID: string,
-): Promise<void> {
+export function cancelOpenAICodexBrowserLogin(jobID: string): Promise<void> {
   return post("/v1/auth/openai-codex/browser/cancel", { job_id: jobID });
 }
 
@@ -572,7 +630,9 @@ export async function listPersonas(): Promise<PersonaInfo[]> {
 }
 
 export async function getActivePersona(): Promise<PersonaInfo | null> {
-  const resp = await get<{ persona: PersonaInfo | null }>("/v1/personas/active");
+  const resp = await get<{ persona: PersonaInfo | null }>(
+    "/v1/personas/active",
+  );
   return resp.persona ?? null;
 }
 
@@ -617,8 +677,10 @@ export function startBackupImport(
 
     xhr.upload.onprogress = (event) => {
       if (!onUploadProgress) return;
-      const total = event.lengthComputable && event.total > 0 ? event.total : file.size;
-      const percent = total > 0 ? Math.min(100, Math.round((event.loaded / total) * 100)) : 0;
+      const total =
+        event.lengthComputable && event.total > 0 ? event.total : file.size;
+      const percent =
+        total > 0 ? Math.min(100, Math.round((event.loaded / total) * 100)) : 0;
       onUploadProgress({
         loaded: event.loaded,
         total,
@@ -659,7 +721,9 @@ export function startBackupImport(
     };
 
     xhr.onerror = () => {
-      reject(new ApiError(0, "", "Network error while uploading backup archive"));
+      reject(
+        new ApiError(0, "", "Network error while uploading backup archive"),
+      );
     };
 
     xhr.onabort = () => {
@@ -673,7 +737,9 @@ export function startBackupImport(
   });
 }
 
-export async function getBackupImportJob(jobID: string): Promise<BackupImportJob> {
+export async function getBackupImportJob(
+  jobID: string,
+): Promise<BackupImportJob> {
   const resp = await get<{ job: BackupImportJob }>(
     `/v1/backups/import/jobs/${encodeURIComponent(jobID)}`,
   );
@@ -714,12 +780,8 @@ export async function downloadBackupArchive(id: string): Promise<void> {
 // Tool status (polling)
 // ---------------------------------------------------------------------------
 
-export function getToolStatus(
-  sessionID: string,
-): Promise<ToolStatusResult> {
-  return get(
-    `/v1/tool-status?session_id=${encodeURIComponent(sessionID)}`,
-  );
+export function getToolStatus(sessionID: string): Promise<ToolStatusResult> {
+  return get(`/v1/tool-status?session_id=${encodeURIComponent(sessionID)}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -754,7 +816,9 @@ export function getSecurityConfig(): Promise<SecurityConfig> {
   return get("/v1/security/config");
 }
 
-export function setSecurityConfig(config: SecurityConfig): Promise<SecurityConfig> {
+export function setSecurityConfig(
+  config: SecurityConfig,
+): Promise<SecurityConfig> {
   return put("/v1/security/config", config);
 }
 
@@ -794,11 +858,15 @@ export function setModelRolesConfig(config: ModelRolesConfig): Promise<void> {
 
 export async function listPlaybooks(status?: string): Promise<PlaybookEntry[]> {
   const suffix = status ? `?status=${encodeURIComponent(status)}` : "";
-  const resp = await get<{ entries: PlaybookEntry[] }>(`/v1/playbooks${suffix}`);
+  const resp = await get<{ entries: PlaybookEntry[] }>(
+    `/v1/playbooks${suffix}`,
+  );
   return resp.entries ?? [];
 }
 
-export function savePlaybook(entry: Partial<PlaybookEntry>): Promise<PlaybookEntry> {
+export function savePlaybook(
+  entry: Partial<PlaybookEntry>,
+): Promise<PlaybookEntry> {
   return post("/v1/playbooks", entry);
 }
 
@@ -823,8 +891,12 @@ export async function getPermissions(): Promise<PermissionGrant[]> {
   return resp.grants ?? [];
 }
 
-export async function savePermissions(grants: PermissionGrant[]): Promise<PermissionGrant[]> {
-  const resp = await put<{ grants: PermissionGrant[] }>("/v1/permissions", { grants });
+export async function savePermissions(
+  grants: PermissionGrant[],
+): Promise<PermissionGrant[]> {
+  const resp = await put<{ grants: PermissionGrant[] }>("/v1/permissions", {
+    grants,
+  });
   return resp.grants ?? [];
 }
 
@@ -833,7 +905,9 @@ export async function listAutomations(): Promise<WorkflowRecord[]> {
   return resp.automations ?? [];
 }
 
-export function saveAutomation(record: Partial<WorkflowRecord>): Promise<WorkflowRecord> {
+export function saveAutomation(
+  record: Partial<WorkflowRecord>,
+): Promise<WorkflowRecord> {
   if (record.id) {
     return put(`/v1/automations/${encodeURIComponent(record.id)}`, record);
   }
@@ -844,18 +918,25 @@ export function deleteAutomation(id: string): Promise<void> {
   return del(`/v1/automations/${encodeURIComponent(id)}`);
 }
 
-export function runAutomation(id: string, payload?: unknown): Promise<WorkflowRun> {
+export function runAutomation(
+  id: string,
+  payload?: unknown,
+): Promise<WorkflowRun> {
   return post(`/v1/automations/${encodeURIComponent(id)}/runs`, { payload });
 }
 
-export async function listSnapshots(sessionID: string): Promise<SnapshotRecord[]> {
+export async function listSnapshots(
+  sessionID: string,
+): Promise<SnapshotRecord[]> {
   const resp = await get<{ snapshots: SnapshotRecord[] }>(
     `/v1/snapshots?session_id=${encodeURIComponent(sessionID)}`,
   );
   return resp.snapshots ?? [];
 }
 
-export function undoSnapshot(id: string): Promise<{ snapshot: SnapshotRecord; restored: boolean; message: string }> {
+export function undoSnapshot(
+  id: string,
+): Promise<{ snapshot: SnapshotRecord; restored: boolean; message: string }> {
   return post(`/v1/snapshots/${encodeURIComponent(id)}/undo`);
 }
 

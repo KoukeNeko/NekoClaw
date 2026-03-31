@@ -33,9 +33,11 @@ var ErrProviderNotFound = errors.New("provider not found")
 var ErrNoAvailableAccount = errors.New("no available account")
 var ErrGeminiMissingProject = errors.New("gemini project is required")
 var ErrInvalidAPIKey = errors.New("invalid api key")
+var ErrInvalidGitHubToken = errors.New("invalid github token")
 var ErrInvalidOAuthToken = errors.New("invalid oauth token")
 var ErrInvalidSetupToken = errors.New("invalid setup token")
 var ErrKeyValidationFailed = errors.New("key validation failed")
+var ErrTokenValidationFailed = errors.New("token validation failed")
 var ErrProfileNotFound = errors.New("profile not found")
 var ErrProfileInUse = errors.New("profile in use")
 var ErrProviderNotReady = errors.New("provider not ready")
@@ -649,7 +651,7 @@ func (s *Service) SetConfigDir(dir string) {
 // SaveFallbacks persists the given fallback entries to config.json and updates
 // the in-memory fallback chain atomically.
 func (s *Service) SaveFallbacks(entries []core.FallbackEntry) error {
-	normalized := normalizeFallbackEntries(entries)
+	normalized := normalizeConfiguredFallbackEntries(entries)
 	s.mu.Lock()
 	configDir := s.configDir
 	s.fallbacks = normalized
@@ -808,7 +810,7 @@ func (s *Service) SaveDefaultProviderConfig(
 	modelID string,
 	thinkingMode core.ThinkingMode,
 ) error {
-	providerID, modelID = core.NormalizeProviderModelSelection(providerID, modelID)
+	providerID, modelID = core.NormalizeConfiguredProviderModelSelection(providerID, modelID)
 	thinkingMode = core.NormalizeThinkingMode(string(thinkingMode))
 	if providerID == "" {
 		thinkingMode = core.ThinkingModeAuto
@@ -819,7 +821,7 @@ func (s *Service) SaveDefaultProviderConfig(
 	s.defaultProvider = providerID
 	s.defaultModel = modelID
 	s.defaultThinking = thinkingMode
-	s.modelRoles.Action = core.NormalizeModelRoleConfig(core.ModelRoleConfig{
+	s.modelRoles.Action = core.NormalizeConfiguredModelRoleConfig(core.ModelRoleConfig{
 		Provider:     providerID,
 		Model:        modelID,
 		ThinkingMode: thinkingMode,
@@ -830,7 +832,7 @@ func (s *Service) SaveDefaultProviderConfig(
 	appCfg.DefaultProvider = providerID
 	appCfg.DefaultModel = modelID
 	appCfg.DefaultThinkingMode = thinkingMode
-	appCfg.ModelRoles.Action = core.NormalizeModelRoleConfig(core.ModelRoleConfig{
+	appCfg.ModelRoles.Action = core.NormalizeConfiguredModelRoleConfig(core.ModelRoleConfig{
 		Provider:     providerID,
 		Model:        modelID,
 		ThinkingMode: thinkingMode,
@@ -985,6 +987,70 @@ type AIStudioModelsResult struct {
 	Models      []string  `json:"models"`
 	Source      string    `json:"source"`
 	CachedUntil time.Time `json:"cached_until,omitempty"`
+}
+
+type OpenCodeAddKeyRequest struct {
+	APIKey       string `json:"api_key"`
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+}
+
+type OpenCodeAddKeyResult struct {
+	ProfileID   string `json:"profile_id"`
+	Provider    string `json:"provider"`
+	Type        string `json:"type"`
+	DisplayName string `json:"display_name"`
+	KeyHint     string `json:"key_hint"`
+	Preferred   bool   `json:"preferred"`
+	Available   bool   `json:"available"`
+}
+
+type OpenCodeProfileStatus struct {
+	ProfileID      string    `json:"profile_id"`
+	Provider       string    `json:"provider"`
+	Type           string    `json:"type"`
+	DisplayName    string    `json:"display_name,omitempty"`
+	KeyHint        string    `json:"key_hint,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	Available      bool      `json:"available"`
+	CooldownUntil  time.Time `json:"cooldown_until,omitempty"`
+	DisabledUntil  time.Time `json:"disabled_until,omitempty"`
+	DisabledReason string    `json:"disabled_reason,omitempty"`
+	Preferred      bool      `json:"preferred"`
+}
+
+type GitHubModelsAddTokenRequest struct {
+	Token        string `json:"token"`
+	DisplayName  string `json:"display_name,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	SetPreferred bool   `json:"set_preferred,omitempty"`
+}
+
+type GitHubModelsAddTokenResult struct {
+	ProfileID   string `json:"profile_id"`
+	Provider    string `json:"provider"`
+	Type        string `json:"type"`
+	DisplayName string `json:"display_name"`
+	KeyHint     string `json:"key_hint"`
+	Preferred   bool   `json:"preferred"`
+	Available   bool   `json:"available"`
+}
+
+type GitHubModelsProfileStatus struct {
+	ProfileID      string    `json:"profile_id"`
+	Provider       string    `json:"provider"`
+	Type           string    `json:"type"`
+	DisplayName    string    `json:"display_name,omitempty"`
+	KeyHint        string    `json:"key_hint,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	Available      bool      `json:"available"`
+	CooldownUntil  time.Time `json:"cooldown_until,omitempty"`
+	DisabledUntil  time.Time `json:"disabled_until,omitempty"`
+	DisabledReason string    `json:"disabled_reason,omitempty"`
+	Preferred      bool      `json:"preferred"`
 }
 
 // ModelsResult is the generic response for listing models from any provider.
@@ -1653,6 +1719,472 @@ func (s *Service) ListAIStudioModels(ctx context.Context, profileID string) (AIS
 	}, nil
 }
 
+func (s *Service) AddOpenCodeKey(
+	ctx context.Context,
+	req OpenCodeAddKeyRequest,
+) (OpenCodeAddKeyResult, error) {
+	apiKey := strings.TrimSpace(req.APIKey)
+	if apiKey == "" {
+		return OpenCodeAddKeyResult{}, fmt.Errorf("%w: api_key is required", ErrInvalidAPIKey)
+	}
+	store := s.authStoreSafe()
+	if store == nil {
+		return OpenCodeAddKeyResult{}, fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	prov, pool, err := s.resolveProviderPool("opencode")
+	if err != nil {
+		return OpenCodeAddKeyResult{}, fmt.Errorf("%w: %v", ErrProviderNotReady, err)
+	}
+
+	displayName := strings.TrimSpace(req.DisplayName)
+	profileID := strings.TrimSpace(req.ProfileID)
+	if profileID == "" {
+		profileID = deriveOpenCodeProfileID(displayName, apiKey)
+	}
+	keyHint := maskAPIKeyForHint(apiKey)
+	if displayName == "" {
+		displayName = "OpenCode " + keyHint
+	}
+
+	validationAccount := core.Account{
+		ID:       profileID,
+		Provider: "opencode",
+		Type:     core.AccountAPIKey,
+		Token:    apiKey,
+	}
+	_, err = prov.Generate(ctx, provider.GenerateRequest{
+		Model: "gpt-5.4-nano",
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: "Reply with OK."},
+		},
+		Account: validationAccount,
+	})
+	if err != nil {
+		var failureErr *provider.FailureError
+		if errors.As(err, &failureErr) &&
+			(failureErr.Reason == core.FailureAuthPermanent || failureErr.Reason == core.FailureAuth) {
+			return OpenCodeAddKeyResult{}, fmt.Errorf("%w: %v", ErrInvalidAPIKey, err)
+		}
+		return OpenCodeAddKeyResult{}, fmt.Errorf("%w: %v", ErrKeyValidationFailed, err)
+	}
+
+	if err := store.SaveCredential("opencode", profileID, auth.Credential{
+		AccessToken: apiKey,
+	}); err != nil {
+		return OpenCodeAddKeyResult{}, err
+	}
+	meta := auth.ProfileMetadata{
+		ProfileID:   profileID,
+		Provider:    "opencode",
+		Type:        string(core.AccountAPIKey),
+		DisplayName: displayName,
+		KeyHint:     keyHint,
+		Endpoint:    pEndpoint(prov),
+	}
+	if err := store.UpsertProfile(meta); err != nil {
+		_ = store.DeleteCredential("opencode", profileID)
+		return OpenCodeAddKeyResult{}, err
+	}
+
+	pool.SetCredential(profileID, core.Account{
+		ID:       profileID,
+		Provider: "opencode",
+		Type:     core.AccountAPIKey,
+		Token:    apiKey,
+		Metadata: core.Metadata{
+			"display_name": displayName,
+			"key_hint":     keyHint,
+			"endpoint":     pEndpoint(prov),
+		},
+	})
+
+	preferred := req.SetPreferred
+	if !preferred {
+		snapshots := pool.Snapshot()
+		preferred = len(snapshots) == 1
+	}
+	if preferred {
+		s.mu.Lock()
+		s.preferredProfiles["opencode"] = profileID
+		s.mu.Unlock()
+		_ = pool.SetPreferred(profileID)
+	}
+	s.syncProfileState("opencode", profileID)
+	logService.Logf(
+		"opencode key add: provider=opencode profile_id=%s key_hint=%s preferred=%t",
+		profileID,
+		keyHint,
+		preferred,
+	)
+	return OpenCodeAddKeyResult{
+		ProfileID:   profileID,
+		Provider:    "opencode",
+		Type:        string(core.AccountAPIKey),
+		DisplayName: displayName,
+		KeyHint:     keyHint,
+		Preferred:   preferred,
+		Available:   true,
+	}, nil
+}
+
+func (s *Service) ListOpenCodeProfiles() ([]OpenCodeProfileStatus, error) {
+	store := s.authStoreSafe()
+	if store == nil {
+		return nil, fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	profiles, err := store.ListProfiles("opencode")
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.RLock()
+	preferred := s.preferredProfiles["opencode"]
+	pool := s.pools["opencode"]
+	s.mu.RUnlock()
+
+	snapByID := map[string]core.AccountSnapshot{}
+	if pool != nil {
+		for _, snap := range pool.Snapshot() {
+			snapByID[snap.ID] = snap
+		}
+	}
+	now := time.Now()
+	result := make([]OpenCodeProfileStatus, 0, len(profiles))
+	for _, profile := range profiles {
+		status := OpenCodeProfileStatus{
+			ProfileID:   profile.ProfileID,
+			Provider:    profile.Provider,
+			Type:        profile.Type,
+			DisplayName: strings.TrimSpace(profile.DisplayName),
+			KeyHint:     strings.TrimSpace(profile.KeyHint),
+			CreatedAt:   profile.CreatedAt,
+			UpdatedAt:   profile.UpdatedAt,
+			Preferred:   profile.ProfileID == preferred,
+		}
+		if snap, ok := snapByID[profile.ProfileID]; ok {
+			if status.DisplayName == "" {
+				status.DisplayName = strings.TrimSpace(snap.Metadata["display_name"])
+			}
+			if status.KeyHint == "" {
+				status.KeyHint = strings.TrimSpace(snap.Metadata["key_hint"])
+			}
+			if snap.Usage != nil {
+				status.CooldownUntil = snap.Usage.CooldownUntil
+				status.DisabledUntil = snap.Usage.DisabledUntil
+				status.DisabledReason = string(snap.Usage.DisabledReason)
+				status.Available = (snap.Usage.CooldownUntil.IsZero() || now.After(snap.Usage.CooldownUntil)) &&
+					(snap.Usage.DisabledUntil.IsZero() || now.After(snap.Usage.DisabledUntil))
+			} else {
+				status.Available = true
+			}
+		} else {
+			status.CooldownUntil = profile.CooldownUntil
+			status.DisabledUntil = profile.DisabledUntil
+			status.DisabledReason = profile.DisabledReason
+			status.Available = (profile.CooldownUntil.IsZero() || now.After(profile.CooldownUntil)) &&
+				(profile.DisabledUntil.IsZero() || now.After(profile.DisabledUntil))
+		}
+		result = append(result, status)
+	}
+	return result, nil
+}
+
+func (s *Service) UseOpenCodeProfile(profileID string) error {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		return fmt.Errorf("profile_id is required")
+	}
+	store := s.authStoreSafe()
+	if store == nil {
+		return fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	if _, err := store.GetProfile("opencode", profileID); err != nil {
+		if errors.Is(err, auth.ErrProfileNotFound) {
+			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		}
+		return err
+	}
+
+	s.mu.Lock()
+	pool := s.pools["opencode"]
+	s.preferredProfiles["opencode"] = profileID
+	s.mu.Unlock()
+	if pool != nil {
+		if ok := pool.SetPreferred(profileID); !ok {
+			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		}
+	}
+	logService.Logf("opencode profile use: provider=opencode profile_id=%s", profileID)
+	return nil
+}
+
+func (s *Service) DeleteOpenCodeProfile(profileID string) error {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		return fmt.Errorf("profile_id is required")
+	}
+	store := s.authStoreSafe()
+	if store == nil {
+		return fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	if _, err := store.GetProfile("opencode", profileID); err != nil {
+		if errors.Is(err, auth.ErrProfileNotFound) {
+			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		}
+		return err
+	}
+
+	_ = store.DeleteCredential("opencode", profileID)
+	if err := store.DeleteProfile("opencode", profileID); err != nil && !errors.Is(err, auth.ErrProfileNotFound) {
+		return err
+	}
+
+	s.mu.Lock()
+	if s.preferredProfiles["opencode"] == profileID {
+		delete(s.preferredProfiles, "opencode")
+	}
+	pool := s.pools["opencode"]
+	s.mu.Unlock()
+	if pool != nil {
+		pool.RemoveAccount(profileID)
+	}
+	logService.Logf("opencode profile delete: provider=opencode profile_id=%s", profileID)
+	return nil
+}
+
+func (s *Service) AddGitHubModelsToken(
+	ctx context.Context,
+	req GitHubModelsAddTokenRequest,
+) (GitHubModelsAddTokenResult, error) {
+	token := strings.TrimSpace(req.Token)
+	if token == "" {
+		return GitHubModelsAddTokenResult{}, fmt.Errorf("%w: token is required", ErrInvalidGitHubToken)
+	}
+	store := s.authStoreSafe()
+	if store == nil {
+		return GitHubModelsAddTokenResult{}, fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	prov, pool, err := s.resolveProviderPool("github-models")
+	if err != nil {
+		return GitHubModelsAddTokenResult{}, fmt.Errorf("%w: %v", ErrProviderNotReady, err)
+	}
+
+	displayName := strings.TrimSpace(req.DisplayName)
+	profileID := strings.TrimSpace(req.ProfileID)
+	if profileID == "" {
+		profileID = deriveGitHubModelsProfileID(displayName, token)
+	}
+	keyHint := maskAPIKeyForHint(token)
+	if displayName == "" {
+		displayName = "GitHub Models Token " + keyHint
+	}
+
+	validationAccount := core.Account{
+		ID:       profileID,
+		Provider: "github-models",
+		Type:     core.AccountToken,
+		Token:    token,
+	}
+	_, err = prov.Generate(ctx, provider.GenerateRequest{
+		Model: "openai/gpt-4.1-nano",
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: "Reply with OK."},
+		},
+		Account: validationAccount,
+	})
+	if err != nil {
+		var failureErr *provider.FailureError
+		if errors.As(err, &failureErr) &&
+			(failureErr.Reason == core.FailureAuthPermanent || failureErr.Reason == core.FailureAuth) {
+			return GitHubModelsAddTokenResult{}, fmt.Errorf("%w: %v", ErrInvalidGitHubToken, err)
+		}
+		return GitHubModelsAddTokenResult{}, fmt.Errorf("%w: %v", ErrTokenValidationFailed, err)
+	}
+
+	if err := store.SaveCredential("github-models", profileID, auth.Credential{
+		AccessToken: token,
+	}); err != nil {
+		return GitHubModelsAddTokenResult{}, err
+	}
+	meta := auth.ProfileMetadata{
+		ProfileID:   profileID,
+		Provider:    "github-models",
+		Type:        string(core.AccountToken),
+		DisplayName: displayName,
+		KeyHint:     keyHint,
+		Endpoint:    pEndpoint(prov),
+	}
+	if err := store.UpsertProfile(meta); err != nil {
+		_ = store.DeleteCredential("github-models", profileID)
+		return GitHubModelsAddTokenResult{}, err
+	}
+
+	pool.SetCredential(profileID, core.Account{
+		ID:       profileID,
+		Provider: "github-models",
+		Type:     core.AccountToken,
+		Token:    token,
+		Metadata: core.Metadata{
+			"display_name": displayName,
+			"key_hint":     keyHint,
+			"endpoint":     pEndpoint(prov),
+		},
+	})
+
+	preferred := req.SetPreferred
+	if !preferred {
+		snapshots := pool.Snapshot()
+		preferred = len(snapshots) == 1
+	}
+	if preferred {
+		s.mu.Lock()
+		s.preferredProfiles["github-models"] = profileID
+		s.mu.Unlock()
+		_ = pool.SetPreferred(profileID)
+	}
+	s.syncProfileState("github-models", profileID)
+	logService.Logf(
+		"github models token add: provider=github-models profile_id=%s key_hint=%s preferred=%t",
+		profileID,
+		keyHint,
+		preferred,
+	)
+	return GitHubModelsAddTokenResult{
+		ProfileID:   profileID,
+		Provider:    "github-models",
+		Type:        string(core.AccountToken),
+		DisplayName: displayName,
+		KeyHint:     keyHint,
+		Preferred:   preferred,
+		Available:   true,
+	}, nil
+}
+
+func (s *Service) ListGitHubModelsProfiles() ([]GitHubModelsProfileStatus, error) {
+	store := s.authStoreSafe()
+	if store == nil {
+		return nil, fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	profiles, err := store.ListProfiles("github-models")
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.RLock()
+	preferred := s.preferredProfiles["github-models"]
+	pool := s.pools["github-models"]
+	s.mu.RUnlock()
+
+	snapByID := map[string]core.AccountSnapshot{}
+	if pool != nil {
+		for _, snap := range pool.Snapshot() {
+			snapByID[snap.ID] = snap
+		}
+	}
+	now := time.Now()
+	result := make([]GitHubModelsProfileStatus, 0, len(profiles))
+	for _, profile := range profiles {
+		status := GitHubModelsProfileStatus{
+			ProfileID:   profile.ProfileID,
+			Provider:    profile.Provider,
+			Type:        profile.Type,
+			DisplayName: strings.TrimSpace(profile.DisplayName),
+			KeyHint:     strings.TrimSpace(profile.KeyHint),
+			CreatedAt:   profile.CreatedAt,
+			UpdatedAt:   profile.UpdatedAt,
+			Preferred:   profile.ProfileID == preferred,
+		}
+		if snap, ok := snapByID[profile.ProfileID]; ok {
+			if status.DisplayName == "" {
+				status.DisplayName = strings.TrimSpace(snap.Metadata["display_name"])
+			}
+			if status.KeyHint == "" {
+				status.KeyHint = strings.TrimSpace(snap.Metadata["key_hint"])
+			}
+			if snap.Usage != nil {
+				status.CooldownUntil = snap.Usage.CooldownUntil
+				status.DisabledUntil = snap.Usage.DisabledUntil
+				status.DisabledReason = string(snap.Usage.DisabledReason)
+				status.Available = (snap.Usage.CooldownUntil.IsZero() || now.After(snap.Usage.CooldownUntil)) &&
+					(snap.Usage.DisabledUntil.IsZero() || now.After(snap.Usage.DisabledUntil))
+			} else {
+				status.Available = true
+			}
+		} else {
+			status.CooldownUntil = profile.CooldownUntil
+			status.DisabledUntil = profile.DisabledUntil
+			status.DisabledReason = profile.DisabledReason
+			status.Available = (profile.CooldownUntil.IsZero() || now.After(profile.CooldownUntil)) &&
+				(profile.DisabledUntil.IsZero() || now.After(profile.DisabledUntil))
+		}
+		result = append(result, status)
+	}
+	return result, nil
+}
+
+func (s *Service) UseGitHubModelsProfile(profileID string) error {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		return fmt.Errorf("profile_id is required")
+	}
+	store := s.authStoreSafe()
+	if store == nil {
+		return fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	if _, err := store.GetProfile("github-models", profileID); err != nil {
+		if errors.Is(err, auth.ErrProfileNotFound) {
+			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		}
+		return err
+	}
+
+	s.mu.Lock()
+	pool := s.pools["github-models"]
+	s.preferredProfiles["github-models"] = profileID
+	s.mu.Unlock()
+	if pool != nil {
+		if ok := pool.SetPreferred(profileID); !ok {
+			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		}
+	}
+	logService.Logf("github models profile use: provider=github-models profile_id=%s", profileID)
+	return nil
+}
+
+func (s *Service) DeleteGitHubModelsProfile(profileID string) error {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		return fmt.Errorf("profile_id is required")
+	}
+	store := s.authStoreSafe()
+	if store == nil {
+		return fmt.Errorf("%w: auth store not configured", ErrProviderNotReady)
+	}
+	if _, err := store.GetProfile("github-models", profileID); err != nil {
+		if errors.Is(err, auth.ErrProfileNotFound) {
+			return fmt.Errorf("%w: %s", ErrProfileNotFound, profileID)
+		}
+		return err
+	}
+
+	_ = store.DeleteCredential("github-models", profileID)
+	if err := store.DeleteProfile("github-models", profileID); err != nil && !errors.Is(err, auth.ErrProfileNotFound) {
+		return err
+	}
+
+	s.mu.Lock()
+	if s.preferredProfiles["github-models"] == profileID {
+		delete(s.preferredProfiles, "github-models")
+	}
+	pool := s.pools["github-models"]
+	s.mu.Unlock()
+	if pool != nil {
+		pool.RemoveAccount(profileID)
+	}
+	logService.Logf("github models profile delete: provider=github-models profile_id=%s", profileID)
+	return nil
+}
+
 // ListModels returns available model IDs for any provider. If the provider
 // implements ModelCatalogProvider, real model data is fetched from its API.
 // Otherwise a hardcoded fallback list is returned.
@@ -1728,12 +2260,16 @@ func (s *Service) ListModels(ctx context.Context, providerID, profileID string) 
 // support dynamic listing or when the API call fails.
 func fallbackModels(providerID string) []string {
 	switch providerID {
+	case "opencode":
+		return []string{"gpt-5.3-codex", "claude-sonnet-4-6", "gemini-3.1-pro", "kimi-k2.5", "glm-5", "minimax-m2.5"}
 	case "anthropic":
 		return []string{"claude-opus-4-6", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-3-5"}
 	case "openai":
 		return []string{"gpt-5.1-codex", "gpt-5", "gpt-4.1"}
 	case "openai-codex":
 		return []string{"gpt-5.3-codex", "gpt-5.1-codex"}
+	case "github-models":
+		return []string{"openai/gpt-5-chat", "openai/gpt-5-mini", "openai/gpt-4.1"}
 	case "google-ai-studio":
 		return []string{"gemini-2.5-pro", "gemini-2.5-flash"}
 	case "google-gemini-cli":
@@ -4646,6 +5182,8 @@ func (s *Service) resolveRuntimeModel(
 
 func fallbackDefaultModel(providerID string) string {
 	switch strings.TrimSpace(providerID) {
+	case "opencode":
+		return "gpt-5.3-codex"
 	case "google-gemini-cli":
 		return "gemini-3.1-pro-preview"
 	case "google-ai-studio":
@@ -4656,6 +5194,8 @@ func fallbackDefaultModel(providerID string) string {
 		return "gpt-5.1-codex"
 	case "openai-codex":
 		return "gpt-5.3-codex"
+	case "github-models":
+		return "openai/gpt-5-chat"
 	default:
 		return "default"
 	}
@@ -4771,6 +5311,41 @@ func deriveAIStudioProfileID(displayName, apiKey string) string {
 		suffix = fmt.Sprintf("%d", time.Now().Unix())
 	}
 	return "google-ai-studio:" + base + "_" + suffix
+}
+
+func deriveOpenCodeProfileID(displayName, apiKey string) string {
+	base := strings.TrimSpace(strings.ToLower(displayName))
+	if base == "" {
+		base = "key"
+	}
+	base = sanitizeProfileSlug(base)
+	suffix := strings.TrimSpace(apiKey)
+	if len(suffix) > 6 {
+		suffix = suffix[len(suffix)-6:]
+	}
+	suffix = sanitizeProfileSlug(strings.ToLower(suffix))
+	if suffix == "" {
+		suffix = fmt.Sprintf("%d", time.Now().Unix())
+	}
+	return "opencode:" + base + "_" + suffix
+}
+
+func deriveGitHubModelsProfileID(displayName, token string) string {
+	base := strings.TrimSpace(strings.ToLower(displayName))
+	if base == "" {
+		base = "token"
+	}
+	base = sanitizeProfileSlug(base)
+
+	suffix := strings.TrimSpace(token)
+	if len(suffix) > 6 {
+		suffix = suffix[len(suffix)-6:]
+	}
+	suffix = sanitizeProfileSlug(strings.ToLower(suffix))
+	if suffix == "" {
+		suffix = fmt.Sprintf("%d", time.Now().Unix())
+	}
+	return "github-models:" + base + "_" + suffix
 }
 
 func deriveAnthropicProfileID(accountType core.AccountType, displayName, secret string) string {
@@ -5289,6 +5864,22 @@ func normalizeFallbackEntries(entries []core.FallbackEntry) []core.FallbackEntry
 	result := make([]core.FallbackEntry, 0, len(entries))
 	for _, entry := range entries {
 		entry.Provider, entry.Model = core.NormalizeProviderModelSelection(
+			entry.Provider,
+			entry.Model,
+		)
+		entry.ThinkingMode = core.NormalizeThinkingMode(string(entry.ThinkingMode))
+		if entry.Provider == "" {
+			continue
+		}
+		result = append(result, entry)
+	}
+	return result
+}
+
+func normalizeConfiguredFallbackEntries(entries []core.FallbackEntry) []core.FallbackEntry {
+	result := make([]core.FallbackEntry, 0, len(entries))
+	for _, entry := range entries {
+		entry.Provider, entry.Model = core.NormalizeConfiguredProviderModelSelection(
 			entry.Provider,
 			entry.Model,
 		)

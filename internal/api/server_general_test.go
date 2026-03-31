@@ -174,8 +174,8 @@ func TestDefaultProviderEndpoint_PersistsSelection(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &saved); err != nil {
 		t.Fatalf("decode saved default provider: %v", err)
 	}
-	if saved.Provider != "google-gemini-cli" {
-		t.Fatalf("saved provider = %q, want %q", saved.Provider, "google-gemini-cli")
+	if saved.Provider != "opencode" {
+		t.Fatalf("saved provider = %q, want %q", saved.Provider, "opencode")
 	}
 	if saved.Model != "gemini-2.5-pro" {
 		t.Fatalf("saved model = %q, want %q", saved.Model, "gemini-2.5-pro")
@@ -188,8 +188,8 @@ func TestDefaultProviderEndpoint_PersistsSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
-	if config.DefaultProvider != "google-gemini-cli" {
-		t.Fatalf("config default_provider = %q, want %q", config.DefaultProvider, "google-gemini-cli")
+	if config.DefaultProvider != "opencode" {
+		t.Fatalf("config default_provider = %q, want %q", config.DefaultProvider, "opencode")
 	}
 	if config.DefaultModel != "gemini-2.5-pro" {
 		t.Fatalf("config default_model = %q, want %q", config.DefaultModel, "gemini-2.5-pro")
@@ -197,8 +197,8 @@ func TestDefaultProviderEndpoint_PersistsSelection(t *testing.T) {
 	if config.DefaultThinkingMode != core.ThinkingModeHigh {
 		t.Fatalf("config default_thinking_mode = %q, want %q", config.DefaultThinkingMode, core.ThinkingModeHigh)
 	}
-	if config.ModelRoles.Action.Provider != "google-gemini-cli" {
-		t.Fatalf("config model_roles.action.provider = %q, want %q", config.ModelRoles.Action.Provider, "google-gemini-cli")
+	if config.ModelRoles.Action.Provider != "opencode" {
+		t.Fatalf("config model_roles.action.provider = %q, want %q", config.ModelRoles.Action.Provider, "opencode")
 	}
 	if config.ModelRoles.Action.Model != "gemini-2.5-pro" {
 		t.Fatalf("config model_roles.action.model = %q, want %q", config.ModelRoles.Action.Model, "gemini-2.5-pro")
@@ -265,6 +265,9 @@ func TestFallbacksEndpoint_PersistsThinkingMode(t *testing.T) {
 	if saved.Fallbacks[0].ThinkingMode != core.ThinkingModeMedium {
 		t.Fatalf("fallback[0].thinking_mode = %q, want %q", saved.Fallbacks[0].ThinkingMode, core.ThinkingModeMedium)
 	}
+	if saved.Fallbacks[1].Provider != "opencode" {
+		t.Fatalf("fallback[1].provider = %q, want %q", saved.Fallbacks[1].Provider, "opencode")
+	}
 	if saved.Fallbacks[1].ThinkingMode != core.ThinkingModeHigh {
 		t.Fatalf("fallback[1].thinking_mode = %q, want %q", saved.Fallbacks[1].ThinkingMode, core.ThinkingModeHigh)
 	}
@@ -278,6 +281,9 @@ func TestFallbacksEndpoint_PersistsThinkingMode(t *testing.T) {
 	}
 	if config.Fallbacks[0].ThinkingMode != core.ThinkingModeMedium {
 		t.Fatalf("config fallback[0].thinking_mode = %q, want %q", config.Fallbacks[0].ThinkingMode, core.ThinkingModeMedium)
+	}
+	if config.Fallbacks[1].Provider != "opencode" {
+		t.Fatalf("config fallback[1].provider = %q, want %q", config.Fallbacks[1].Provider, "opencode")
 	}
 	if config.Fallbacks[1].ThinkingMode != core.ThinkingModeHigh {
 		t.Fatalf("config fallback[1].thinking_mode = %q, want %q", config.Fallbacks[1].ThinkingMode, core.ThinkingModeHigh)
@@ -313,8 +319,8 @@ func TestModelRolesConfigEndpoint_PersistsSelection(t *testing.T) {
 	if saved.Action.Provider != "google-ai-studio" {
 		t.Fatalf("action provider = %q, want google-ai-studio", saved.Action.Provider)
 	}
-	if saved.Planner.Provider != "google-gemini-cli" {
-		t.Fatalf("planner provider = %q, want google-gemini-cli", saved.Planner.Provider)
+	if saved.Planner.Provider != "opencode" {
+		t.Fatalf("planner provider = %q, want opencode", saved.Planner.Provider)
 	}
 	if saved.Compaction.ThinkingMode != core.ThinkingModeLow {
 		t.Fatalf("compaction thinking = %q, want %q", saved.Compaction.ThinkingMode, core.ThinkingModeLow)
@@ -326,6 +332,9 @@ func TestModelRolesConfigEndpoint_PersistsSelection(t *testing.T) {
 	}
 	if config.DefaultProvider != "google-ai-studio" {
 		t.Fatalf("config default_provider = %q, want google-ai-studio", config.DefaultProvider)
+	}
+	if config.ModelRoles.Title.Provider != "opencode" {
+		t.Fatalf("config model_roles.title.provider = %q, want opencode", config.ModelRoles.Title.Provider)
 	}
 	if config.ModelRoles.Title.Model != "gpt-5-mini" {
 		t.Fatalf("config model_roles.title.model = %q, want gpt-5-mini", config.ModelRoles.Title.Model)
@@ -370,6 +379,9 @@ func TestFallbacksEndpoint_PreservesGeminiCLIModel(t *testing.T) {
 	}
 	if len(saved.Fallbacks) != 1 {
 		t.Fatalf("fallbacks len = %d, want 1", len(saved.Fallbacks))
+	}
+	if saved.Fallbacks[0].Provider != "opencode" {
+		t.Fatalf("fallback provider = %q, want %q", saved.Fallbacks[0].Provider, "opencode")
 	}
 	if saved.Fallbacks[0].Model != "gemini-3-pro-preview" {
 		t.Fatalf("fallback model = %q, want %q", saved.Fallbacks[0].Model, "gemini-3-pro-preview")

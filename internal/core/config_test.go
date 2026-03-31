@@ -50,7 +50,7 @@ func TestLoadConfig_DefaultsSecurityConfigWhenMissing(t *testing.T) {
 func TestLoadAndSaveConfig_RoundTripsDefaultSelection(t *testing.T) {
 	configDir := t.TempDir()
 	want := AppConfig{
-		DefaultProvider:     "google-gemini-cli",
+		DefaultProvider:     "opencode",
 		DefaultModel:        "gemini-2.5-pro",
 		DefaultThinkingMode: ThinkingModeHigh,
 		Fallbacks: []FallbackEntry{
@@ -144,8 +144,14 @@ func TestLoadConfig_PreservesGeminiCLIModelSelection(t *testing.T) {
 	if got.DefaultModel != "gemini-3-pro-preview" {
 		t.Fatalf("default_model = %q, want %q", got.DefaultModel, "gemini-3-pro-preview")
 	}
+	if got.DefaultProvider != "opencode" {
+		t.Fatalf("default_provider = %q, want %q", got.DefaultProvider, "opencode")
+	}
 	if len(got.Fallbacks) != 1 {
 		t.Fatalf("fallbacks len = %d, want 1", len(got.Fallbacks))
+	}
+	if got.Fallbacks[0].Provider != "opencode" {
+		t.Fatalf("fallback provider = %q, want %q", got.Fallbacks[0].Provider, "opencode")
 	}
 	if got.Fallbacks[0].Model != "gemini-3-pro-preview" {
 		t.Fatalf("fallback model = %q, want %q", got.Fallbacks[0].Model, "gemini-3-pro-preview")
@@ -165,7 +171,7 @@ func TestLoadAndSaveConfig_RoundTripsModelRoles(t *testing.T) {
 				ThinkingMode: ThinkingModeHigh,
 			},
 			Planner: ModelRoleConfig{
-				Provider:     "google-gemini-cli",
+				Provider:     "opencode",
 				Model:        "gemini-3.1-pro-preview",
 				ThinkingMode: ThinkingModeMedium,
 			},
@@ -173,7 +179,7 @@ func TestLoadAndSaveConfig_RoundTripsModelRoles(t *testing.T) {
 				ThinkingMode: ThinkingModeLow,
 			},
 			Title: ModelRoleConfig{
-				Provider: "openai",
+				Provider: "opencode",
 				Model:    "gpt-5-mini",
 			},
 		},

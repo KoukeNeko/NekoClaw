@@ -143,7 +143,7 @@ func LoadConfig(configDir string) (AppConfig, error) {
 	)
 	cfg.DefaultThinkingMode = sanitizeThinkingMode(cfg.DefaultThinkingMode)
 	cfg.Fallbacks = sanitizeFallbacks(cfg.Fallbacks)
-	cfg.ModelRoles = NormalizeModelRolesConfig(cfg.ModelRoles)
+	cfg.ModelRoles = NormalizeConfiguredModelRolesConfig(cfg.ModelRoles)
 	cfg.General = sanitizeGeneralConfig(cfg.General)
 	cfg.Compaction = sanitizeCompactionConfig(cfg.Compaction)
 	cfg.Security = sanitizeSecurityConfig(cfg.Security)
@@ -162,7 +162,7 @@ func SaveConfig(configDir string, cfg AppConfig) error {
 	)
 	cfg.DefaultThinkingMode = sanitizeThinkingMode(cfg.DefaultThinkingMode)
 	cfg.Fallbacks = sanitizeFallbacks(cfg.Fallbacks)
-	cfg.ModelRoles = NormalizeModelRolesConfig(cfg.ModelRoles)
+	cfg.ModelRoles = NormalizeConfiguredModelRolesConfig(cfg.ModelRoles)
 	cfg.General = sanitizeGeneralConfig(cfg.General)
 	cfg.Compaction = sanitizeCompactionConfig(cfg.Compaction)
 	cfg.Security = sanitizeSecurityConfig(cfg.Security)
@@ -187,7 +187,7 @@ func resolveConfigDir(configDir string) string {
 }
 
 func sanitizeDefaultSelection(provider string, model string) (string, string) {
-	return NormalizeProviderModelSelection(provider, model)
+	return NormalizeConfiguredProviderModelSelection(provider, model)
 }
 
 // sanitizeFallbacks trims whitespace, removes entries with empty provider,
@@ -195,7 +195,7 @@ func sanitizeDefaultSelection(provider string, model string) (string, string) {
 func sanitizeFallbacks(entries []FallbackEntry) []FallbackEntry {
 	result := make([]FallbackEntry, 0, maxFallbackSlots)
 	for _, entry := range entries {
-		entry.Provider, entry.Model = NormalizeProviderModelSelection(
+		entry.Provider, entry.Model = NormalizeConfiguredProviderModelSelection(
 			entry.Provider,
 			entry.Model,
 		)
@@ -225,6 +225,23 @@ func NormalizeProviderModelSelection(provider string, model string) (string, str
 		model = "default"
 	}
 	return provider, model
+}
+
+func NormalizeConfiguredProviderModelSelection(provider string, model string) (string, string) {
+	provider, model = NormalizeProviderModelSelection(provider, model)
+	if provider == "" {
+		return "", ""
+	}
+	return NormalizeConfiguredProviderID(provider), model
+}
+
+func NormalizeConfiguredProviderID(provider string) string {
+	switch strings.TrimSpace(provider) {
+	case "anthropic", "google-gemini-cli", "openai", "openai-codex":
+		return "opencode"
+	default:
+		return strings.TrimSpace(provider)
+	}
 }
 
 func sanitizeGeneralConfig(cfg GeneralConfig) GeneralConfig {

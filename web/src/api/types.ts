@@ -387,6 +387,70 @@ export interface AIStudioModelsResponse {
   cached_until?: string;
 }
 
+export interface OpenCodeAddKeyRequest {
+  api_key: string;
+  display_name?: string;
+  profile_id?: string;
+  set_preferred?: boolean;
+}
+
+export interface OpenCodeAddKeyResponse {
+  profile_id: string;
+  provider: string;
+  type: string;
+  display_name: string;
+  key_hint: string;
+  preferred: boolean;
+  available: boolean;
+}
+
+export interface OpenCodeProfile {
+  profile_id: string;
+  provider: string;
+  type: string;
+  display_name?: string;
+  key_hint?: string;
+  created_at: string;
+  updated_at: string;
+  available: boolean;
+  cooldown_until?: string;
+  disabled_until?: string;
+  disabled_reason?: string;
+  preferred: boolean;
+}
+
+export interface GitHubModelsAddTokenRequest {
+  token: string;
+  display_name?: string;
+  profile_id?: string;
+  set_preferred?: boolean;
+}
+
+export interface GitHubModelsAddTokenResponse {
+  profile_id: string;
+  provider: string;
+  type: string;
+  display_name: string;
+  key_hint: string;
+  preferred: boolean;
+  available: boolean;
+}
+
+export interface GitHubModelsProfile {
+  profile_id: string;
+  provider: string;
+  type: string;
+  display_name?: string;
+  key_hint?: string;
+  created_at: string;
+  updated_at: string;
+  available: boolean;
+  cooldown_until?: string;
+  disabled_until?: string;
+  disabled_reason?: string;
+  preferred: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Auth — Anthropic
 // ---------------------------------------------------------------------------
@@ -928,7 +992,12 @@ export interface ToolsConfig {
 }
 
 export type PlaybookKind = "instruction" | "preference" | "workflow";
-export type PlaybookScope = "global" | "workspace" | "persona" | "surface" | "session";
+export type PlaybookScope =
+  | "global"
+  | "workspace"
+  | "persona"
+  | "surface"
+  | "session";
 export type PlaybookStatus = "candidate" | "active" | "archived";
 
 export interface PlaybookEntry {

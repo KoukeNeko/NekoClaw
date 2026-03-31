@@ -16,7 +16,7 @@ func (s *Service) GetModelRolesConfig() core.ModelRolesConfig {
 // SaveModelRolesConfig persists workflow model roles to config.json and keeps
 // the action role synchronized with the legacy default provider fields.
 func (s *Service) SaveModelRolesConfig(cfg core.ModelRolesConfig) error {
-	cfg = core.NormalizeModelRolesConfig(cfg)
+	cfg = core.NormalizeConfiguredModelRolesConfig(cfg)
 
 	s.mu.Lock()
 	configDir := s.configDir

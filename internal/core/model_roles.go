@@ -91,6 +91,23 @@ func NormalizeModelRolesConfig(cfg ModelRolesConfig) ModelRolesConfig {
 	return cfg
 }
 
+func NormalizeConfiguredModelRoleConfig(cfg ModelRoleConfig) ModelRoleConfig {
+	cfg.Provider, cfg.Model = NormalizeConfiguredProviderModelSelection(cfg.Provider, cfg.Model)
+	cfg.ThinkingMode = sanitizeOptionalThinkingMode(cfg.ThinkingMode)
+	return cfg
+}
+
+func NormalizeConfiguredModelRolesConfig(cfg ModelRolesConfig) ModelRolesConfig {
+	cfg.Action = NormalizeConfiguredModelRoleConfig(cfg.Action)
+	cfg.Planner = NormalizeConfiguredModelRoleConfig(cfg.Planner)
+	cfg.Compaction = NormalizeConfiguredModelRoleConfig(cfg.Compaction)
+	cfg.Title = NormalizeConfiguredModelRoleConfig(cfg.Title)
+	cfg.Explorer = NormalizeConfiguredModelRoleConfig(cfg.Explorer)
+	cfg.Critic = NormalizeConfiguredModelRoleConfig(cfg.Critic)
+	cfg.Automation = NormalizeConfiguredModelRoleConfig(cfg.Automation)
+	return cfg
+}
+
 func MergeModelRoleConfigs(configs ...ModelRoleConfig) ModelRoleConfig {
 	var merged ModelRoleConfig
 	normalized := make([]ModelRoleConfig, 0, len(configs))

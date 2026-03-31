@@ -7,32 +7,22 @@
       "token": "mock"
     },
     {
-      "id": "gemini-main",
-      "provider": "google-gemini-cli",
-      "type": "oauth",
-      "token": "<oauth-token>",
-      "metadata": {
-        "project_id": "my-project-id",
-        "endpoint": "https://cloudcode-pa.googleapis.com"
-      }
-    },
-    {
-      "id": "anthropic-main",
-      "provider": "anthropic",
-      "type": "token",
-      "token": "<claude-setup-token>"
-    },
-    {
-      "id": "openai-main",
-      "provider": "openai",
+      "id": "opencode-main",
+      "provider": "opencode",
       "type": "api_key",
-      "token": "<openai-api-key>"
+      "token": "<opencode-api-key>"
     },
     {
-      "id": "openai-codex-main",
-      "provider": "openai-codex",
-      "type": "oauth",
-      "token": "<openai-codex-oauth-token>"
+      "id": "ai-studio-main",
+      "provider": "google-ai-studio",
+      "type": "api_key",
+      "token": "<google-ai-studio-api-key>"
+    },
+    {
+      "id": "github-models-main",
+      "provider": "github-models",
+      "type": "token",
+      "token": "<github-token-or-pat>"
     }
   ]
 }

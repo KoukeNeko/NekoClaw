@@ -115,8 +115,8 @@ func TestBuildService_LoadsSavedDefaultSelectionFromConfig(t *testing.T) {
 		t.Fatalf("buildService failed: %v", err)
 	}
 
-	if svc.GetDefaultProvider() != "openai" {
-		t.Fatalf("default provider = %q, want %q", svc.GetDefaultProvider(), "openai")
+	if svc.GetDefaultProvider() != "opencode" {
+		t.Fatalf("default provider = %q, want %q", svc.GetDefaultProvider(), "opencode")
 	}
 	if svc.GetDefaultModel() != "gpt-5" {
 		t.Fatalf("default model = %q, want %q", svc.GetDefaultModel(), "gpt-5")

@@ -68,7 +68,7 @@ Defaults when flags are omitted:
 
 - API: `127.0.0.1:8085`
 - Mode: `web`
-- Provider: `google-gemini-cli`
+- Provider: `opencode`
 - Model: `default`
 - Session: `main`
 
@@ -91,63 +91,35 @@ docker run --rm -p 8085:8085 -v nekoclaw-data:/data/.nekoclaw nekoclaw:local
 ```
 
 The container defaults to `-mode web` and persists runtime state under `/data/.nekoclaw`.
-The image also preinstalls Node.js, `@google/gemini-cli`, `@playwright/mcp`, and Chromium so Gemini OAuth plus the builtin Playwright MCP server can start without manual npm setup inside the container. Containerized Gemini OAuth now reads its OAuth client config from the bundled `gemini` CLI; no separate Gemini OAuth client env setup is required.
+The image also preinstalls Node.js, `@playwright/mcp`, and Chromium so the builtin Playwright MCP server can start without manual npm setup inside the container.
 
 GitHub Actions can publish the image to GHCR as `ghcr.io/koukeneko/nekoclaw`:
 
 - push to `main` -> `latest` and `sha-*`
 - push `vX.Y.Z` -> `X.Y.Z`, `X.Y`, `X`, and `sha-*`
 
-## Gemini Internal Provider
+## OpenCode Provider
 
-The project includes a `google-gemini-cli` provider that supports:
+The project includes an `opencode` provider backed by OpenCode Zen. It supports:
 
-- endpoint fallback (`cloudcode-pa`, `daily-cloudcode-pa.sandbox`, `autopush-cloudcode-pa.sandbox`)
-- quota query (`/v1internal:retrieveUserQuota`)
-- project discovery/onboarding (`loadCodeAssist`, `onboardUser`, operation polling)
-
-### OAuth Login (recommended)
-
-Gemini OAuth flow supports:
-
-- loopback callback (default `http://127.0.0.1:8085/oauth2callback`)
-- browser-host aware startup (`localhost`/`127.0.0.1` keeps loopback flow; non-local origins still use manual completion against the loopback callback)
-- manual fallback (paste callback URL or code)
-- PKCE/state verification
-- endpoint auto selection (`cloudcode-pa` -> `daily` -> `autopush`)
-- project auto discovery via `loadCodeAssist/onboardUser` (if provisioning fails, re-run Gemini OAuth and confirm gemini CLI provisioning succeeded)
-- token persistence: OS keychain + metadata JSON (no plaintext token in repo)
+- API key profile management in the Web UI
+- model listing via `GET /v1/models?provider=opencode`
+- OpenCode Zen model routing for GPT / Claude / Gemini / OpenAI-compatible chat models
+- default runtime fallback model `gpt-5.3-codex`
 
 Web UI flow (Settings -> Auth):
 
-- `開始 OAuth` starts the flow; Gemini CLI OAuth always uses the loopback callback, and public deployments finish via manual paste-back
-- `重新整理` reloads profile and flow state after browser auth returns
-- `Profiles` to inspect account availability and cooldown status
-- `使用此 profile` to switch runtime profile
-- `完成 Gemini OAuth` appears for manual fallback so you can paste the final `127.0.0.1` callback URL or auth code when loopback/popup flow is unavailable
+- add OpenCode API key
+- `Enter` use selected profile
+- `d` delete selected profile
 
 API endpoints:
 
-- `POST /v1/auth/gemini/start`
-- `GET /oauth2callback`
-- `POST /v1/auth/gemini/manual/complete`
-- `GET /v1/auth/gemini/profiles`
-- `POST /v1/auth/gemini/use`
-
-`POST /v1/auth/gemini/start` request now also supports:
-
-- `mode`: `auto` (default), `local`, `remote`
-- `redirect_uri`: override the loopback callback URI when you need a custom local host/port
-
-OAuth client source:
-
-- Required: installed `gemini` CLI (NekoClaw extracts the OAuth client config from it)
-
-Runtime state:
-
-- OAuth state defaults to `~/.nekoclaw/auth`
-- Web mode logs default to `~/.nekoclaw/logs/nekoclaw.log`
-- Callback host/port default to `127.0.0.1:8085` unless overridden by CLI flags
+- `POST /v1/auth/opencode/add-key`
+- `GET /v1/auth/opencode/profiles`
+- `POST /v1/auth/opencode/use`
+- `POST /v1/auth/opencode/delete`
+- `GET /v1/models?provider=opencode`
 
 ## Google AI Studio Provider
 
@@ -173,77 +145,28 @@ API endpoints:
 
 Credentials are managed through Web UI Settings > Auth and persisted in the auth store.
 
-## Anthropic Provider (Claude setup-token / API key / browser login)
+## GitHub Models Provider
 
-The project includes an `anthropic` provider that supports:
+The project also includes a `github-models` provider that supports:
 
-- Claude subscription setup-token (`sk-ant-oat01-...`)
-- Anthropic API key
-- browser login bridge with job polling and manual completion
-- account pool rotation/cooldown/failover (`token` naturally preferred over `api_key`)
-- default model runtime fallback (`claude-sonnet-4-6`)
+- GitHub token / PAT credentials
+- default model runtime fallback (`openai/gpt-5-chat`)
+- public catalog-backed model listing via `GET /v1/models?provider=github-models`
+- static fallback model list when no profile is configured or live catalog fetch fails
 
 Web UI flow (Settings -> Auth):
 
-- `b` start Anthropic browser login
-- `t` add Anthropic setup-token (masked input)
-- `k` add Anthropic API key (masked input)
-- `c` cancel active browser login job
+- add GitHub token / PAT
 - `Enter` use selected profile
 - `d` delete selected profile
 
 API endpoints:
 
-- `POST /v1/auth/anthropic/add-token`
-- `POST /v1/auth/anthropic/add-api-key`
-- `GET /v1/auth/anthropic/profiles`
-- `POST /v1/auth/anthropic/use`
-- `POST /v1/auth/anthropic/delete`
-- `POST /v1/auth/anthropic/browser/start`
-- `POST /v1/auth/anthropic/browser/manual/complete`
-- `POST /v1/auth/anthropic/browser/cancel`
-- `GET /v1/auth/anthropic/browser/jobs/<job_id>`
-
-Credentials are managed through Web UI Settings > Auth and persisted in the auth store.
-
-## OpenAI / OpenAI Codex Providers
-
-The project now includes:
-
-- `openai` (API key path)
-- `openai-codex` (OAuth token path + browser login bridge)
-
-OpenClaw-aligned runtime behavior:
-
-- separate providers and default models:
-  - `openai` -> `gpt-5.1-codex`
-  - `openai-codex` -> `gpt-5.3-codex`
-- `openai` and `openai-codex` credentials are not mixed.
-- if `provider=openai` has no API key but `openai-codex` OAuth exists, chat returns a clear guardrail error (use `openai-codex/...` or add an OpenAI API key in Web UI Settings > Auth).
-
-Web UI flow (Settings -> Auth):
-
-- `w` start OpenAI Codex browser login
-- `p` add OpenAI API key
-- `x` add OpenAI Codex OAuth token
-- `c` cancel active browser login job
-- `Enter` use selected profile
-- `d` delete selected profile
-
-API endpoints:
-
-- `POST /v1/auth/openai/add-key`
-- `POST /v1/auth/openai-codex/add-token`
-- `POST /v1/auth/openai-codex/browser/start`
-- `POST /v1/auth/openai-codex/browser/manual/complete`
-- `POST /v1/auth/openai-codex/browser/cancel`
-- `GET /v1/auth/openai-codex/browser/jobs/<job_id>`
-- `GET /v1/auth/openai/profiles`
-- `GET /v1/auth/openai-codex/profiles`
-- `POST /v1/auth/openai/use`
-- `POST /v1/auth/openai-codex/use`
-- `POST /v1/auth/openai/delete`
-- `POST /v1/auth/openai-codex/delete`
+- `POST /v1/auth/github-models/add-token`
+- `GET /v1/auth/github-models/profiles`
+- `POST /v1/auth/github-models/use`
+- `POST /v1/auth/github-models/delete`
+- `GET /v1/models?provider=github-models`
 
 Credentials are managed through Web UI Settings > Auth and persisted in the auth store.
 
@@ -255,26 +178,22 @@ Create `accounts.json` in repo root:
 {
   "accounts": [
     {
-      "id": "gemini-1",
-      "provider": "google-gemini-cli",
-      "type": "oauth",
-      "token": "<oauth-token>",
-      "metadata": {
-        "project_id": "my-project",
-        "endpoint": "https://cloudcode-pa.googleapis.com"
-      }
-    },
-    {
-      "id": "openai-main",
-      "provider": "openai",
+      "id": "opencode-main",
+      "provider": "opencode",
       "type": "api_key",
-      "token": "<openai-api-key>"
+      "token": "<opencode-api-key>"
     },
     {
-      "id": "openai-codex-main",
-      "provider": "openai-codex",
-      "type": "oauth",
-      "token": "<openai-codex-oauth-token>"
+      "id": "ai-studio-main",
+      "provider": "google-ai-studio",
+      "type": "api_key",
+      "token": "<google-ai-studio-api-key>"
+    },
+    {
+      "id": "github-models-main",
+      "provider": "github-models",
+      "type": "token",
+      "token": "<github-token-or-pat>"
     }
   ]
 }
@@ -297,12 +216,12 @@ Web UI settings also support:
 
 ### Bot Commands
 
-| Command | Description |
-|---------|-------------|
-| `/reset` | Start a new conversation (old session preserved, accessible from Web UI Sessions) |
-| `/persona` | Open the channel-visible persona selector dropdown |
-| `/persona name:<name>` | Switch to a persona (case-insensitive, supports substring match) |
-| `/persona name:off` | Deactivate current persona |
+| Command                | Description                                                                       |
+| ---------------------- | --------------------------------------------------------------------------------- |
+| `/reset`               | Start a new conversation (old session preserved, accessible from Web UI Sessions) |
+| `/persona`             | Open the channel-visible persona selector dropdown                                |
+| `/persona name:<name>` | Switch to a persona (case-insensitive, supports substring match)                  |
+| `/persona name:off`    | Deactivate current persona                                                        |
 
 ### Behavior
 
@@ -331,12 +250,12 @@ Set via Web UI Settings > Telegram:
 
 ### Bot Commands
 
-| Command | Description |
-|---------|-------------|
-| `/reset` | Start a new conversation |
-| `/persona` | List available personas |
-| `/persona <name>` | Switch to a persona |
-| `/persona off` | Deactivate current persona |
+| Command           | Description                |
+| ----------------- | -------------------------- |
+| `/reset`          | Start a new conversation   |
+| `/persona`        | List available personas    |
+| `/persona <name>` | Switch to a persona        |
+| `/persona off`    | Deactivate current persona |
 
 ### Behavior
 
@@ -392,39 +311,20 @@ Core:
 
 Provider auth:
 
-- `GET /oauth2callback`
-- `GET /v1/gemini/quota?provider=<id>&account_id=<id>`
-- `POST /v1/gemini/discover-project`
-- `POST /v1/auth/gemini/start`
-- `POST /v1/auth/gemini/manual/complete`
-- `GET /v1/auth/gemini/profiles`
-- `POST /v1/auth/gemini/use`
 - `POST /v1/auth/ai-studio/add-key`
 - `GET /v1/auth/ai-studio/profiles`
 - `POST /v1/auth/ai-studio/use`
 - `POST /v1/auth/ai-studio/delete`
 - `GET /v1/ai-studio/models?profile_id=<id>`
-- `POST /v1/auth/anthropic/add-token`
-- `POST /v1/auth/anthropic/add-api-key`
-- `GET /v1/auth/anthropic/profiles`
-- `POST /v1/auth/anthropic/use`
-- `POST /v1/auth/anthropic/delete`
-- `POST /v1/auth/anthropic/browser/start`
-- `POST /v1/auth/anthropic/browser/manual/complete`
-- `POST /v1/auth/anthropic/browser/cancel`
-- `GET /v1/auth/anthropic/browser/jobs/<job_id>`
-- `POST /v1/auth/openai/add-key`
-- `POST /v1/auth/openai-codex/add-token`
-- `POST /v1/auth/openai-codex/browser/start`
-- `POST /v1/auth/openai-codex/browser/manual/complete`
-- `POST /v1/auth/openai-codex/browser/cancel`
-- `GET /v1/auth/openai-codex/browser/jobs/<job_id>`
-- `GET /v1/auth/openai/profiles`
-- `GET /v1/auth/openai-codex/profiles`
-- `POST /v1/auth/openai/use`
-- `POST /v1/auth/openai-codex/use`
-- `POST /v1/auth/openai/delete`
-- `POST /v1/auth/openai-codex/delete`
+- `POST /v1/auth/opencode/add-key`
+- `GET /v1/auth/opencode/profiles`
+- `POST /v1/auth/opencode/use`
+- `POST /v1/auth/opencode/delete`
+- `POST /v1/auth/github-models/add-token`
+- `GET /v1/auth/github-models/profiles`
+- `POST /v1/auth/github-models/use`
+- `POST /v1/auth/github-models/delete`
+- `GET /v1/models?provider=github-models`
 
 Sessions, usage, and memory:
 

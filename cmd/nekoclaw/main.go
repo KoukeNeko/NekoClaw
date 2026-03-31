@@ -41,7 +41,7 @@ func main() {
 	var (
 		mode               = flag.String("mode", "web", "run mode: api | web")
 		addr               = flag.String("addr", "127.0.0.1:8085", "api listen address")
-		defaultProvider    = flag.String("provider", "google-gemini-cli", "default provider")
+		defaultProvider    = flag.String("provider", "opencode", "default provider")
 		defaultModel       = flag.String("model", "default", "default model")
 		accountsPath       = flag.String("accounts", "./accounts.json", "account json path")
 		geminiEndpoints    = flag.String("gemini-endpoints", defaultGeminiEndpoints(), "comma-separated gemini internal endpoints")
@@ -83,6 +83,12 @@ func main() {
 		providerExplicit,
 		modelExplicit,
 	)
+	if service.Provider(resolvedProvider) == nil {
+		resolvedProvider = "opencode"
+		if !modelExplicit {
+			resolvedModel = "default"
+		}
+	}
 
 	// Start MCP server connections (non-fatal on failure).
 	if err := service.StartMCP(context.Background()); err != nil {
@@ -455,25 +461,16 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		{ID: "mock-default", Provider: "mock", Type: core.AccountAPIKey, Token: "mock"},
 	}, nil, core.DefaultCooldownConfig()))
 
-	geminiProvider := provider.NewGeminiInternalProvider(provider.GeminiInternalOptions{
-		Endpoints:    splitCSV(opts.GeminiEndpoints),
-		GeneratePath: opts.GeminiGeneratePath,
-	})
-	svc.RegisterProvider(geminiProvider)
-	aiStudioProvider := provider.NewGoogleAIStudioProvider(provider.GoogleAIStudioOptions{})
-	svc.RegisterProvider(aiStudioProvider)
-	anthropicProvider := provider.NewAnthropicProvider(provider.AnthropicOptions{})
-	svc.RegisterProvider(anthropicProvider)
-	openAIProvider := provider.NewOpenAIProvider(provider.OpenAIOptions{
-		ProviderID:   "openai",
-		DefaultModel: "gpt-5.1-codex",
-	})
-	svc.RegisterProvider(openAIProvider)
-	openAICodexProvider := provider.NewOpenAIProvider(provider.OpenAIOptions{
-		ProviderID:   "openai-codex",
+	openCodeProvider := provider.NewOpenCodeProvider(provider.OpenCodeOptions{
 		DefaultModel: "gpt-5.3-codex",
 	})
-	svc.RegisterProvider(openAICodexProvider)
+	svc.RegisterProvider(openCodeProvider)
+	aiStudioProvider := provider.NewGoogleAIStudioProvider(provider.GoogleAIStudioOptions{})
+	svc.RegisterProvider(aiStudioProvider)
+	gitHubModelsProvider := provider.NewGitHubModelsProvider(provider.GitHubModelsOptions{
+		DefaultModel: "openai/gpt-5-chat",
+	})
+	svc.RegisterProvider(gitHubModelsProvider)
 
 	accounts, err := loadAccounts(opts.AccountsPath)
 	if err != nil {
@@ -495,21 +492,14 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 		svc.RegisterPool(core.NewAccountPool(providerID, providerAccounts, nil, core.DefaultCooldownConfig()))
 	}
 
-	if svc.Pool("google-gemini-cli") == nil {
-		// Keep provider registered even if no tokens are configured.
-		svc.RegisterPool(core.NewAccountPool("google-gemini-cli", nil, nil, core.DefaultCooldownConfig()))
+	if svc.Pool("opencode") == nil {
+		svc.RegisterPool(core.NewAccountPool("opencode", nil, nil, core.DefaultCooldownConfig()))
 	}
 	if svc.Pool("google-ai-studio") == nil {
 		svc.RegisterPool(core.NewAccountPool("google-ai-studio", nil, nil, core.DefaultCooldownConfig()))
 	}
-	if svc.Pool("anthropic") == nil {
-		svc.RegisterPool(core.NewAccountPool("anthropic", nil, nil, core.DefaultCooldownConfig()))
-	}
-	if svc.Pool("openai") == nil {
-		svc.RegisterPool(core.NewAccountPool("openai", nil, nil, core.DefaultCooldownConfig()))
-	}
-	if svc.Pool("openai-codex") == nil {
-		svc.RegisterPool(core.NewAccountPool("openai-codex", nil, nil, core.DefaultCooldownConfig()))
+	if svc.Pool("github-models") == nil {
+		svc.RegisterPool(core.NewAccountPool("github-models", nil, nil, core.DefaultCooldownConfig()))
 	}
 
 	// Apply remaining config (fallbacks, general settings, Discord, Telegram) from the earlier load.
@@ -524,14 +514,15 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	svc.SetTelegramConfig(appConfig.Telegram)
 	svc.SetToolsConfig(appConfig.Tools)
 	svc.SetDefaultThinkingMode(appConfig.DefaultThinkingMode)
-	if appConfig.DefaultProvider != "" {
+	if appConfig.DefaultProvider != "" && svc.Provider(appConfig.DefaultProvider) != nil {
 		svc.SetDefaultProvider(appConfig.DefaultProvider)
 		svc.SetDefaultModel(appConfig.DefaultModel)
 	}
-	svc.SetModelRolesConfig(appConfig.ModelRoles)
+	svc.SetModelRolesConfig(filterUnsupportedModelRoles(svc, appConfig.ModelRoles))
 
-	if len(appConfig.Fallbacks) > 0 {
-		svc.SetFallbacks(appConfig.Fallbacks)
+	filteredFallbacks := filterSupportedFallbacks(svc, appConfig.Fallbacks)
+	if len(filteredFallbacks) > 0 {
+		svc.SetFallbacks(filteredFallbacks)
 	} else {
 		// Default fallback: when primary accounts are exhausted, try google-ai-studio.
 		svc.SetFallbacks([]core.FallbackEntry{
@@ -571,14 +562,11 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	if err := hydrateAIStudioProfiles(svc, authStore); err != nil {
 		return nil, fmt.Errorf("hydrate ai studio profiles: %w", err)
 	}
-	if err := hydrateAnthropicProfiles(svc, authStore); err != nil {
-		return nil, fmt.Errorf("hydrate anthropic profiles: %w", err)
+	if err := hydrateOpenCodeProfiles(svc, authStore); err != nil {
+		return nil, fmt.Errorf("hydrate opencode profiles: %w", err)
 	}
-	if err := hydrateOpenAIProfiles(svc, authStore); err != nil {
-		return nil, fmt.Errorf("hydrate openai profiles: %w", err)
-	}
-	if err := hydrateOpenAICodexProfiles(svc, authStore); err != nil {
-		return nil, fmt.Errorf("hydrate openai-codex profiles: %w", err)
+	if err := hydrateGitHubModelsProfiles(svc, authStore); err != nil {
+		return nil, fmt.Errorf("hydrate github-models profiles: %w", err)
 	}
 
 	return svc, nil
@@ -691,6 +679,47 @@ func hydrateAIStudioProfiles(svc *app.Service, store *auth.Store) error {
 	return nil
 }
 
+func hydrateOpenCodeProfiles(svc *app.Service, store *auth.Store) error {
+	if svc == nil || store == nil {
+		return nil
+	}
+	pool := svc.Pool("opencode")
+	if pool == nil {
+		return nil
+	}
+
+	profiles, err := store.ListProfiles("opencode")
+	if err != nil {
+		return err
+	}
+	for _, profile := range profiles {
+		if strings.TrimSpace(profile.ProfileID) == "" {
+			continue
+		}
+		credential, err := store.LoadCredential(profile.Provider, profile.ProfileID)
+		if err != nil {
+			continue
+		}
+		account := core.Account{
+			ID:       profile.ProfileID,
+			Provider: "opencode",
+			Type:     core.AccountAPIKey,
+			Token:    credential.AccessToken,
+			Metadata: core.Metadata{
+				"display_name": strings.TrimSpace(profile.DisplayName),
+				"key_hint":     strings.TrimSpace(profile.KeyHint),
+				"endpoint":     strings.TrimSpace(profile.Endpoint),
+			},
+		}
+		pool.SetCredential(profile.ProfileID, account)
+		logSystem.Logf("profile hydrated: provider=opencode profile_id=%s key_hint=%s",
+			profile.ProfileID,
+			strings.TrimSpace(profile.KeyHint),
+		)
+	}
+	return nil
+}
+
 func hydrateAnthropicProfiles(svc *app.Service, store *auth.Store) error {
 	if svc == nil || store == nil {
 		return nil
@@ -735,6 +764,43 @@ func hydrateAnthropicProfiles(svc *app.Service, store *auth.Store) error {
 		)
 	}
 	return nil
+}
+
+func filterSupportedFallbacks(svc *app.Service, entries []core.FallbackEntry) []core.FallbackEntry {
+	if svc == nil {
+		return nil
+	}
+	filtered := make([]core.FallbackEntry, 0, len(entries))
+	for _, entry := range entries {
+		if svc.Provider(strings.TrimSpace(entry.Provider)) == nil {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
+}
+
+func filterUnsupportedModelRoles(svc *app.Service, cfg core.ModelRolesConfig) core.ModelRolesConfig {
+	if svc == nil {
+		return cfg
+	}
+	filterRole := func(role core.ModelRoleConfig) core.ModelRoleConfig {
+		if strings.TrimSpace(role.Provider) == "" {
+			return role
+		}
+		if svc.Provider(strings.TrimSpace(role.Provider)) != nil {
+			return role
+		}
+		return core.ModelRoleConfig{}
+	}
+	cfg.Action = filterRole(cfg.Action)
+	cfg.Planner = filterRole(cfg.Planner)
+	cfg.Compaction = filterRole(cfg.Compaction)
+	cfg.Title = filterRole(cfg.Title)
+	cfg.Explorer = filterRole(cfg.Explorer)
+	cfg.Critic = filterRole(cfg.Critic)
+	cfg.Automation = filterRole(cfg.Automation)
+	return cfg
 }
 
 func hydrateOpenAIProfiles(svc *app.Service, store *auth.Store) error {
@@ -825,6 +891,47 @@ func hydrateOpenAICodexProfiles(svc *app.Service, store *auth.Store) error {
 	return nil
 }
 
+func hydrateGitHubModelsProfiles(svc *app.Service, store *auth.Store) error {
+	if svc == nil || store == nil {
+		return nil
+	}
+	pool := svc.Pool("github-models")
+	if pool == nil {
+		return nil
+	}
+
+	profiles, err := store.ListProfiles("github-models")
+	if err != nil {
+		return err
+	}
+	for _, profile := range profiles {
+		if strings.TrimSpace(profile.ProfileID) == "" {
+			continue
+		}
+		credential, err := store.LoadCredential(profile.Provider, profile.ProfileID)
+		if err != nil {
+			continue
+		}
+		account := core.Account{
+			ID:       profile.ProfileID,
+			Provider: "github-models",
+			Type:     core.AccountToken,
+			Token:    credential.AccessToken,
+			Metadata: core.Metadata{
+				"display_name": strings.TrimSpace(profile.DisplayName),
+				"key_hint":     strings.TrimSpace(profile.KeyHint),
+				"endpoint":     strings.TrimSpace(profile.Endpoint),
+			},
+		}
+		pool.SetCredential(profile.ProfileID, account)
+		logSystem.Logf("profile hydrated: provider=github-models profile_id=%s key_hint=%s",
+			profile.ProfileID,
+			strings.TrimSpace(profile.KeyHint),
+		)
+	}
+	return nil
+}
+
 func loadAccounts(path string) ([]core.Account, error) {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
@@ -881,7 +988,7 @@ func resolveRuntimeDefaultSelection(
 	}
 
 	if providerID == "" {
-		providerID = "google-gemini-cli"
+		providerID = "opencode"
 	}
 	if modelID == "" {
 		modelID = "default"

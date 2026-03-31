@@ -4,6 +4,8 @@ import {
   addAIStudioKey,
   addAnthropicAPIKey,
   addAnthropicToken,
+  addGitHubModelsToken,
+  addOpenCodeKey,
   addOpenAIKey,
   addOpenAICodexToken,
   cancelAnthropicBrowserLogin,
@@ -13,6 +15,8 @@ import {
   completeOpenAICodexBrowserManual,
   deleteAIStudioProfile,
   deleteAnthropicProfile,
+  deleteGitHubModelsProfile,
+  deleteOpenCodeProfile,
   deleteOpenAIProfile,
   deleteOpenAICodexProfile,
   getAnthropicBrowserJob,
@@ -20,6 +24,8 @@ import {
   listAIStudioProfiles,
   listAnthropicProfiles,
   listGeminiProfiles,
+  listGitHubModelsProfiles,
+  listOpenCodeProfiles,
   listOpenAICodexProfiles,
   listOpenAIProfiles,
   startAnthropicBrowserLogin,
@@ -29,6 +35,8 @@ import {
   useAIStudioProfile,
   useAnthropicProfile,
   useGeminiProfile,
+  useGitHubModelsProfile,
+  useOpenCodeProfile,
   useOpenAIProfile,
   useOpenAICodexProfile,
 } from "@/api/client";
@@ -40,6 +48,8 @@ import type {
   GeminiAuthProfile,
   GeminiExecutionMode,
   GeminiAuthStartResponse,
+  GitHubModelsProfile,
+  OpenCodeProfile,
   OpenAICodexBrowserJobResponse,
   OpenAICodexBrowserStartResponse,
   OpenAIProfile,
@@ -47,7 +57,13 @@ import type {
 
 type StatusTone = "success" | "error" | "info";
 type StatusState = { tone: StatusTone; message: string } | null;
-type AuthGroupKey = "gemini" | "aiStudio" | "anthropic" | "openAI";
+type AuthGroupKey =
+  | "gemini"
+  | "aiStudio"
+  | "openCode"
+  | "githubModels"
+  | "anthropic"
+  | "openAI";
 type SelectionState = Record<AuthGroupKey, string>;
 type CredentialDraft = { secret: string; displayName: string };
 
@@ -66,6 +82,8 @@ interface NavProfile {
 const EMPTY_SELECTIONS: SelectionState = {
   gemini: "",
   aiStudio: "",
+  openCode: "",
+  githubModels: "",
   anthropic: "",
   openAI: "",
 };
@@ -96,7 +114,10 @@ function isLocalBrowserHost(hostname: string): boolean {
   );
 }
 
-function buildGeminiOAuthRequest(): { mode: "auto" | "remote"; redirect_uri?: string } {
+function buildGeminiOAuthRequest(): {
+  mode: "auto" | "remote";
+  redirect_uri?: string;
+} {
   if (typeof window === "undefined") {
     return { mode: "auto" };
   }
@@ -162,11 +183,21 @@ function anthropicProfileKey(profile: AnthropicProfile): string {
   return profile.profile_id;
 }
 
+function openCodeProfileKey(profile: OpenCodeProfile): string {
+  return profile.profile_id;
+}
+
+function gitHubModelsProfileKey(profile: GitHubModelsProfile): string {
+  return profile.profile_id;
+}
+
 function openAIProfileKey(profile: OpenAIProfile): string {
   return `${profile.provider}:${profile.profile_id}`;
 }
 
-function sortGeminiProfiles(incoming: GeminiAuthProfile[]): GeminiAuthProfile[] {
+function sortGeminiProfiles(
+  incoming: GeminiAuthProfile[],
+): GeminiAuthProfile[] {
   return [...incoming].sort((left, right) => {
     if (left.preferred !== right.preferred) return left.preferred ? -1 : 1;
     return left.profile_id.localeCompare(right.profile_id, "en", {
@@ -184,7 +215,29 @@ function sortAIStudioProfiles(incoming: AIStudioProfile[]): AIStudioProfile[] {
   });
 }
 
-function sortAnthropicProfiles(incoming: AnthropicProfile[]): AnthropicProfile[] {
+function sortAnthropicProfiles(
+  incoming: AnthropicProfile[],
+): AnthropicProfile[] {
+  return [...incoming].sort((left, right) => {
+    if (left.preferred !== right.preferred) return left.preferred ? -1 : 1;
+    return left.profile_id.localeCompare(right.profile_id, "en", {
+      sensitivity: "base",
+    });
+  });
+}
+
+function sortOpenCodeProfiles(incoming: OpenCodeProfile[]): OpenCodeProfile[] {
+  return [...incoming].sort((left, right) => {
+    if (left.preferred !== right.preferred) return left.preferred ? -1 : 1;
+    return left.profile_id.localeCompare(right.profile_id, "en", {
+      sensitivity: "base",
+    });
+  });
+}
+
+function sortGitHubModelsProfiles(
+  incoming: GitHubModelsProfile[],
+): GitHubModelsProfile[] {
   return [...incoming].sort((left, right) => {
     if (left.preferred !== right.preferred) return left.preferred ? -1 : 1;
     return left.profile_id.localeCompare(right.profile_id, "en", {
@@ -249,7 +302,13 @@ function profileBadges(profile: {
   cooldown_until?: string;
   disabled_until?: string;
 }): NavBadge[] {
-  const badges = [availabilityBadge(profile.available, profile.cooldown_until, profile.disabled_until)];
+  const badges = [
+    availabilityBadge(
+      profile.available,
+      profile.cooldown_until,
+      profile.disabled_until,
+    ),
+  ];
   if (profile.preferred) {
     badges.unshift({ label: "Preferred", className: "badge-primary" });
   }
@@ -264,28 +323,15 @@ function upsertGeminiProfile(
   profiles: GeminiAuthProfile[],
   nextProfile: GeminiAuthProfile,
 ): GeminiAuthProfile[] {
-  const exists = profiles.some((profile) => profile.profile_id === nextProfile.profile_id);
+  const exists = profiles.some(
+    (profile) => profile.profile_id === nextProfile.profile_id,
+  );
   const next = exists
     ? profiles.map((profile) =>
         profile.profile_id === nextProfile.profile_id ? nextProfile : profile,
       )
     : [...profiles, nextProfile];
   return sortGeminiProfiles(next);
-}
-
-function geminiNavProfiles(profiles: GeminiAuthProfile[]): NavProfile[] {
-  return profiles.map((profile) => {
-    const badges = profileBadges(profile);
-    if (!profile.project_ready) {
-      badges.push({ label: "Project missing", className: "badge-warning" });
-    }
-    return {
-      key: geminiProfileKey(profile),
-      title: fallback(profile.email, profile.profile_id),
-      subtitle: `${profile.profile_id} · project ${fallback(profile.project_id)}`,
-      badges,
-    };
-  });
 }
 
 function aiStudioNavProfiles(profiles: AIStudioProfile[]): NavProfile[] {
@@ -297,20 +343,22 @@ function aiStudioNavProfiles(profiles: AIStudioProfile[]): NavProfile[] {
   }));
 }
 
-function anthropicNavProfiles(profiles: AnthropicProfile[]): NavProfile[] {
+function openCodeNavProfiles(profiles: OpenCodeProfile[]): NavProfile[] {
   return profiles.map((profile) => ({
-    key: anthropicProfileKey(profile),
+    key: openCodeProfileKey(profile),
     title: fallback(profile.display_name, profile.profile_id),
     subtitle: `${fallback(profile.type)} · ${fallback(profile.key_hint)}`,
     badges: profileBadges(profile),
   }));
 }
 
-function openAINavProfiles(profiles: OpenAIProfile[]): NavProfile[] {
+function gitHubModelsNavProfiles(
+  profiles: GitHubModelsProfile[],
+): NavProfile[] {
   return profiles.map((profile) => ({
-    key: openAIProfileKey(profile),
+    key: gitHubModelsProfileKey(profile),
     title: fallback(profile.display_name, profile.profile_id),
-    subtitle: `${profile.provider} · ${fallback(profile.type)} · ${fallback(profile.key_hint)}`,
+    subtitle: `${fallback(profile.type)} · ${fallback(profile.key_hint)}`,
     badges: profileBadges(profile),
   }));
 }
@@ -340,8 +388,9 @@ function jobNeedsManualIntervention(
   job: { status: string; manual_hint?: string } | null,
 ): boolean {
   if (!job) return false;
-  return job.status === "manual_required" || (
-    job.status === "failed" && !!job.manual_hint?.trim()
+  return (
+    job.status === "manual_required" ||
+    (job.status === "failed" && !!job.manual_hint?.trim())
   );
 }
 
@@ -380,6 +429,8 @@ function selectedProviderTitle(
   selected:
     | GeminiAuthProfile
     | AIStudioProfile
+    | OpenCodeProfile
+    | GitHubModelsProfile
     | AnthropicProfile
     | OpenAIProfile
     | null,
@@ -390,6 +441,10 @@ function selectedProviderTitle(
         return "Gemini OAuth";
       case "aiStudio":
         return "AI Studio Keys";
+      case "openCode":
+        return "OpenCode";
+      case "githubModels":
+        return "GitHub Models";
       case "anthropic":
         return "Anthropic";
       default:
@@ -399,13 +454,24 @@ function selectedProviderTitle(
 
   switch (group) {
     case "gemini":
-      return fallback((selected as GeminiAuthProfile).email, selected.profile_id);
+      return fallback(
+        (selected as GeminiAuthProfile).email,
+        selected.profile_id,
+      );
     case "aiStudio":
+    case "openCode":
+    case "githubModels":
     case "anthropic":
     case "openAI":
       return fallback(
-        (selected as AIStudioProfile | AnthropicProfile | OpenAIProfile)
-          .display_name,
+        (
+          selected as
+            | AIStudioProfile
+            | OpenCodeProfile
+            | GitHubModelsProfile
+            | AnthropicProfile
+            | OpenAIProfile
+        ).display_name,
         selected.profile_id,
       );
   }
@@ -439,9 +505,7 @@ function ProviderNavCard(props: {
   return (
     <div
       className={`card min-w-0 border shadow-sm transition-colors ${
-        active
-          ? "border-primary bg-base-200"
-          : "border-base-300 bg-base-200/80"
+        active ? "border-primary bg-base-200" : "border-base-300 bg-base-200/80"
       }`}
     >
       <div className="card-body gap-4 p-4">
@@ -468,7 +532,9 @@ function ProviderNavCard(props: {
           <div className="text-xs uppercase tracking-wide text-base-content/45">
             Current Selection
           </div>
-          <div className="mt-1 break-all text-sm font-medium">{selectedLabel}</div>
+          <div className="mt-1 break-all text-sm font-medium">
+            {selectedLabel}
+          </div>
         </div>
 
         {profiles.length === 0 ? (
@@ -491,7 +557,9 @@ function ProviderNavCard(props: {
                 <div className="card-body gap-3 p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
-                      <div className="truncate font-medium">{profile.title}</div>
+                      <div className="truncate font-medium">
+                        {profile.title}
+                      </div>
                       <div className="mt-1 truncate text-xs text-base-content/55">
                         {profile.subtitle}
                       </div>
@@ -650,18 +718,25 @@ function LoadingPanel() {
 
 export function AuthPanel() {
   const [geminiProfiles, setGeminiProfiles] = useState<GeminiAuthProfile[]>([]);
-  const [aiStudioProfiles, setAIStudioProfiles] = useState<AIStudioProfile[]>([]);
-  const [anthropicProfiles, setAnthropicProfiles] = useState<AnthropicProfile[]>(
+  const [aiStudioProfiles, setAIStudioProfiles] = useState<AIStudioProfile[]>(
     [],
   );
+  const [openCodeProfiles, setOpenCodeProfiles] = useState<OpenCodeProfile[]>(
+    [],
+  );
+  const [gitHubModelsProfiles, setGitHubModelsProfiles] = useState<
+    GitHubModelsProfile[]
+  >([]);
+  const [anthropicProfiles, setAnthropicProfiles] = useState<
+    AnthropicProfile[]
+  >([]);
   const [openAIProfiles, setOpenAIProfiles] = useState<OpenAIProfile[]>([]);
   const [openAICodexProfiles, setOpenAICodexProfiles] = useState<
     OpenAIProfile[]
   >([]);
-  const [selectedGroup, setSelectedGroup] = useState<AuthGroupKey>("gemini");
-  const [selectedKeys, setSelectedKeys] = useState<SelectionState>(
-    EMPTY_SELECTIONS,
-  );
+  const [selectedGroup, setSelectedGroup] = useState<AuthGroupKey>("openCode");
+  const [selectedKeys, setSelectedKeys] =
+    useState<SelectionState>(EMPTY_SELECTIONS);
   const [geminiFlow, setGeminiFlow] = useState<GeminiAuthStartResponse | null>(
     null,
   );
@@ -674,12 +749,19 @@ export function AuthPanel() {
     secret: "",
     displayName: "",
   });
-  const [anthropicTokenDraft, setAnthropicTokenDraft] = useState<CredentialDraft>(
-    {
+  const [openCodeDraft, setOpenCodeDraft] = useState<CredentialDraft>({
+    secret: "",
+    displayName: "",
+  });
+  const [gitHubModelsDraft, setGitHubModelsDraft] = useState<CredentialDraft>({
+    secret: "",
+    displayName: "",
+  });
+  const [anthropicTokenDraft, setAnthropicTokenDraft] =
+    useState<CredentialDraft>({
       secret: "",
       displayName: "",
-    },
-  );
+    });
   const [anthropicKeyDraft, setAnthropicKeyDraft] = useState<CredentialDraft>({
     secret: "",
     displayName: "",
@@ -712,6 +794,16 @@ export function AuthPanel() {
     selectedKeys.aiStudio,
     aiStudioProfileKey,
   );
+  const selectedOpenCode = findSelected(
+    openCodeProfiles,
+    selectedKeys.openCode,
+    openCodeProfileKey,
+  );
+  const selectedGitHubModels = findSelected(
+    gitHubModelsProfiles,
+    selectedKeys.githubModels,
+    gitHubModelsProfileKey,
+  );
   const selectedAnthropic = findSelected(
     anthropicProfiles,
     selectedKeys.anthropic,
@@ -730,12 +822,16 @@ export function AuthPanel() {
       const [
         loadedGemini,
         loadedAIStudio,
+        loadedOpenCode,
+        loadedGitHubModels,
         loadedAnthropic,
         loadedOpenAI,
         loadedOpenAICodex,
       ] = await Promise.all([
         listGeminiProfiles(),
         listAIStudioProfiles(),
+        listOpenCodeProfiles(),
+        listGitHubModelsProfiles(),
         listAnthropicProfiles(),
         listOpenAIProfiles(),
         listOpenAICodexProfiles(),
@@ -743,6 +839,8 @@ export function AuthPanel() {
 
       const sortedGemini = sortGeminiProfiles(loadedGemini);
       const sortedAIStudio = sortAIStudioProfiles(loadedAIStudio);
+      const sortedOpenCode = sortOpenCodeProfiles(loadedOpenCode);
+      const sortedGitHubModels = sortGitHubModelsProfiles(loadedGitHubModels);
       const sortedAnthropic = sortAnthropicProfiles(loadedAnthropic);
       const sortedOpenAI = sortOpenAIProfiles(loadedOpenAI);
       const sortedOpenAICodex = sortOpenAIProfiles(loadedOpenAICodex);
@@ -753,15 +851,31 @@ export function AuthPanel() {
 
       setGeminiProfiles(sortedGemini);
       setAIStudioProfiles(sortedAIStudio);
+      setOpenCodeProfiles(sortedOpenCode);
+      setGitHubModelsProfiles(sortedGitHubModels);
       setAnthropicProfiles(sortedAnthropic);
       setOpenAIProfiles(sortedOpenAI);
       setOpenAICodexProfiles(sortedOpenAICodex);
       setSelectedKeys((current) => ({
-        gemini: reconcileSelection(current.gemini, sortedGemini, geminiProfileKey),
+        gemini: reconcileSelection(
+          current.gemini,
+          sortedGemini,
+          geminiProfileKey,
+        ),
         aiStudio: reconcileSelection(
           current.aiStudio,
           sortedAIStudio,
           aiStudioProfileKey,
+        ),
+        openCode: reconcileSelection(
+          current.openCode,
+          sortedOpenCode,
+          openCodeProfileKey,
+        ),
+        githubModels: reconcileSelection(
+          current.githubModels,
+          sortedGitHubModels,
+          gitHubModelsProfileKey,
         ),
         anthropic: reconcileSelection(
           current.anthropic,
@@ -810,7 +924,10 @@ export function AuthPanel() {
           setAnthropicJob(null);
           const ok = await syncProfiles(false);
           if (!cancelled && ok) {
-            setStatus({ tone: "success", message: "Anthropic Browser Login 完成" });
+            setStatus({
+              tone: "success",
+              message: "Anthropic Browser Login 完成",
+            });
           }
           return;
         }
@@ -848,7 +965,8 @@ export function AuthPanel() {
           if (ok) {
             setStatus({
               tone: "info",
-              message: "Anthropic Browser Login 工作已結束，已重新同步 profiles",
+              message:
+                "Anthropic Browser Login 工作已結束，已重新同步 profiles",
             });
           }
           return;
@@ -884,7 +1002,9 @@ export function AuthPanel() {
 
     const poll = async () => {
       try {
-        const snapshot = await getOpenAICodexBrowserJob(openAIBrowserJob.job_id);
+        const snapshot = await getOpenAICodexBrowserJob(
+          openAIBrowserJob.job_id,
+        );
         if (cancelled) return;
 
         if (snapshot.status === "completed") {
@@ -932,7 +1052,8 @@ export function AuthPanel() {
           if (ok) {
             setStatus({
               tone: "info",
-              message: "OpenAI Codex Browser Login 工作已結束，已重新同步 profiles",
+              message:
+                "OpenAI Codex Browser Login 工作已結束，已重新同步 profiles",
             });
           }
           return;
@@ -987,7 +1108,8 @@ export function AuthPanel() {
       setGeminiFlow(response);
       setGeminiManualInput("");
 
-      const shouldAutoOpen = response.mode === "loopback" || request.mode === "remote";
+      const shouldAutoOpen =
+        response.mode === "loopback" || request.mode === "remote";
       const opened = shouldAutoOpen
         ? window.open(response.auth_url, "_blank", "noopener,noreferrer")
         : null;
@@ -1009,7 +1131,8 @@ export function AuthPanel() {
       } else {
         setStatus({
           tone: "info",
-          message: "Gemini OAuth 已啟動，完成授權後貼上 127.0.0.1 callback URL 或 code",
+          message:
+            "Gemini OAuth 已啟動，完成授權後貼上 127.0.0.1 callback URL 或 code",
         });
       }
     } catch {
@@ -1068,7 +1191,10 @@ export function AuthPanel() {
         execution_mode: mode,
       });
       setGeminiProfiles((current) => upsertGeminiProfile(current, updated));
-      setSelectedKeys((current) => ({ ...current, gemini: updated.profile_id }));
+      setSelectedKeys((current) => ({
+        ...current,
+        gemini: updated.profile_id,
+      }));
       setStatus({
         tone: "success",
         message:
@@ -1138,6 +1264,126 @@ export function AuthPanel() {
       }
     } catch {
       setStatus({ tone: "error", message: "刪除 AI Studio profile 失敗" });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleAddOpenCodeKey() {
+    if (!openCodeDraft.secret.trim()) return;
+    setBusyAction("opencode-add");
+    try {
+      const response = await addOpenCodeKey({
+        api_key: openCodeDraft.secret.trim(),
+        display_name: openCodeDraft.displayName.trim() || undefined,
+      });
+      setOpenCodeDraft({ secret: "", displayName: "" });
+      setSelectedGroup("openCode");
+      setSelectedKeys((current) => ({
+        ...current,
+        openCode: response.profile_id,
+      }));
+      const ok = await syncProfiles(false);
+      if (ok) {
+        setStatus({ tone: "success", message: "OpenCode API key 已新增" });
+      }
+    } catch {
+      setStatus({ tone: "error", message: "新增 OpenCode API key 失敗" });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleUseOpenCodeProfile() {
+    if (!selectedOpenCode) return;
+    setBusyAction("opencode-use");
+    try {
+      await useOpenCodeProfile(selectedOpenCode.profile_id);
+      const ok = await syncProfiles(false);
+      if (ok) {
+        setStatus({
+          tone: "success",
+          message: `已選用 ${fallback(selectedOpenCode.display_name, selectedOpenCode.profile_id)}`,
+        });
+      }
+    } catch {
+      setStatus({ tone: "error", message: "切換 OpenCode profile 失敗" });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleDeleteOpenCodeProfile() {
+    if (!selectedOpenCode) return;
+    setBusyAction("opencode-delete");
+    try {
+      await deleteOpenCodeProfile(selectedOpenCode.profile_id);
+      const ok = await syncProfiles(false);
+      if (ok) {
+        setStatus({ tone: "info", message: "OpenCode profile 已刪除" });
+      }
+    } catch {
+      setStatus({ tone: "error", message: "刪除 OpenCode profile 失敗" });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleAddGitHubModelsToken() {
+    if (!gitHubModelsDraft.secret.trim()) return;
+    setBusyAction("github-models-add");
+    try {
+      const response = await addGitHubModelsToken({
+        token: gitHubModelsDraft.secret.trim(),
+        display_name: gitHubModelsDraft.displayName.trim() || undefined,
+      });
+      setGitHubModelsDraft({ secret: "", displayName: "" });
+      setSelectedGroup("githubModels");
+      setSelectedKeys((current) => ({
+        ...current,
+        githubModels: response.profile_id,
+      }));
+      const ok = await syncProfiles(false);
+      if (ok) {
+        setStatus({ tone: "success", message: "GitHub Models token 已新增" });
+      }
+    } catch {
+      setStatus({ tone: "error", message: "新增 GitHub Models token 失敗" });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleUseGitHubModelsProfile() {
+    if (!selectedGitHubModels) return;
+    setBusyAction("github-models-use");
+    try {
+      await useGitHubModelsProfile(selectedGitHubModels.profile_id);
+      const ok = await syncProfiles(false);
+      if (ok) {
+        setStatus({
+          tone: "success",
+          message: `已選用 ${fallback(selectedGitHubModels.display_name, selectedGitHubModels.profile_id)}`,
+        });
+      }
+    } catch {
+      setStatus({ tone: "error", message: "切換 GitHub Models profile 失敗" });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleDeleteGitHubModelsProfile() {
+    if (!selectedGitHubModels) return;
+    setBusyAction("github-models-delete");
+    try {
+      await deleteGitHubModelsProfile(selectedGitHubModels.profile_id);
+      const ok = await syncProfiles(false);
+      if (ok) {
+        setStatus({ tone: "info", message: "GitHub Models profile 已刪除" });
+      }
+    } catch {
+      setStatus({ tone: "error", message: "刪除 GitHub Models profile 失敗" });
     } finally {
       setBusyAction("");
     }
@@ -1258,7 +1504,10 @@ export function AuthPanel() {
             message: response.message?.trim() || "Anthropic Browser Login 完成",
           });
         }
-      } else if (response.status === "failed" && !response.manual_hint?.trim()) {
+      } else if (
+        response.status === "failed" &&
+        !response.manual_hint?.trim()
+      ) {
         setAnthropicJob(null);
         setStatus({
           tone: "error",
@@ -1272,7 +1521,10 @@ export function AuthPanel() {
         });
       }
     } catch {
-      setStatus({ tone: "error", message: "啟動 Anthropic Browser Login 失敗" });
+      setStatus({
+        tone: "error",
+        message: "啟動 Anthropic Browser Login 失敗",
+      });
     } finally {
       setBusyAction("");
     }
@@ -1294,7 +1546,10 @@ export function AuthPanel() {
       setAnthropicJob(null);
       const ok = await syncProfiles(false);
       if (ok) {
-        setStatus({ tone: "success", message: "Anthropic credential 已完成寫入" });
+        setStatus({
+          tone: "success",
+          message: "Anthropic credential 已完成寫入",
+        });
       }
     } catch {
       setStatus({ tone: "error", message: "Anthropic manual fallback 失敗" });
@@ -1324,7 +1579,10 @@ export function AuthPanel() {
           message: "Anthropic Browser Login 已結束，已清除本地狀態",
         });
       } else {
-        setStatus({ tone: "error", message: "取消 Anthropic Browser Login 失敗" });
+        setStatus({
+          tone: "error",
+          message: "取消 Anthropic Browser Login 失敗",
+        });
       }
     } finally {
       setBusyAction("");
@@ -1453,24 +1711,33 @@ export function AuthPanel() {
         if (ok) {
           setStatus({
             tone: "success",
-            message: response.message?.trim() || "OpenAI Codex Browser Login 完成",
+            message:
+              response.message?.trim() || "OpenAI Codex Browser Login 完成",
           });
         }
-      } else if (response.status === "failed" && !response.manual_hint?.trim()) {
+      } else if (
+        response.status === "failed" &&
+        !response.manual_hint?.trim()
+      ) {
         setOpenAIBrowserJob(null);
         setStatus({
           tone: "error",
-          message: response.message?.trim() || "OpenAI Codex Browser Login 失敗",
+          message:
+            response.message?.trim() || "OpenAI Codex Browser Login 失敗",
         });
       } else {
         setOpenAIBrowserJob(openAIJobFromStart(response));
         setStatus({
           tone: "info",
-          message: response.message?.trim() || "OpenAI Codex Browser Login 已啟動",
+          message:
+            response.message?.trim() || "OpenAI Codex Browser Login 已啟動",
         });
       }
     } catch {
-      setStatus({ tone: "error", message: "啟動 OpenAI Codex Browser Login 失敗" });
+      setStatus({
+        tone: "error",
+        message: "啟動 OpenAI Codex Browser Login 失敗",
+      });
     } finally {
       setBusyAction("");
     }
@@ -1492,10 +1759,16 @@ export function AuthPanel() {
       setOpenAIBrowserJob(null);
       const ok = await syncProfiles(false);
       if (ok) {
-        setStatus({ tone: "success", message: "OpenAI Codex credential 已完成寫入" });
+        setStatus({
+          tone: "success",
+          message: "OpenAI Codex credential 已完成寫入",
+        });
       }
     } catch {
-      setStatus({ tone: "error", message: "OpenAI Codex manual fallback 失敗" });
+      setStatus({
+        tone: "error",
+        message: "OpenAI Codex manual fallback 失敗",
+      });
     } finally {
       setBusyAction("");
     }
@@ -1536,39 +1809,31 @@ export function AuthPanel() {
     return <LoadingPanel />;
   }
 
-  const geminiNav = geminiNavProfiles(geminiProfiles);
   const aiStudioNav = aiStudioNavProfiles(aiStudioProfiles);
-  const anthropicNav = anthropicNavProfiles(anthropicProfiles);
-  const openAINav = openAINavProfiles(combinedOpenAIProfiles);
+  const openCodeNav = openCodeNavProfiles(openCodeProfiles);
+  const gitHubModelsNav = gitHubModelsNavProfiles(gitHubModelsProfiles);
   const configuredProviders = [
-    geminiProfiles,
+    openCodeProfiles,
     aiStudioProfiles,
-    anthropicProfiles,
-    combinedOpenAIProfiles,
+    gitHubModelsProfiles,
   ].filter((profiles) => profiles.length > 0).length;
   const totalProfiles =
-    geminiProfiles.length +
+    openCodeProfiles.length +
     aiStudioProfiles.length +
-    anthropicProfiles.length +
-    combinedOpenAIProfiles.length;
-  const runningJobs =
-    Number(anthropicJob?.status === "running") +
-    Number(openAIBrowserJob?.status === "running");
-  const manualFlows =
-    Number(!!geminiFlow) +
-    Number(jobNeedsManualIntervention(anthropicJob)) +
-    Number(jobNeedsManualIntervention(openAIBrowserJob));
+    gitHubModelsProfiles.length;
+  const runningJobs = 0;
+  const manualFlows = 0;
 
   const navCards = [
     {
-      group: "gemini" as const,
-      title: "Gemini OAuth",
-      description: "OAuth profiles、project 狀態與 callback/manual fallback 管理。",
-      profiles: geminiNav,
-      selectedKey: selectedGemini ? geminiProfileKey(selectedGemini) : "",
-      selectedLabel: selectedProviderTitle("gemini", selectedGemini),
+      group: "openCode" as const,
+      title: "OpenCode",
+      description: "管理 OpenCode Zen API keys，作為主要 coding provider。",
+      profiles: openCodeNav,
+      selectedKey: selectedOpenCode ? openCodeProfileKey(selectedOpenCode) : "",
+      selectedLabel: selectedProviderTitle("openCode", selectedOpenCode),
       stateBadge:
-        geminiProfiles.length > 0
+        openCodeProfiles.length > 0
           ? { label: "Configured", className: "badge-primary" }
           : { label: "Setup required", className: "badge-ghost" },
     },
@@ -1585,32 +1850,22 @@ export function AuthPanel() {
           : { label: "Setup required", className: "badge-ghost" },
     },
     {
-      group: "anthropic" as const,
-      title: "Anthropic",
-      description: "setup-token、API key 與 browser login 的完整管理。",
-      profiles: anthropicNav,
-      selectedKey: selectedAnthropic ? anthropicProfileKey(selectedAnthropic) : "",
-      selectedLabel: selectedProviderTitle("anthropic", selectedAnthropic),
+      group: "githubModels" as const,
+      title: "GitHub Models",
+      description:
+        "管理 GitHub token / PAT，並將 github-models provider 接入 Web UI。",
+      profiles: gitHubModelsNav,
+      selectedKey: selectedGitHubModels
+        ? gitHubModelsProfileKey(selectedGitHubModels)
+        : "",
+      selectedLabel: selectedProviderTitle(
+        "githubModels",
+        selectedGitHubModels,
+      ),
       stateBadge:
-        anthropicJob?.status === "running"
-          ? { label: "Job running", className: "badge-info" }
-          : anthropicProfiles.length > 0
-            ? { label: "Configured", className: "badge-primary" }
-            : { label: "Setup required", className: "badge-ghost" },
-    },
-    {
-      group: "openAI" as const,
-      title: "OpenAI / Codex",
-      description: "openai 與 openai-codex 合併檢視，保留 provider 差異。",
-      profiles: openAINav,
-      selectedKey: selectedOpenAI ? openAIProfileKey(selectedOpenAI) : "",
-      selectedLabel: selectedProviderTitle("openAI", selectedOpenAI),
-      stateBadge:
-        openAIBrowserJob?.status === "running"
-          ? { label: "Job running", className: "badge-info" }
-          : combinedOpenAIProfiles.length > 0
-            ? { label: "Configured", className: "badge-primary" }
-            : { label: "Setup required", className: "badge-ghost" },
+        gitHubModelsProfiles.length > 0
+          ? { label: "Configured", className: "badge-primary" }
+          : { label: "Setup required", className: "badge-ghost" },
     },
   ];
 
@@ -1632,8 +1887,8 @@ export function AuthPanel() {
               <div>
                 <h2 className="card-title text-2xl">認證管理</h2>
                 <p className="text-sm text-base-content/60">
-                  使用與 Persona 設定相同的管理語言，集中管理 Gemini、AI
-                  Studio、Anthropic、OpenAI 與 OpenAI Codex 認證。
+                  集中管理 OpenCode、AI Studio 與 GitHub Models 認證，作為 目前
+                  Web UI 主要可切換的 provider 來源。
                 </p>
               </div>
             </div>
@@ -1658,22 +1913,28 @@ export function AuthPanel() {
             <div className="stat">
               <div className="stat-title">Configured Providers</div>
               <div className="stat-value text-lg">{configuredProviders}</div>
-              <div className="stat-desc">4 組認證來源中已設定的 provider 數量</div>
+              <div className="stat-desc">
+                3 組認證來源中已設定的 provider 數量
+              </div>
             </div>
             <div className="stat">
               <div className="stat-title">Profiles</div>
               <div className="stat-value text-lg">{totalProfiles}</div>
-              <div className="stat-desc">所有已載入的 credential / OAuth profiles</div>
+              <div className="stat-desc">
+                所有已載入的 credential / OAuth profiles
+              </div>
             </div>
             <div className="stat">
               <div className="stat-title">Browser Jobs</div>
               <div className="stat-value text-lg">{runningJobs}</div>
-              <div className="stat-desc">Anthropic / OpenAI Codex 進行中的 browser login</div>
+              <div className="stat-desc">
+                目前精簡後未使用 browser login 流程
+              </div>
             </div>
             <div className="stat">
               <div className="stat-title">Manual Action</div>
               <div className="stat-value text-lg">{manualFlows}</div>
-              <div className="stat-desc">需要貼上 callback、setup-token 或 OAuth token 的流程</div>
+              <div className="stat-desc">目前精簡後未使用 manual auth 流程</div>
             </div>
           </div>
         </div>
@@ -1706,7 +1967,9 @@ export function AuthPanel() {
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0 flex-1 space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <div className="badge badge-outline badge-sm">Gemini OAuth</div>
+                        <div className="badge badge-outline badge-sm">
+                          Gemini OAuth
+                        </div>
                         {selectedGemini?.preferred && (
                           <div className="badge badge-primary badge-sm">
                             Preferred
@@ -1720,11 +1983,15 @@ export function AuthPanel() {
                                 : "badge-ghost"
                             }`}
                           >
-                            {selectedGemini.available ? "Available" : "Unavailable"}
+                            {selectedGemini.available
+                              ? "Available"
+                              : "Unavailable"}
                           </div>
                         )}
                         {geminiFlow && (
-                          <div className="badge badge-info badge-sm">OAuth pending</div>
+                          <div className="badge badge-info badge-sm">
+                            OAuth pending
+                          </div>
                         )}
                       </div>
                       <div>
@@ -1732,8 +1999,9 @@ export function AuthPanel() {
                           {selectedProviderTitle("gemini", selectedGemini)}
                         </h2>
                         <p className="text-sm text-base-content/60">
-                          管理 `google-gemini-cli` 的 OAuth profiles，包含 project
-                          onboarding、callback/manual fallback 與 runtime profile 切換。
+                          管理 `google-gemini-cli` 的 OAuth profiles，包含
+                          project onboarding、callback/manual fallback 與
+                          runtime profile 切換。
                         </p>
                       </div>
                     </div>
@@ -1774,13 +2042,18 @@ export function AuthPanel() {
                   <div className="stats stats-vertical border border-base-300 bg-base-100 shadow-sm lg:stats-horizontal">
                     <div className="stat">
                       <div className="stat-title">Profiles</div>
-                      <div className="stat-value text-lg">{geminiProfiles.length}</div>
+                      <div className="stat-value text-lg">
+                        {geminiProfiles.length}
+                      </div>
                       <div className="stat-desc">Gemini OAuth credentials</div>
                     </div>
                     <div className="stat">
                       <div className="stat-title">Available</div>
                       <div className="stat-value text-lg">
-                        {geminiProfiles.filter((profile) => profile.available).length}
+                        {
+                          geminiProfiles.filter((profile) => profile.available)
+                            .length
+                        }
                       </div>
                       <div className="stat-desc">目前可直接選用的 profiles</div>
                     </div>
@@ -1799,7 +2072,9 @@ export function AuthPanel() {
                         {geminiFlow ? "Pending" : "Idle"}
                       </div>
                       <div className="stat-desc">
-                        {geminiFlow?.mode ? `mode=${geminiFlow.mode}` : "尚未啟動 OAuth"}
+                        {geminiFlow?.mode
+                          ? `mode=${geminiFlow.mode}`
+                          : "尚未啟動 OAuth"}
                       </div>
                     </div>
                   </div>
@@ -1834,7 +2109,9 @@ export function AuthPanel() {
                               <div className="text-xs uppercase tracking-wide text-base-content/50">
                                 Email
                               </div>
-                              <div className="text-sm">{fallback(selectedGemini.email)}</div>
+                              <div className="text-sm">
+                                {fallback(selectedGemini.email)}
+                              </div>
                             </div>
                           </li>
                           <li className="list-row">
@@ -1864,12 +2141,14 @@ export function AuthPanel() {
                                   Execution Mode
                                 </div>
                                 <div className="text-sm">
-                                  {geminiExecutionModeLabel(selectedGemini.execution_mode)}
+                                  {geminiExecutionModeLabel(
+                                    selectedGemini.execution_mode,
+                                  )}
                                 </div>
                                 <div className="text-xs text-base-content/50">
                                   開啟後，只有 `gemini-3.1-pro-preview` 會改走
-                                  `gemini -p` headless subprocess；其他 Gemini 模型仍使用
-                                  Internal API。
+                                  `gemini -p` headless subprocess；其他 Gemini
+                                  模型仍使用 Internal API。
                                 </div>
                               </div>
                               <label className="flex items-center gap-3 self-start lg:self-center">
@@ -1880,7 +2159,8 @@ export function AuthPanel() {
                                   type="checkbox"
                                   className="toggle toggle-primary"
                                   checked={
-                                    selectedGemini.execution_mode === "cli_headless"
+                                    selectedGemini.execution_mode ===
+                                    "cli_headless"
                                   }
                                   disabled={busyAction !== ""}
                                   onChange={(event) => {
@@ -1909,8 +2189,9 @@ export function AuthPanel() {
                         {!selectedGemini.project_ready && (
                           <div className="alert alert-warning">
                             <span>
-                              這個 profile 的 project 尚未準備完成。請重新執行 Gemini
-                              OAuth，並確認 gemini CLI provisioning 已完成。
+                              這個 profile 的 project 尚未準備完成。請重新執行
+                              Gemini OAuth，並確認 gemini CLI provisioning
+                              已完成。
                             </span>
                           </div>
                         )}
@@ -1918,7 +2199,8 @@ export function AuthPanel() {
                         {!!selectedGemini.unavailable_reason?.trim() && (
                           <div className="alert alert-info">
                             <span>
-                              unavailable_reason: {selectedGemini.unavailable_reason}
+                              unavailable_reason:{" "}
+                              {selectedGemini.unavailable_reason}
                             </span>
                           </div>
                         )}
@@ -1933,7 +2215,10 @@ export function AuthPanel() {
                       </>
                     ) : (
                       <div className="alert alert-info">
-                        <span>尚無 Gemini OAuth profile。點擊「開始 OAuth」建立授權流程。</span>
+                        <span>
+                          尚無 Gemini OAuth profile。點擊「開始
+                          OAuth」建立授權流程。
+                        </span>
                       </div>
                     )}
                   </div>
@@ -1956,7 +2241,9 @@ export function AuthPanel() {
                       {geminiFlow ? (
                         <>
                           <label className="fieldset">
-                            <legend className="fieldset-legend">授權網址</legend>
+                            <legend className="fieldset-legend">
+                              授權網址
+                            </legend>
                             <textarea
                               className="textarea textarea-bordered h-32 w-full font-mono text-xs"
                               readOnly
@@ -1970,7 +2257,9 @@ export function AuthPanel() {
                                 <div className="text-xs uppercase tracking-wide text-base-content/50">
                                   Mode
                                 </div>
-                                <div className="font-medium">{geminiFlow.mode}</div>
+                                <div className="font-medium">
+                                  {geminiFlow.mode}
+                                </div>
                               </div>
                             </li>
                             <li className="list-row">
@@ -2036,7 +2325,9 @@ export function AuthPanel() {
                             </legend>
                             <textarea
                               className="textarea textarea-bordered h-24 w-full"
-                              placeholder={geminiCallbackExample(geminiFlow.redirect_uri)}
+                              placeholder={geminiCallbackExample(
+                                geminiFlow.redirect_uri,
+                              )}
                               value={geminiManualInput}
                               onChange={(event) =>
                                 setGeminiManualInput(event.target.value)
@@ -2046,9 +2337,9 @@ export function AuthPanel() {
                             <p className="label text-base-content/55">
                               <>
                                 Gemini CLI OAuth 目前只接受{" "}
-                                <code>127.0.0.1</code> loopback callback；遠端站點或
-                                popup 被阻擋時，請把最後的 callback URL 或授權 code
-                                貼回這裡。
+                                <code>127.0.0.1</code> loopback
+                                callback；遠端站點或 popup 被阻擋時，請把最後的
+                                callback URL 或授權 code 貼回這裡。
                               </>
                             </p>
                           </label>
@@ -2056,7 +2347,9 @@ export function AuthPanel() {
                           <button
                             className="btn btn-primary"
                             onClick={handleCompleteGeminiOAuth}
-                            disabled={!geminiManualInput.trim() || busyAction !== ""}
+                            disabled={
+                              !geminiManualInput.trim() || busyAction !== ""
+                            }
                           >
                             {busyAction === "gemini-complete" && (
                               <span className="loading loading-spinner loading-xs" />
@@ -2068,24 +2361,36 @@ export function AuthPanel() {
                         <div className="space-y-3">
                           <div className="alert alert-info">
                             <span>
-                              點擊「開始 OAuth」後會開啟 Gemini 授權頁。Gemini CLI OAuth
-                              只接受 <code>127.0.0.1</code> loopback callback；若從公網站點發起或無法自動回呼，請把最後的 callback URL 或 code 貼回這裡。
+                              點擊「開始 OAuth」後會開啟 Gemini 授權頁。Gemini
+                              CLI OAuth 只接受 <code>127.0.0.1</code> loopback
+                              callback；若從公網站點發起或無法自動回呼，請把最後的
+                              callback URL 或 code 貼回這裡。
                             </span>
                           </div>
                           <ul className="list rounded-box border border-base-300 bg-base-100">
                             <li className="list-row">
                               <div>
-                                <div className="font-medium">Loopback callback</div>
+                                <div className="font-medium">
+                                  Loopback callback
+                                </div>
                                 <div className="text-sm text-base-content/65">
-                                  預設使用 <code>http://127.0.0.1:8085/oauth2callback</code>，本機啟動時可直接完成回呼。
+                                  預設使用{" "}
+                                  <code>
+                                    http://127.0.0.1:8085/oauth2callback
+                                  </code>
+                                  ，本機啟動時可直接完成回呼。
                                 </div>
                               </div>
                             </li>
                             <li className="list-row">
                               <div>
-                                <div className="font-medium">Manual fallback</div>
+                                <div className="font-medium">
+                                  Manual fallback
+                                </div>
                                 <div className="text-sm text-base-content/65">
-                                  遠端站點或 popup 被阻擋時，請手動貼上最後的 <code>127.0.0.1</code> callback URL 或授權 code。
+                                  遠端站點或 popup 被阻擋時，請手動貼上最後的{" "}
+                                  <code>127.0.0.1</code> callback URL 或授權
+                                  code。
                                 </div>
                               </div>
                             </li>
@@ -2106,7 +2411,9 @@ export function AuthPanel() {
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0 flex-1 space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <div className="badge badge-outline badge-sm">AI Studio</div>
+                        <div className="badge badge-outline badge-sm">
+                          AI Studio
+                        </div>
                         {selectedAIStudio?.preferred && (
                           <div className="badge badge-primary badge-sm">
                             Preferred
@@ -2120,7 +2427,9 @@ export function AuthPanel() {
                                 : "badge-ghost"
                             }`}
                           >
-                            {selectedAIStudio.available ? "Available" : "Unavailable"}
+                            {selectedAIStudio.available
+                              ? "Available"
+                              : "Unavailable"}
                           </div>
                         )}
                       </div>
@@ -2129,7 +2438,8 @@ export function AuthPanel() {
                           {selectedProviderTitle("aiStudio", selectedAIStudio)}
                         </h2>
                         <p className="text-sm text-base-content/60">
-                          管理 `google-ai-studio` API keys，儲存後即可在 Provider 頁切換模型。
+                          管理 `google-ai-studio` API keys，儲存後即可在
+                          Provider 頁切換模型。
                         </p>
                       </div>
                     </div>
@@ -2170,13 +2480,19 @@ export function AuthPanel() {
                   <div className="stats stats-vertical border border-base-300 bg-base-100 shadow-sm lg:stats-horizontal">
                     <div className="stat">
                       <div className="stat-title">Keys</div>
-                      <div className="stat-value text-lg">{aiStudioProfiles.length}</div>
+                      <div className="stat-value text-lg">
+                        {aiStudioProfiles.length}
+                      </div>
                       <div className="stat-desc">AI Studio profiles</div>
                     </div>
                     <div className="stat">
                       <div className="stat-title">Available</div>
                       <div className="stat-value text-lg">
-                        {aiStudioProfiles.filter((profile) => profile.available).length}
+                        {
+                          aiStudioProfiles.filter(
+                            (profile) => profile.available,
+                          ).length
+                        }
                       </div>
                       <div className="stat-desc">目前可直接使用的 keys</div>
                     </div>
@@ -2185,7 +2501,9 @@ export function AuthPanel() {
                       <div className="stat-value text-lg">
                         {selectedAIStudio ? "Ready" : "None"}
                       </div>
-                      <div className="stat-desc">{fallback(selectedAIStudio?.key_hint)}</div>
+                      <div className="stat-desc">
+                        {fallback(selectedAIStudio?.key_hint)}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2202,7 +2520,9 @@ export function AuthPanel() {
                   >
                     <div className="flex items-center justify-between gap-3">
                       <h3 className="card-title text-lg">新增 API key</h3>
-                      <div className="badge badge-outline badge-sm">google-ai-studio</div>
+                      <div className="badge badge-outline badge-sm">
+                        google-ai-studio
+                      </div>
                     </div>
 
                     <SecretField
@@ -2210,7 +2530,10 @@ export function AuthPanel() {
                       placeholder="AIza..."
                       value={aiStudioDraft.secret}
                       onChange={(value) =>
-                        setAIStudioDraft((current) => ({ ...current, secret: value }))
+                        setAIStudioDraft((current) => ({
+                          ...current,
+                          secret: value,
+                        }))
                       }
                       disabled={busyAction !== ""}
                       hint="API key 會儲存在 auth store，Web 端只負責送出新增請求。"
@@ -2247,7 +2570,9 @@ export function AuthPanel() {
                       <button
                         type="submit"
                         className="btn btn-primary"
-                        disabled={!aiStudioDraft.secret.trim() || busyAction !== ""}
+                        disabled={
+                          !aiStudioDraft.secret.trim() || busyAction !== ""
+                        }
                       >
                         {busyAction === "ai-studio-add" && (
                           <span className="loading loading-spinner loading-xs" />
@@ -2312,7 +2637,502 @@ export function AuthPanel() {
                       </ul>
                     ) : (
                       <div className="alert alert-info">
-                        <span>尚無 AI Studio key。使用左側表單新增第一組憑證。</span>
+                        <span>
+                          尚無 AI Studio key。使用左側表單新增第一組憑證。
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {selectedGroup === "openCode" && (
+            <>
+              <div className="card border border-base-300 bg-base-200 shadow-sm">
+                <div className="card-body gap-4">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="badge badge-outline badge-sm">
+                          OpenCode
+                        </div>
+                        {selectedOpenCode?.preferred && (
+                          <div className="badge badge-primary badge-sm">
+                            Preferred
+                          </div>
+                        )}
+                        {selectedOpenCode && (
+                          <div
+                            className={`badge badge-sm ${
+                              selectedOpenCode.available
+                                ? "badge-success"
+                                : "badge-ghost"
+                            }`}
+                          >
+                            {selectedOpenCode.available
+                              ? "Available"
+                              : "Unavailable"}
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <h2 className="card-title text-2xl">
+                          {selectedProviderTitle("openCode", selectedOpenCode)}
+                        </h2>
+                        <p className="text-sm text-base-content/60">
+                          管理 `opencode` 的 OpenCode Zen API key，作為目前主要
+                          coding provider。
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="max-w-full overflow-x-auto lg:shrink-0">
+                      <div className="join join-vertical w-full sm:w-max sm:join-horizontal">
+                        <button
+                          className="btn btn-sm join-item"
+                          onClick={handleRefresh}
+                          disabled={busyAction !== ""}
+                        >
+                          重新整理
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-sm join-item"
+                          onClick={handleDeleteOpenCodeProfile}
+                          disabled={!selectedOpenCode || busyAction !== ""}
+                        >
+                          {busyAction === "opencode-delete" && (
+                            <span className="loading loading-spinner loading-xs" />
+                          )}
+                          刪除
+                        </button>
+                        <button
+                          className="btn btn-primary btn-sm join-item"
+                          onClick={handleUseOpenCodeProfile}
+                          disabled={!selectedOpenCode || busyAction !== ""}
+                        >
+                          {busyAction === "opencode-use" && (
+                            <span className="loading loading-spinner loading-xs" />
+                          )}
+                          使用此 profile
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="stats stats-vertical border border-base-300 bg-base-100 shadow-sm lg:stats-horizontal">
+                    <div className="stat">
+                      <div className="stat-title">Keys</div>
+                      <div className="stat-value text-lg">
+                        {openCodeProfiles.length}
+                      </div>
+                      <div className="stat-desc">OpenCode profiles</div>
+                    </div>
+                    <div className="stat">
+                      <div className="stat-title">Available</div>
+                      <div className="stat-value text-lg">
+                        {
+                          openCodeProfiles.filter(
+                            (profile) => profile.available,
+                          ).length
+                        }
+                      </div>
+                      <div className="stat-desc">目前可直接使用的 API keys</div>
+                    </div>
+                    <div className="stat">
+                      <div className="stat-title">Selected</div>
+                      <div className="stat-value text-lg">
+                        {selectedOpenCode ? "Ready" : "None"}
+                      </div>
+                      <div className="stat-desc">
+                        {fallback(selectedOpenCode?.key_hint)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.92fr)]">
+                <div className="card border border-base-300 bg-base-200 shadow-sm">
+                  <form
+                    className="card-body gap-4"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void handleAddOpenCodeKey();
+                    }}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="card-title text-lg">新增 API key</h3>
+                      <div className="badge badge-outline badge-sm">
+                        opencode
+                      </div>
+                    </div>
+
+                    <SecretField
+                      label="OpenCode API key"
+                      placeholder="oc_..."
+                      value={openCodeDraft.secret}
+                      onChange={(value) =>
+                        setOpenCodeDraft((current) => ({
+                          ...current,
+                          secret: value,
+                        }))
+                      }
+                      disabled={busyAction !== ""}
+                      hint="從 OpenCode Zen 複製 API key；憑證會儲存在 auth store。"
+                    />
+
+                    <label className="fieldset">
+                      <legend className="fieldset-legend">Display Name</legend>
+                      <input
+                        type="text"
+                        className="input input-bordered w-full"
+                        placeholder="main"
+                        value={openCodeDraft.displayName}
+                        onChange={(event) =>
+                          setOpenCodeDraft((current) => ({
+                            ...current,
+                            displayName: event.target.value,
+                          }))
+                        }
+                        disabled={busyAction !== ""}
+                      />
+                    </label>
+
+                    <div className="card-actions justify-end">
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() =>
+                          setOpenCodeDraft({ secret: "", displayName: "" })
+                        }
+                        disabled={busyAction !== ""}
+                      >
+                        清空
+                      </button>
+                      <button
+                        type="submit"
+                        className="btn btn-primary"
+                        disabled={
+                          !openCodeDraft.secret.trim() || busyAction !== ""
+                        }
+                      >
+                        {busyAction === "opencode-add" && (
+                          <span className="loading loading-spinner loading-xs" />
+                        )}
+                        新增 OpenCode key
+                      </button>
+                    </div>
+                  </form>
+                </div>
+
+                <div className="card border border-base-300 bg-base-200 shadow-sm">
+                  <div className="card-body gap-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="card-title text-lg">Selected Profile</h3>
+                      <div className="badge badge-ghost badge-sm">
+                        {selectedOpenCode ? "Loaded" : "Empty"}
+                      </div>
+                    </div>
+
+                    {selectedOpenCode ? (
+                      <ul className="list rounded-box border border-base-300 bg-base-100">
+                        <li className="list-row">
+                          <div>
+                            <div className="text-xs uppercase tracking-wide text-base-content/50">
+                              Profile ID
+                            </div>
+                            <div className="break-all font-mono text-sm">
+                              {selectedOpenCode.profile_id}
+                            </div>
+                          </div>
+                        </li>
+                        <li className="list-row">
+                          <div>
+                            <div className="text-xs uppercase tracking-wide text-base-content/50">
+                              Display Name
+                            </div>
+                            <div className="text-sm">
+                              {fallback(selectedOpenCode.display_name)}
+                            </div>
+                          </div>
+                        </li>
+                        <li className="list-row">
+                          <div>
+                            <div className="text-xs uppercase tracking-wide text-base-content/50">
+                              Key Hint
+                            </div>
+                            <div className="break-all font-mono text-sm">
+                              {fallback(selectedOpenCode.key_hint)}
+                            </div>
+                          </div>
+                        </li>
+                        <li className="list-row">
+                          <div>
+                            <div className="text-xs uppercase tracking-wide text-base-content/50">
+                              Updated
+                            </div>
+                            <div className="text-sm">
+                              {formatLongDateTime(selectedOpenCode.updated_at)}
+                            </div>
+                          </div>
+                        </li>
+                      </ul>
+                    ) : (
+                      <div className="alert alert-info">
+                        <span>
+                          尚無 OpenCode key。使用左側表單新增第一組憑證。
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {selectedGroup === "githubModels" && (
+            <>
+              <div className="card border border-base-300 bg-base-200 shadow-sm">
+                <div className="card-body gap-4">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="badge badge-outline badge-sm">
+                          GitHub Models
+                        </div>
+                        {selectedGitHubModels?.preferred && (
+                          <div className="badge badge-primary badge-sm">
+                            Preferred
+                          </div>
+                        )}
+                        {selectedGitHubModels && (
+                          <div
+                            className={`badge badge-sm ${
+                              selectedGitHubModels.available
+                                ? "badge-success"
+                                : "badge-ghost"
+                            }`}
+                          >
+                            {selectedGitHubModels.available
+                              ? "Available"
+                              : "Unavailable"}
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <h2 className="card-title text-2xl">
+                          {selectedProviderTitle(
+                            "githubModels",
+                            selectedGitHubModels,
+                          )}
+                        </h2>
+                        <p className="text-sm text-base-content/60">
+                          管理 `github-models` 的 GitHub token /
+                          PAT，儲存後即可在 Provider 頁切換模型。
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="max-w-full overflow-x-auto lg:shrink-0">
+                      <div className="join join-vertical w-full sm:w-max sm:join-horizontal">
+                        <button
+                          className="btn btn-sm join-item"
+                          onClick={handleRefresh}
+                          disabled={busyAction !== ""}
+                        >
+                          重新整理
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-sm join-item"
+                          onClick={handleDeleteGitHubModelsProfile}
+                          disabled={!selectedGitHubModels || busyAction !== ""}
+                        >
+                          {busyAction === "github-models-delete" && (
+                            <span className="loading loading-spinner loading-xs" />
+                          )}
+                          刪除
+                        </button>
+                        <button
+                          className="btn btn-primary btn-sm join-item"
+                          onClick={handleUseGitHubModelsProfile}
+                          disabled={!selectedGitHubModels || busyAction !== ""}
+                        >
+                          {busyAction === "github-models-use" && (
+                            <span className="loading loading-spinner loading-xs" />
+                          )}
+                          使用此 profile
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="stats stats-vertical border border-base-300 bg-base-100 shadow-sm lg:stats-horizontal">
+                    <div className="stat">
+                      <div className="stat-title">Tokens</div>
+                      <div className="stat-value text-lg">
+                        {gitHubModelsProfiles.length}
+                      </div>
+                      <div className="stat-desc">GitHub Models profiles</div>
+                    </div>
+                    <div className="stat">
+                      <div className="stat-title">Available</div>
+                      <div className="stat-value text-lg">
+                        {
+                          gitHubModelsProfiles.filter(
+                            (profile) => profile.available,
+                          ).length
+                        }
+                      </div>
+                      <div className="stat-desc">目前可直接使用的 tokens</div>
+                    </div>
+                    <div className="stat">
+                      <div className="stat-title">Selected</div>
+                      <div className="stat-value text-lg">
+                        {selectedGitHubModels ? "Ready" : "None"}
+                      </div>
+                      <div className="stat-desc">
+                        {fallback(selectedGitHubModels?.key_hint)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.92fr)]">
+                <div className="card border border-base-300 bg-base-200 shadow-sm">
+                  <form
+                    className="card-body gap-4"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void handleAddGitHubModelsToken();
+                    }}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="card-title text-lg">新增 Token / PAT</h3>
+                      <div className="badge badge-outline badge-sm">
+                        github-models
+                      </div>
+                    </div>
+
+                    <SecretField
+                      label="GitHub Token / PAT"
+                      placeholder="github_pat_..."
+                      value={gitHubModelsDraft.secret}
+                      onChange={(value) =>
+                        setGitHubModelsDraft((current) => ({
+                          ...current,
+                          secret: value,
+                        }))
+                      }
+                      disabled={busyAction !== ""}
+                      hint="需要可呼叫 GitHub Models 的 token / PAT；憑證會儲存在 auth store。"
+                    />
+
+                    <label className="fieldset">
+                      <legend className="fieldset-legend">Display Name</legend>
+                      <input
+                        type="text"
+                        className="input input-bordered w-full"
+                        placeholder="main"
+                        value={gitHubModelsDraft.displayName}
+                        onChange={(event) =>
+                          setGitHubModelsDraft((current) => ({
+                            ...current,
+                            displayName: event.target.value,
+                          }))
+                        }
+                        disabled={busyAction !== ""}
+                      />
+                    </label>
+
+                    <div className="card-actions justify-end">
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() =>
+                          setGitHubModelsDraft({ secret: "", displayName: "" })
+                        }
+                        disabled={busyAction !== ""}
+                      >
+                        清空
+                      </button>
+                      <button
+                        type="submit"
+                        className="btn btn-primary"
+                        disabled={
+                          !gitHubModelsDraft.secret.trim() || busyAction !== ""
+                        }
+                      >
+                        {busyAction === "github-models-add" && (
+                          <span className="loading loading-spinner loading-xs" />
+                        )}
+                        新增 GitHub Models token
+                      </button>
+                    </div>
+                  </form>
+                </div>
+
+                <div className="card border border-base-300 bg-base-200 shadow-sm">
+                  <div className="card-body gap-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="card-title text-lg">Selected Profile</h3>
+                      <div className="badge badge-ghost badge-sm">
+                        {selectedGitHubModels ? "Loaded" : "Empty"}
+                      </div>
+                    </div>
+
+                    {selectedGitHubModels ? (
+                      <ul className="list rounded-box border border-base-300 bg-base-100">
+                        <li className="list-row">
+                          <div>
+                            <div className="text-xs uppercase tracking-wide text-base-content/50">
+                              Profile ID
+                            </div>
+                            <div className="break-all font-mono text-sm">
+                              {selectedGitHubModels.profile_id}
+                            </div>
+                          </div>
+                        </li>
+                        <li className="list-row">
+                          <div>
+                            <div className="text-xs uppercase tracking-wide text-base-content/50">
+                              Display Name
+                            </div>
+                            <div className="text-sm">
+                              {fallback(selectedGitHubModels.display_name)}
+                            </div>
+                          </div>
+                        </li>
+                        <li className="list-row">
+                          <div>
+                            <div className="text-xs uppercase tracking-wide text-base-content/50">
+                              Key Hint
+                            </div>
+                            <div className="break-all font-mono text-sm">
+                              {fallback(selectedGitHubModels.key_hint)}
+                            </div>
+                          </div>
+                        </li>
+                        <li className="list-row">
+                          <div>
+                            <div className="text-xs uppercase tracking-wide text-base-content/50">
+                              Updated
+                            </div>
+                            <div className="text-sm">
+                              {formatLongDateTime(
+                                selectedGitHubModels.updated_at,
+                              )}
+                            </div>
+                          </div>
+                        </li>
+                      </ul>
+                    ) : (
+                      <div className="alert alert-info">
+                        <span>
+                          尚無 GitHub Models token。使用左側表單新增第一組憑證。
+                        </span>
                       </div>
                     )}
                   </div>
@@ -2328,7 +3148,9 @@ export function AuthPanel() {
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0 flex-1 space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <div className="badge badge-outline badge-sm">Anthropic</div>
+                        <div className="badge badge-outline badge-sm">
+                          Anthropic
+                        </div>
                         {selectedAnthropic?.preferred && (
                           <div className="badge badge-primary badge-sm">
                             Preferred
@@ -2355,7 +3177,10 @@ export function AuthPanel() {
                       </div>
                       <div>
                         <h2 className="card-title text-2xl">
-                          {selectedProviderTitle("anthropic", selectedAnthropic)}
+                          {selectedProviderTitle(
+                            "anthropic",
+                            selectedAnthropic,
+                          )}
                         </h2>
                         <p className="text-sm text-base-content/60">
                           Claude setup-token、API key 與 browser login
@@ -2408,9 +3233,15 @@ export function AuthPanel() {
                     <div className="stat">
                       <div className="stat-title">Available</div>
                       <div className="stat-value text-lg">
-                        {anthropicProfiles.filter((profile) => profile.available).length}
+                        {
+                          anthropicProfiles.filter(
+                            (profile) => profile.available,
+                          ).length
+                        }
                       </div>
-                      <div className="stat-desc">目前可直接使用的 credentials</div>
+                      <div className="stat-desc">
+                        目前可直接使用的 credentials
+                      </div>
                     </div>
                     <div className="stat">
                       <div className="stat-title">Browser Job</div>
@@ -2437,7 +3268,9 @@ export function AuthPanel() {
                     >
                       <div className="flex items-center justify-between gap-3">
                         <h3 className="card-title text-lg">新增 setup-token</h3>
-                        <div className="badge badge-outline badge-sm">token</div>
+                        <div className="badge badge-outline badge-sm">
+                          token
+                        </div>
                       </div>
 
                       <SecretField
@@ -2454,7 +3287,9 @@ export function AuthPanel() {
                       />
 
                       <label className="fieldset">
-                        <legend className="fieldset-legend">Display Name</legend>
+                        <legend className="fieldset-legend">
+                          Display Name
+                        </legend>
                         <input
                           type="text"
                           className="input input-bordered w-full"
@@ -2475,7 +3310,10 @@ export function AuthPanel() {
                           type="button"
                           className="btn"
                           onClick={() =>
-                            setAnthropicTokenDraft({ secret: "", displayName: "" })
+                            setAnthropicTokenDraft({
+                              secret: "",
+                              displayName: "",
+                            })
                           }
                           disabled={busyAction !== ""}
                         >
@@ -2485,7 +3323,8 @@ export function AuthPanel() {
                           type="submit"
                           className="btn btn-primary"
                           disabled={
-                            !anthropicTokenDraft.secret.trim() || busyAction !== ""
+                            !anthropicTokenDraft.secret.trim() ||
+                            busyAction !== ""
                           }
                         >
                           {busyAction === "anthropic-token" && (
@@ -2507,7 +3346,9 @@ export function AuthPanel() {
                     >
                       <div className="flex items-center justify-between gap-3">
                         <h3 className="card-title text-lg">新增 API key</h3>
-                        <div className="badge badge-outline badge-sm">api_key</div>
+                        <div className="badge badge-outline badge-sm">
+                          api_key
+                        </div>
                       </div>
 
                       <SecretField
@@ -2524,7 +3365,9 @@ export function AuthPanel() {
                       />
 
                       <label className="fieldset">
-                        <legend className="fieldset-legend">Display Name</legend>
+                        <legend className="fieldset-legend">
+                          Display Name
+                        </legend>
                         <input
                           type="text"
                           className="input input-bordered w-full"
@@ -2545,7 +3388,10 @@ export function AuthPanel() {
                           type="button"
                           className="btn"
                           onClick={() =>
-                            setAnthropicKeyDraft({ secret: "", displayName: "" })
+                            setAnthropicKeyDraft({
+                              secret: "",
+                              displayName: "",
+                            })
                           }
                           disabled={busyAction !== ""}
                         >
@@ -2554,7 +3400,10 @@ export function AuthPanel() {
                         <button
                           type="submit"
                           className="btn btn-primary"
-                          disabled={!anthropicKeyDraft.secret.trim() || busyAction !== ""}
+                          disabled={
+                            !anthropicKeyDraft.secret.trim() ||
+                            busyAction !== ""
+                          }
                         >
                           {busyAction === "anthropic-key" && (
                             <span className="loading loading-spinner loading-xs" />
@@ -2615,7 +3464,9 @@ export function AuthPanel() {
                                   Updated
                                 </div>
                                 <div className="text-sm">
-                                  {formatLongDateTime(selectedAnthropic.updated_at)}
+                                  {formatLongDateTime(
+                                    selectedAnthropic.updated_at,
+                                  )}
                                 </div>
                               </div>
                             </li>
@@ -2624,14 +3475,18 @@ export function AuthPanel() {
                           {!!selectedAnthropic.disabled_reason?.trim() && (
                             <div className="alert alert-warning">
                               <span>
-                                disabled_reason: {selectedAnthropic.disabled_reason}
+                                disabled_reason:{" "}
+                                {selectedAnthropic.disabled_reason}
                               </span>
                             </div>
                           )}
                         </>
                       ) : (
                         <div className="alert alert-info">
-                          <span>尚無 Anthropic credential。可新增 token、API key 或使用 browser login。</span>
+                          <span>
+                            尚無 Anthropic credential。可新增 token、API key
+                            或使用 browser login。
+                          </span>
                         </div>
                       )}
                     </div>
@@ -2643,7 +3498,8 @@ export function AuthPanel() {
                         <div className="min-w-0 flex-1">
                           <h3 className="card-title text-lg">Browser Login</h3>
                           <p className="text-sm text-base-content/60">
-                            啟動外部登入流程並輪詢狀態；若需要 manual fallback，會在此頁顯示 setup-token 輸入區塊。
+                            啟動外部登入流程並輪詢狀態；若需要 manual
+                            fallback，會在此頁顯示 setup-token 輸入區塊。
                           </p>
                         </div>
                         <div className="max-w-full overflow-x-auto lg:shrink-0">
@@ -2707,26 +3563,33 @@ export function AuthPanel() {
                             </li>
                           </ul>
 
-                          {anthropicJob.events && anthropicJob.events.length > 0 && (
-                            <div className="space-y-2">
-                              <div className="text-sm font-medium">Recent Events</div>
-                              <ul className="list rounded-box border border-base-300 bg-base-100">
-                                {anthropicJob.events.slice(-5).map((event) => (
-                                  <li
-                                    key={`${event.at}-${event.message}`}
-                                    className="list-row"
-                                  >
-                                    <div>
-                                      <div className="text-xs text-base-content/50">
-                                        {formatLongDateTime(event.at)}
-                                      </div>
-                                      <div className="text-sm">{event.message}</div>
-                                    </div>
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
+                          {anthropicJob.events &&
+                            anthropicJob.events.length > 0 && (
+                              <div className="space-y-2">
+                                <div className="text-sm font-medium">
+                                  Recent Events
+                                </div>
+                                <ul className="list rounded-box border border-base-300 bg-base-100">
+                                  {anthropicJob.events
+                                    .slice(-5)
+                                    .map((event) => (
+                                      <li
+                                        key={`${event.at}-${event.message}`}
+                                        className="list-row"
+                                      >
+                                        <div>
+                                          <div className="text-xs text-base-content/50">
+                                            {formatLongDateTime(event.at)}
+                                          </div>
+                                          <div className="text-sm">
+                                            {event.message}
+                                          </div>
+                                        </div>
+                                      </li>
+                                    ))}
+                                </ul>
+                              </div>
+                            )}
 
                           {(anthropicJob.message?.trim() ||
                             anthropicJob.manual_hint?.trim()) && (
@@ -2754,9 +3617,13 @@ export function AuthPanel() {
                               <button
                                 className="btn btn-primary"
                                 onClick={handleCompleteAnthropicBrowserManual}
-                                disabled={!anthropicManualSecret.trim() || busyAction !== ""}
+                                disabled={
+                                  !anthropicManualSecret.trim() ||
+                                  busyAction !== ""
+                                }
                               >
-                                {busyAction === "anthropic-browser-complete" && (
+                                {busyAction ===
+                                  "anthropic-browser-complete" && (
                                   <span className="loading loading-spinner loading-xs" />
                                 )}
                                 完成 Manual Fallback
@@ -2766,7 +3633,9 @@ export function AuthPanel() {
                         </>
                       ) : (
                         <div className="alert alert-info">
-                          <span>尚未啟動 browser login。需要自動化登入時再開始即可。</span>
+                          <span>
+                            尚未啟動 browser login。需要自動化登入時再開始即可。
+                          </span>
                         </div>
                       )}
                     </div>
@@ -2804,7 +3673,9 @@ export function AuthPanel() {
                                 : "badge-ghost"
                             }`}
                           >
-                            {selectedOpenAI.available ? "Available" : "Unavailable"}
+                            {selectedOpenAI.available
+                              ? "Available"
+                              : "Unavailable"}
                           </div>
                         )}
                         {openAIBrowserJob && (
@@ -2818,8 +3689,9 @@ export function AuthPanel() {
                           {selectedProviderTitle("openAI", selectedOpenAI)}
                         </h2>
                         <p className="text-sm text-base-content/60">
-                          合併管理 `openai` 與 `openai-codex` profiles，並保留 provider
-                          badge 與對應的 browser login/manual fallback。
+                          合併管理 `openai` 與 `openai-codex` profiles，並保留
+                          provider badge 與對應的 browser login/manual
+                          fallback。
                         </p>
                       </div>
                     </div>
@@ -2860,15 +3732,21 @@ export function AuthPanel() {
                   <div className="stats stats-vertical border border-base-300 bg-base-100 shadow-sm lg:stats-horizontal">
                     <div className="stat">
                       <div className="stat-title">OpenAI Keys</div>
-                      <div className="stat-value text-lg">{openAIProfiles.length}</div>
-                      <div className="stat-desc">`openai` provider credentials</div>
+                      <div className="stat-value text-lg">
+                        {openAIProfiles.length}
+                      </div>
+                      <div className="stat-desc">
+                        `openai` provider credentials
+                      </div>
                     </div>
                     <div className="stat">
                       <div className="stat-title">Codex Tokens</div>
                       <div className="stat-value text-lg">
                         {openAICodexProfiles.length}
                       </div>
-                      <div className="stat-desc">`openai-codex` provider credentials</div>
+                      <div className="stat-desc">
+                        `openai-codex` provider credentials
+                      </div>
                     </div>
                     <div className="stat">
                       <div className="stat-title">Browser Job</div>
@@ -2876,7 +3754,8 @@ export function AuthPanel() {
                         {openAIBrowserJob ? openAIBrowserJob.status : "Idle"}
                       </div>
                       <div className="stat-desc">
-                        {openAIBrowserJob?.job_id || "尚未啟動 Codex browser login"}
+                        {openAIBrowserJob?.job_id ||
+                          "尚未啟動 Codex browser login"}
                       </div>
                     </div>
                   </div>
@@ -2894,7 +3773,9 @@ export function AuthPanel() {
                       }}
                     >
                       <div className="flex items-center justify-between gap-3">
-                        <h3 className="card-title text-lg">新增 OpenAI API key</h3>
+                        <h3 className="card-title text-lg">
+                          新增 OpenAI API key
+                        </h3>
                         <div className="badge badge-outline badge-sm shrink-0 whitespace-nowrap">
                           openai
                         </div>
@@ -2914,7 +3795,9 @@ export function AuthPanel() {
                       />
 
                       <label className="fieldset">
-                        <legend className="fieldset-legend">Display Name</legend>
+                        <legend className="fieldset-legend">
+                          Display Name
+                        </legend>
                         <input
                           type="text"
                           className="input input-bordered w-full"
@@ -2944,7 +3827,9 @@ export function AuthPanel() {
                         <button
                           type="submit"
                           className="btn btn-primary"
-                          disabled={!openAIKeyDraft.secret.trim() || busyAction !== ""}
+                          disabled={
+                            !openAIKeyDraft.secret.trim() || busyAction !== ""
+                          }
                         >
                           {busyAction === "openai-key" && (
                             <span className="loading loading-spinner loading-xs" />
@@ -2964,7 +3849,9 @@ export function AuthPanel() {
                       }}
                     >
                       <div className="flex items-center justify-between gap-3">
-                        <h3 className="card-title text-lg">新增 OpenAI Codex token</h3>
+                        <h3 className="card-title text-lg">
+                          新增 OpenAI Codex token
+                        </h3>
                         <div className="badge badge-outline badge-sm shrink-0 whitespace-nowrap">
                           openai-codex
                         </div>
@@ -2984,7 +3871,9 @@ export function AuthPanel() {
                       />
 
                       <label className="fieldset">
-                        <legend className="fieldset-legend">Display Name</legend>
+                        <legend className="fieldset-legend">
+                          Display Name
+                        </legend>
                         <input
                           type="text"
                           className="input input-bordered w-full"
@@ -3014,7 +3903,9 @@ export function AuthPanel() {
                         <button
                           type="submit"
                           className="btn btn-primary"
-                          disabled={!openAICodexDraft.secret.trim() || busyAction !== ""}
+                          disabled={
+                            !openAICodexDraft.secret.trim() || busyAction !== ""
+                          }
                         >
                           {busyAction === "openai-codex-token" && (
                             <span className="loading loading-spinner loading-xs" />
@@ -3064,7 +3955,8 @@ export function AuthPanel() {
                                 Type / Key Hint
                               </div>
                               <div className="text-sm">
-                                {fallback(selectedOpenAI.type)} · {fallback(selectedOpenAI.key_hint)}
+                                {fallback(selectedOpenAI.type)} ·{" "}
+                                {fallback(selectedOpenAI.key_hint)}
                               </div>
                             </div>
                           </li>
@@ -3081,7 +3973,10 @@ export function AuthPanel() {
                         </ul>
                       ) : (
                         <div className="alert alert-info">
-                          <span>尚無 OpenAI / Codex profile。可新增 API key、OAuth token 或啟動 browser login。</span>
+                          <span>
+                            尚無 OpenAI / Codex profile。可新增 API key、OAuth
+                            token 或啟動 browser login。
+                          </span>
                         </div>
                       )}
                     </div>
@@ -3091,9 +3986,12 @@ export function AuthPanel() {
                     <div className="card-body gap-4">
                       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div className="min-w-0 flex-1">
-                          <h3 className="card-title text-lg">Codex Browser Login</h3>
+                          <h3 className="card-title text-lg">
+                            Codex Browser Login
+                          </h3>
                           <p className="text-sm text-base-content/60">
-                            啟動 `openai-codex` browser login job，保留 recent events 與 manual fallback token 輸入。
+                            啟動 `openai-codex` browser login job，保留 recent
+                            events 與 manual fallback token 輸入。
                           </p>
                         </div>
                         <div className="max-w-full overflow-x-auto lg:shrink-0">
@@ -3141,7 +4039,8 @@ export function AuthPanel() {
                                   Mode / Status
                                 </div>
                                 <div className="font-medium">
-                                  {openAIBrowserJob.mode} · {openAIBrowserJob.status}
+                                  {openAIBrowserJob.mode} ·{" "}
+                                  {openAIBrowserJob.status}
                                 </div>
                               </div>
                             </li>
@@ -3151,32 +4050,41 @@ export function AuthPanel() {
                                   Expires
                                 </div>
                                 <div className="text-sm">
-                                  {formatLongDateTime(openAIBrowserJob.expires_at)}
+                                  {formatLongDateTime(
+                                    openAIBrowserJob.expires_at,
+                                  )}
                                 </div>
                               </div>
                             </li>
                           </ul>
 
-                          {openAIBrowserJob.events && openAIBrowserJob.events.length > 0 && (
-                            <div className="space-y-2">
-                              <div className="text-sm font-medium">Recent Events</div>
-                              <ul className="list rounded-box border border-base-300 bg-base-100">
-                                {openAIBrowserJob.events.slice(-5).map((event) => (
-                                  <li
-                                    key={`${event.at}-${event.message}`}
-                                    className="list-row"
-                                  >
-                                    <div>
-                                      <div className="text-xs text-base-content/50">
-                                        {formatLongDateTime(event.at)}
-                                      </div>
-                                      <div className="text-sm">{event.message}</div>
-                                    </div>
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
+                          {openAIBrowserJob.events &&
+                            openAIBrowserJob.events.length > 0 && (
+                              <div className="space-y-2">
+                                <div className="text-sm font-medium">
+                                  Recent Events
+                                </div>
+                                <ul className="list rounded-box border border-base-300 bg-base-100">
+                                  {openAIBrowserJob.events
+                                    .slice(-5)
+                                    .map((event) => (
+                                      <li
+                                        key={`${event.at}-${event.message}`}
+                                        className="list-row"
+                                      >
+                                        <div>
+                                          <div className="text-xs text-base-content/50">
+                                            {formatLongDateTime(event.at)}
+                                          </div>
+                                          <div className="text-sm">
+                                            {event.message}
+                                          </div>
+                                        </div>
+                                      </li>
+                                    ))}
+                                </ul>
+                              </div>
+                            )}
 
                           {(openAIBrowserJob.message?.trim() ||
                             openAIBrowserJob.manual_hint?.trim()) && (
@@ -3204,7 +4112,10 @@ export function AuthPanel() {
                               <button
                                 className="btn btn-primary"
                                 onClick={handleCompleteOpenAIBrowserManual}
-                                disabled={!openAIManualSecret.trim() || busyAction !== ""}
+                                disabled={
+                                  !openAIManualSecret.trim() ||
+                                  busyAction !== ""
+                                }
                               >
                                 {busyAction === "openai-browser-complete" && (
                                   <span className="loading loading-spinner loading-xs" />
@@ -3216,7 +4127,10 @@ export function AuthPanel() {
                         </>
                       ) : (
                         <div className="alert alert-info">
-                          <span>尚未啟動 Codex browser login。需要登入工作站帳號時再啟動即可。</span>
+                          <span>
+                            尚未啟動 Codex browser
+                            login。需要登入工作站帳號時再啟動即可。
+                          </span>
                         </div>
                       )}
                     </div>

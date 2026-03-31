@@ -35,7 +35,7 @@ function statusClass(tone: StatusTone): string {
 }
 
 function isGeminiProvider(providerName: string): boolean {
-  return providerName === "google-ai-studio" || providerName === "google-gemini-cli";
+  return providerName === "google-ai-studio";
 }
 
 function normalizeThinkingMode(mode?: string | null): ThinkingMode {
@@ -110,9 +110,12 @@ export function ProviderPanel() {
     if (showLoading) setLoading(true);
 
     try {
-      const [loadedProviders, defaultProvider, fallbackResp] = await Promise.all(
-        [listProviders(), getDefaultProvider(), getFallbacks()],
-      );
+      const [loadedProviders, defaultProvider, fallbackResp] =
+        await Promise.all([
+          listProviders(),
+          getDefaultProvider(),
+          getFallbacks(),
+        ]);
       const loadedFallbacks = fallbackResp.fallbacks || [];
       const loadedModels = await loadModelOptions(
         defaultProvider.provider,
@@ -285,9 +288,7 @@ export function ProviderPanel() {
 
     updated[index] = {
       ...updated[index],
-      thinking_mode: updated[index].provider
-        ? nextThinkingMode
-        : "auto",
+      thinking_mode: updated[index].provider ? nextThinkingMode : "auto",
     };
     setBusyAction(`fallback-${index}`);
     setFallbacksList(updated);
@@ -300,7 +301,9 @@ export function ProviderPanel() {
   }
 
   async function handleClearFallback(index: number) {
-    const updated = fallbacks.filter((_, currentIndex) => currentIndex !== index);
+    const updated = fallbacks.filter(
+      (_, currentIndex) => currentIndex !== index,
+    );
     setBusyAction(`fallback-${index}`);
     setFallbacksList(updated);
 
@@ -325,19 +328,28 @@ export function ProviderPanel() {
     }
   }
 
-  async function saveFallbacks(entries: FallbackEntry[], successMessage: string) {
+  async function saveFallbacks(
+    entries: FallbackEntry[],
+    successMessage: string,
+  ) {
     try {
-      await setFallbacks({ fallbacks: entries.filter((entry) => entry.provider) });
+      await setFallbacks({
+        fallbacks: entries.filter((entry) => entry.provider),
+      });
       setStatus({ tone: "success", message: successMessage });
     } catch {
       setStatus({ tone: "error", message: "Fallback 更新失敗" });
     }
   }
 
-  const configuredFallbacks = fallbacks.filter((entry) => entry.provider).length;
-  const providerDisabled = loading || providers.length === 0 || busyAction !== "";
+  const configuredFallbacks = fallbacks.filter(
+    (entry) => entry.provider,
+  ).length;
+  const providerDisabled =
+    loading || providers.length === 0 || busyAction !== "";
   const modelDisabled = providerDisabled || !provider;
-  const thinkingDisabled = providerDisabled || !provider || !isGeminiProvider(provider);
+  const thinkingDisabled =
+    providerDisabled || !provider || !isGeminiProvider(provider);
 
   if (loading) {
     return (
@@ -413,7 +425,9 @@ export function ProviderPanel() {
               </p>
             </div>
             <div className="alert alert-warning">
-              <span>找不到可用 Provider，暫時無法編輯預設模型或 fallback chain。</span>
+              <span>
+                找不到可用 Provider，暫時無法編輯預設模型或 fallback chain。
+              </span>
             </div>
             <div className="card-actions justify-end">
               <button
@@ -454,7 +468,8 @@ export function ProviderPanel() {
               <div>
                 <h2 className="card-title text-2xl">模型提供者設定</h2>
                 <p className="text-sm text-base-content/60">
-                  管理預設 Provider / Model，並設定主模型失敗時依序接手的 fallback chain。
+                  管理預設 Provider / Model，並設定主模型失敗時依序接手的
+                  fallback chain。
                 </p>
               </div>
             </div>
@@ -483,14 +498,17 @@ export function ProviderPanel() {
               <div className="stat-title">目前 Model</div>
               <div className="stat-value text-lg">{model || "default"}</div>
               <div className="stat-desc">
-                {models.length > 0 ? `${models.length} 個可選模型` : "使用 default"}
+                {models.length > 0
+                  ? `${models.length} 個可選模型`
+                  : "使用 default"}
               </div>
             </div>
             <div className="stat">
               <div className="stat-title">Fallback Chain</div>
               <div className="stat-value text-lg">{configuredFallbacks}</div>
               <div className="stat-desc">
-                最多 {MAX_FALLBACKS} 組備援，已載入 {providers.length} 個 Provider
+                最多 {MAX_FALLBACKS} 組備援，已載入 {providers.length} 個
+                Provider
               </div>
             </div>
           </div>
@@ -554,7 +572,8 @@ export function ProviderPanel() {
                     </p>
                   ) : (
                     <p className="text-xs text-base-content/60">
-                      使用模型清單中的項目，或保留 `default` 交由 provider 端決定。
+                      使用模型清單中的項目，或保留 `default` 交由 provider
+                      端決定。
                     </p>
                   )}
                 </div>
@@ -581,7 +600,9 @@ export function ProviderPanel() {
                       ))}
                     </select>
                     <p className="text-xs text-base-content/60">
-                      僅套用於 Gemini。`auto` 交由模型自行決定，其他值會依實際模型映射成 level 或 budget。
+                      僅套用於 Gemini。`auto`
+                      交由模型自行決定，其他值會依實際模型映射成 level 或
+                      budget。
                     </p>
                   </div>
                 )}
@@ -596,7 +617,8 @@ export function ProviderPanel() {
               <div className="space-y-2">
                 <h3 className="card-title text-lg">Fallback Chain</h3>
                 <p className="text-sm text-base-content/60">
-                  主 Provider 失敗時依序嘗試這些備援設定，最多 {MAX_FALLBACKS} 組。
+                  主 Provider 失敗時依序嘗試這些備援設定，最多 {MAX_FALLBACKS}{" "}
+                  組。
                 </p>
               </div>
               <div className="badge badge-ghost badge-sm">
@@ -631,7 +653,9 @@ export function ProviderPanel() {
                               Configured
                             </div>
                           ) : (
-                            <div className="badge badge-ghost badge-sm">Empty</div>
+                            <div className="badge badge-ghost badge-sm">
+                              Empty
+                            </div>
                           )}
                         </div>
                         {fallbackProvider && (
@@ -653,7 +677,10 @@ export function ProviderPanel() {
                           className="select select-bordered join-item w-full focus:outline-0"
                           value={fallbackProvider}
                           onChange={(e) =>
-                            void handleFallbackProviderChange(index, e.target.value)
+                            void handleFallbackProviderChange(
+                              index,
+                              e.target.value,
+                            )
                           }
                           disabled={busyAction !== ""}
                         >
@@ -668,7 +695,10 @@ export function ProviderPanel() {
                           className="select select-bordered join-item w-full focus:outline-0"
                           value={fallbackModel}
                           onChange={(e) =>
-                            void handleFallbackModelChange(index, e.target.value)
+                            void handleFallbackModelChange(
+                              index,
+                              e.target.value,
+                            )
                           }
                           disabled={!fallbackProvider || busyAction !== ""}
                         >
@@ -684,7 +714,9 @@ export function ProviderPanel() {
                       {showFallbackThinking && (
                         <div className="space-y-2">
                           <label className="label p-0">
-                            <span className="label-text font-medium">思考程度</span>
+                            <span className="label-text font-medium">
+                              思考程度
+                            </span>
                           </label>
                           <select
                             className="select select-bordered w-full focus:outline-0"

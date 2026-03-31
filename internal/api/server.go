@@ -88,6 +88,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/auth/ai-studio/profiles", s.handleAIStudioProfiles)
 	mux.HandleFunc("/v1/auth/ai-studio/use", s.handleAIStudioUse)
 	mux.HandleFunc("/v1/auth/ai-studio/delete", s.handleAIStudioDelete)
+	mux.HandleFunc("/v1/auth/opencode/add-key", s.handleOpenCodeAddKey)
+	mux.HandleFunc("/v1/auth/opencode/profiles", s.handleOpenCodeProfiles)
+	mux.HandleFunc("/v1/auth/opencode/use", s.handleOpenCodeUse)
+	mux.HandleFunc("/v1/auth/opencode/delete", s.handleOpenCodeDelete)
+	mux.HandleFunc("/v1/auth/github-models/add-token", s.handleGitHubModelsAddToken)
+	mux.HandleFunc("/v1/auth/github-models/profiles", s.handleGitHubModelsProfiles)
+	mux.HandleFunc("/v1/auth/github-models/use", s.handleGitHubModelsUse)
+	mux.HandleFunc("/v1/auth/github-models/delete", s.handleGitHubModelsDelete)
 	mux.HandleFunc("/v1/models", s.handleListModels)
 	mux.HandleFunc("/v1/fallbacks", s.handleFallbacks)
 	mux.HandleFunc("/v1/general/config", s.handleGeneralConfig)
@@ -755,6 +763,152 @@ func (s *Server) handleAIStudioDelete(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleOpenCodeAddKey(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req app.OpenCodeAddKeyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	result, err := s.svc.AddOpenCodeKey(r.Context(), req)
+	if err != nil {
+		respondOpenCodeError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleOpenCodeProfiles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	profiles, err := s.svc.ListOpenCodeProfiles()
+	if err != nil {
+		respondOpenCodeError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"profiles": profiles})
+}
+
+func (s *Server) handleOpenCodeUse(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req useProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if err := s.svc.UseOpenCodeProfile(req.ProfileID); err != nil {
+		respondOpenCodeError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"profile_id": strings.TrimSpace(req.ProfileID),
+		"provider":   "opencode",
+	})
+}
+
+func (s *Server) handleOpenCodeDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req useProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if err := s.svc.DeleteOpenCodeProfile(req.ProfileID); err != nil {
+		respondOpenCodeError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"profile_id": strings.TrimSpace(req.ProfileID),
+		"provider":   "opencode",
+	})
+}
+
+func (s *Server) handleGitHubModelsAddToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req app.GitHubModelsAddTokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	result, err := s.svc.AddGitHubModelsToken(r.Context(), req)
+	if err != nil {
+		respondGitHubModelsError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleGitHubModelsProfiles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	profiles, err := s.svc.ListGitHubModelsProfiles()
+	if err != nil {
+		respondGitHubModelsError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"profiles": profiles})
+}
+
+func (s *Server) handleGitHubModelsUse(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req useProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if err := s.svc.UseGitHubModelsProfile(req.ProfileID); err != nil {
+		respondGitHubModelsError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"profile_id": strings.TrimSpace(req.ProfileID),
+		"provider":   "github-models",
+	})
+}
+
+func (s *Server) handleGitHubModelsDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req useProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if err := s.svc.DeleteGitHubModelsProfile(req.ProfileID); err != nil {
+		respondGitHubModelsError(w, err)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"profile_id": strings.TrimSpace(req.ProfileID),
+		"provider":   "github-models",
+	})
+}
+
 func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1320,6 +1474,64 @@ func respondAIStudioError(w http.ResponseWriter, err error) {
 				respondErrorDetail(w, http.StatusBadRequest, "invalid_api_key", err.Error())
 				return
 			}
+		}
+		respondError(w, http.StatusBadGateway, err.Error())
+	}
+}
+
+func respondOpenCodeError(w http.ResponseWriter, err error) {
+	if err == nil {
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	switch {
+	case errors.Is(err, app.ErrInvalidAPIKey):
+		respondErrorDetail(w, http.StatusBadRequest, "invalid_api_key", err.Error())
+	case errors.Is(err, app.ErrKeyValidationFailed):
+		respondErrorDetail(w, http.StatusBadRequest, "key_validation_failed", err.Error())
+	case errors.Is(err, app.ErrProfileNotFound):
+		respondErrorDetail(w, http.StatusNotFound, "profile_not_found", err.Error())
+	case errors.Is(err, app.ErrProfileInUse):
+		respondErrorDetail(w, http.StatusConflict, "profile_in_use", err.Error())
+	case errors.Is(err, app.ErrProviderNotReady):
+		respondErrorDetail(w, http.StatusServiceUnavailable, "provider_not_ready", err.Error())
+	case errors.Is(err, app.ErrNoAvailableAccount):
+		respondErrorDetail(w, http.StatusConflict, "provider_not_ready", err.Error())
+	default:
+		var failureErr *provider.FailureError
+		if errors.As(err, &failureErr) &&
+			(failureErr.Reason == core.FailureAuthPermanent || failureErr.Reason == core.FailureAuth) {
+			respondErrorDetail(w, http.StatusBadRequest, "invalid_api_key", err.Error())
+			return
+		}
+		respondError(w, http.StatusBadGateway, err.Error())
+	}
+}
+
+func respondGitHubModelsError(w http.ResponseWriter, err error) {
+	if err == nil {
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	switch {
+	case errors.Is(err, app.ErrInvalidGitHubToken):
+		respondErrorDetail(w, http.StatusBadRequest, "invalid_github_token", err.Error())
+	case errors.Is(err, app.ErrTokenValidationFailed):
+		respondErrorDetail(w, http.StatusBadRequest, "token_validation_failed", err.Error())
+	case errors.Is(err, app.ErrProfileNotFound):
+		respondErrorDetail(w, http.StatusNotFound, "profile_not_found", err.Error())
+	case errors.Is(err, app.ErrProfileInUse):
+		respondErrorDetail(w, http.StatusConflict, "profile_in_use", err.Error())
+	case errors.Is(err, app.ErrProviderNotReady):
+		respondErrorDetail(w, http.StatusServiceUnavailable, "provider_not_ready", err.Error())
+	case errors.Is(err, app.ErrNoAvailableAccount):
+		respondErrorDetail(w, http.StatusConflict, "provider_not_ready", err.Error())
+	default:
+		var failureErr *provider.FailureError
+		if errors.As(err, &failureErr) &&
+			(failureErr.Reason == core.FailureAuthPermanent || failureErr.Reason == core.FailureAuth) {
+			respondErrorDetail(w, http.StatusBadRequest, "invalid_github_token", err.Error())
+			return
 		}
 		respondError(w, http.StatusBadGateway, err.Error())
 	}
