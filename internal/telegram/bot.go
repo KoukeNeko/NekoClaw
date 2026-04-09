@@ -478,10 +478,11 @@ func (b *Bot) handleMessage(update tgbotapi.Update) {
 	// Handle error from stream.
 	if streamErr != "" {
 		logTelegram.Errorf("chat error: chat=%d user=%d error=%s", chatID, msg.From.ID, streamErr)
+		friendly := core.FriendlyErrorMessage(streamErr)
 		if placeholderErr == nil {
-			b.editMessage(chatID, placeholderMsg.MessageID, "⚠️ "+streamErr)
+			b.editMessage(chatID, placeholderMsg.MessageID, "⚠️ "+friendly)
 		} else {
-			b.sendReply(chatID, msg.MessageID, "⚠️ "+streamErr)
+			b.sendReply(chatID, msg.MessageID, "⚠️ "+friendly)
 		}
 		return
 	}
@@ -1074,10 +1075,11 @@ func (b *Bot) streamTelegramExecution(chatID int64, replyToID int, streamCh <-ch
 	}
 
 	if streamErr != "" {
+		friendly := core.FriendlyErrorMessage(streamErr)
 		if placeholderErr == nil {
-			b.editMessage(chatID, placeholderMsg.MessageID, "⚠️ "+streamErr)
+			b.editMessage(chatID, placeholderMsg.MessageID, "⚠️ "+friendly)
 		} else {
-			b.sendReply(chatID, replyToID, "⚠️ "+streamErr)
+			b.sendReply(chatID, replyToID, "⚠️ "+friendly)
 		}
 		return
 	}

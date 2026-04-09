@@ -463,7 +463,7 @@ func (b *Bot) handleMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	// Handle error cases.
 	if streamErr != "" {
-		errMsg := "⚠️ " + streamErr
+		errMsg := "⚠️ " + core.FriendlyErrorMessage(streamErr)
 		logDiscord.Errorf("chat error: channel=%s user=%s error=%s", m.ChannelID, m.Author.ID, streamErr)
 		if placeholderErr == nil {
 			_, _ = s.ChannelMessageEdit(m.ChannelID, placeholderMsg.ID, errMsg)

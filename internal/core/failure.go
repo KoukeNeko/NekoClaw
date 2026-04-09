@@ -64,3 +64,34 @@ func IsRetriable(reason FailureReason) bool {
 		return false
 	}
 }
+
+// FriendlyErrorMessage converts a raw provider error string into a
+// user-facing message in Traditional Chinese. Returns the original
+// message when no known pattern matches.
+func FriendlyErrorMessage(raw string) string {
+	lower := strings.ToLower(raw)
+	switch {
+	case strings.Contains(lower, "rate_limit") ||
+		strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "quota") ||
+		strings.Contains(lower, "resource exhausted") ||
+		strings.Contains(lower, "429"):
+		return "所有帳號目前都遇到速率限制，請稍後再試。"
+	case strings.Contains(lower, "billing"):
+		return "帳號額度不足，請聯繫管理員。"
+	case strings.Contains(lower, "auth_permanent") ||
+		strings.Contains(lower, "unauthorized") ||
+		strings.Contains(lower, "invalid token"):
+		return "帳號驗證失敗，請聯繫管理員。"
+	case strings.Contains(lower, "model_not_found") ||
+		strings.Contains(lower, "model not found"):
+		return "找不到指定的模型。"
+	case strings.Contains(lower, "timeout") ||
+		strings.Contains(lower, "deadline exceeded"):
+		return "請求逾時，請稍後再試。"
+	case strings.Contains(lower, "no available account"):
+		return "目前沒有可用的帳號，請稍後再試。"
+	default:
+		return raw
+	}
+}

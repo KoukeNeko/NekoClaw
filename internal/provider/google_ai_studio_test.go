@@ -3,9 +3,12 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/doeshing/nekoclaw/internal/core"
 )
@@ -578,7 +581,10 @@ func TestClassifyAIStudioStatus(t *testing.T) {
 		want   core.FailureReason
 	}{
 		{status: http.StatusUnauthorized, body: "Unauthorized", want: core.FailureAuthPermanent},
-		{status: http.StatusForbidden, body: "quota exceeded", want: core.FailureBilling},
+		{status: http.StatusForbidden, body: "quota exceeded", want: core.FailureRateLimit},
+		{status: http.StatusForbidden, body: "resource exhausted", want: core.FailureRateLimit},
+		{status: http.StatusForbidden, body: "billing account not enabled", want: core.FailureBilling},
+		{status: http.StatusForbidden, body: "billing enabled", want: core.FailureBilling},
 		{status: http.StatusForbidden, body: "permission denied", want: core.FailureAuthPermanent},
 		{status: http.StatusTooManyRequests, body: "RESOURCE_EXHAUSTED", want: core.FailureRateLimit},
 		{status: http.StatusBadRequest, body: "API key not valid", want: core.FailureAuthPermanent},
@@ -593,5 +599,37 @@ func TestClassifyAIStudioStatus(t *testing.T) {
 				t.Fatalf("classifyAIStudioStatus(%d, %q)=%s want=%s", tc.status, tc.body, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAIStudioRetryHintFromBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"Quota exceeded. Your quota will reset after 30s.","status":"RESOURCE_EXHAUSTED"}}`))
+	}))
+	defer srv.Close()
+
+	p := NewGoogleAIStudioProvider(GoogleAIStudioOptions{
+		BaseURL: srv.URL,
+	})
+	_, err := p.Generate(context.Background(), GenerateRequest{
+		Model:   "gemini-2.5-pro",
+		Account: core.Account{ID: "test", Token: "fake-key"},
+		Messages: []core.Message{
+			{Role: core.RoleUser, Content: "hello"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var fe *FailureError
+	if !errors.As(err, &fe) {
+		t.Fatalf("error = %T, want *FailureError", err)
+	}
+	if fe.Reason != core.FailureRateLimit {
+		t.Fatalf("Reason = %q, want %q", fe.Reason, core.FailureRateLimit)
+	}
+	if fe.RetryAfter != 30*time.Second {
+		t.Fatalf("RetryAfter = %s, want 30s", fe.RetryAfter)
 	}
 }

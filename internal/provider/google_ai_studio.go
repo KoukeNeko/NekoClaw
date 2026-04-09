@@ -187,7 +187,7 @@ func (p *GoogleAIStudioProvider) GenerateToolTurn(ctx context.Context, req ToolT
 			Message:    summarizeAIStudioError(body),
 			Endpoint:   p.baseURL,
 			Status:     resp.StatusCode,
-			RetryAfter: parseRetryAfter(resp),
+			RetryAfter: parseGeminiRetryAfter(resp, body),
 		}
 	}
 
@@ -279,7 +279,7 @@ func (p *GoogleAIStudioProvider) Generate(ctx context.Context, req GenerateReque
 			Message:    summarizeAIStudioError(body),
 			Endpoint:   p.baseURL,
 			Status:     resp.StatusCode,
-			RetryAfter: parseRetryAfter(resp),
+			RetryAfter: parseGeminiRetryAfter(resp, body),
 		}
 	}
 
@@ -373,7 +373,7 @@ func (p *GoogleAIStudioProvider) GenerateStream(ctx context.Context, req Generat
 			Message:    summarizeAIStudioError(body),
 			Endpoint:   p.baseURL,
 			Status:     resp.StatusCode,
-			RetryAfter: parseRetryAfter(resp),
+			RetryAfter: parseGeminiRetryAfter(resp, body),
 		}
 	}
 
@@ -843,8 +843,17 @@ func classifyAIStudioStatus(status int, body string) core.FailureReason {
 	case http.StatusUnauthorized:
 		return core.FailureAuthPermanent
 	case http.StatusForbidden:
-		if strings.Contains(lower, "billing") || strings.Contains(lower, "quota") {
+		// Distinguish real billing problems from transient quota/rate limits.
+		// Google returns 403 for both; only treat explicit billing account
+		// issues as billing failures (5h cooldown). Quota exhaustion at 403
+		// is effectively a rate limit (15s-2min cooldown).
+		if strings.Contains(lower, "billing account") ||
+			strings.Contains(lower, "billing enabled") ||
+			strings.Contains(lower, "billing not enabled") {
 			return core.FailureBilling
+		}
+		if strings.Contains(lower, "quota") || strings.Contains(lower, "resource exhausted") {
+			return core.FailureRateLimit
 		}
 		return core.FailureAuthPermanent
 	case http.StatusTooManyRequests:
