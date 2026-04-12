@@ -254,12 +254,17 @@ func extractToolCallsFromGeminiResponse(body []byte) geminiExtractResult {
 		return geminiExtractResult{}
 	}
 
-	// SSE mode: parse each "data:" event and accumulate results.
-	if strings.Contains(trimmed, "data:") {
-		return extractToolCallsFromGeminiSSE(trimmed)
+	// JSON responses start with '{' or '['; parse directly.
+	// We must NOT use strings.Contains(trimmed, "data:") to detect SSE,
+	// because the model's text output may contain "data:" (e.g. in URLs
+	// or code), which would incorrectly route a valid JSON response to
+	// the SSE parser.
+	if trimmed[0] == '{' || trimmed[0] == '[' {
+		return extractToolCallsFromGeminiJSON(body)
 	}
 
-	return extractToolCallsFromGeminiJSON(body)
+	// Otherwise treat as SSE (data: ...) format.
+	return extractToolCallsFromGeminiSSE(trimmed)
 }
 
 // extractToolCallsFromGeminiSSE parses SSE events and accumulates text + functionCall

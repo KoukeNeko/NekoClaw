@@ -1235,7 +1235,7 @@ func extractUsageFromGeminiResponse(body []byte) core.UsageInfo {
 	if trimmed == "" {
 		return core.UsageInfo{}
 	}
-	if strings.Contains(trimmed, "data:") {
+	if len(trimmed) > 0 && trimmed[0] != '{' && trimmed[0] != '[' {
 		return extractUsageFromGeminiSSE(trimmed)
 	}
 	var root map[string]any
@@ -1332,7 +1332,9 @@ func extractTextFromGeminiResponse(body []byte) (string, bool) {
 	}
 
 	// SSE mode from streamGenerateContent emits lines like: data: {...}
-	if strings.Contains(trimmed, "data:") {
+	// Check by format (non-JSON start) rather than substring match,
+	// because model text may contain "data:" (URLs, code, etc.).
+	if len(trimmed) > 0 && trimmed[0] != '{' && trimmed[0] != '[' {
 		if text, ok := extractTextFromGeminiSSE(trimmed); ok {
 			return text, true
 		}
