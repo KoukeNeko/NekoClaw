@@ -1443,7 +1443,7 @@ func extractTextFromGeminiSSE(raw string) (string, bool) {
 	}
 	flush()
 
-	result := strings.TrimSpace(joined.String())
+	result := stripGemmaThinkingTokens(strings.TrimSpace(joined.String()))
 	if result == "" {
 		return "", false
 	}
@@ -1476,8 +1476,12 @@ func extractTextFromGeminiMap(root map[string]any) (string, bool) {
 				if part == nil {
 					continue
 				}
+				// Skip thinking parts (Gemma 4 / Gemini 2.5+ thought output).
+				if isThoughtPart(part) {
+					continue
+				}
 				if text, ok := part["text"].(string); ok && strings.TrimSpace(text) != "" {
-					return text, true
+					return stripGemmaThinkingTokens(text), true
 				}
 			}
 		}

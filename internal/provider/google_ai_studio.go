@@ -727,7 +727,8 @@ func extractTextAndUsageFromAIStudio(body []byte) (string, core.UsageInfo, bool)
 	if len(parts) == 0 {
 		return "", core.UsageInfo{}, false
 	}
-	return strings.Join(parts, "\n"), buildAIStudioUsage(payload.UsageMetadata), true
+	text := stripGemmaThinkingTokens(strings.Join(parts, "\n"))
+	return text, buildAIStudioUsage(payload.UsageMetadata), true
 }
 
 func buildAIStudioUsage(meta aiStudioUsageMetadata) core.UsageInfo {

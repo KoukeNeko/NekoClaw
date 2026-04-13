@@ -365,6 +365,71 @@ func TestExtractToolCallsFromGeminiResponse_InvalidJSON(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Gemma thinking token stripping
+// ---------------------------------------------------------------------------
+
+func TestStripGemmaThinkingTokens_WithThinking(t *testing.T) {
+	input := `<|channel>thought
+The user is asking about weather. Let me check my tools.
+<channel|>The weather in Tokyo is sunny today!`
+
+	result := stripGemmaThinkingTokens(input)
+	if result != "The weather in Tokyo is sunny today!" {
+		t.Errorf("expected clean text, got %q", result)
+	}
+}
+
+func TestStripGemmaThinkingTokens_EmptyThinking(t *testing.T) {
+	input := `<|channel>thought
+<channel|>Hello!`
+
+	result := stripGemmaThinkingTokens(input)
+	if result != "Hello!" {
+		t.Errorf("expected 'Hello!', got %q", result)
+	}
+}
+
+func TestStripGemmaThinkingTokens_NoThinking(t *testing.T) {
+	input := "Just a normal response."
+	result := stripGemmaThinkingTokens(input)
+	if result != input {
+		t.Errorf("expected unchanged text, got %q", result)
+	}
+}
+
+func TestIsThoughtPart(t *testing.T) {
+	thought := map[string]any{"text": "internal reasoning", "thought": true}
+	normal := map[string]any{"text": "visible response"}
+
+	if !isThoughtPart(thought) {
+		t.Error("expected thought=true part to be detected")
+	}
+	if isThoughtPart(normal) {
+		t.Error("expected normal part to not be detected as thought")
+	}
+}
+
+func TestExtractToolCallsFromGeminiJSON_SkipsThoughtParts(t *testing.T) {
+	body := []byte(`{
+		"candidates": [{
+			"content": {
+				"parts": [
+					{"text": "internal thinking", "thought": true},
+					{"text": "Hello world!"}
+				]
+			}
+		}]
+	}`)
+	result := extractToolCallsFromGeminiJSON(body)
+	if !result.OK {
+		t.Fatal("expected OK=true")
+	}
+	if result.Text != "Hello world!" {
+		t.Errorf("expected only visible text, got %q", result.Text)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // buildGeminiGenerationConfig
 // ---------------------------------------------------------------------------
 

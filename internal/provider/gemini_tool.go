@@ -3,11 +3,36 @@ package provider
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/doeshing/nekoclaw/internal/core"
 )
+
+// gemmaThinkingRegex strips Gemma 4 thinking control tokens from text output.
+// Gemma 4 uses <|channel>thought\n...<channel|> to wrap internal reasoning.
+// When thinking is disabled, the block is empty: <|channel>thought\n<channel|>
+var gemmaThinkingRegex = regexp.MustCompile(`(?s)<\|channel>thought\n.*?<channel\|>`)
+
+// stripGemmaThinkingTokens removes Gemma 4 thinking control tokens from text.
+// Returns the cleaned text with only the final answer.
+func stripGemmaThinkingTokens(text string) string {
+	if !strings.Contains(text, "<|channel>thought") {
+		return text
+	}
+	cleaned := gemmaThinkingRegex.ReplaceAllString(text, "")
+	return strings.TrimSpace(cleaned)
+}
+
+// isThoughtPart returns true if a Gemini API response part is a thinking
+// part (has "thought": true). These should be excluded from user-visible output.
+func isThoughtPart(part map[string]any) bool {
+	if thought, ok := part["thought"].(bool); ok && thought {
+		return true
+	}
+	return false
+}
 
 // ---------------------------------------------------------------------------
 // Gemini function calling — shared helpers for both Google AI Studio and
@@ -320,7 +345,7 @@ func extractToolCallsFromGeminiSSE(raw string) geminiExtractResult {
 		return geminiExtractResult{}
 	}
 	return geminiExtractResult{
-		Text:            strings.Join(textParts, ""),
+		Text:            stripGemmaThinkingTokens(strings.Join(textParts, "")),
 		Calls:           calls,
 		Usage:           usage,
 		RawModelContent: rawModelContent,
@@ -366,6 +391,10 @@ func extractToolCallsFromGeminiJSON(body []byte) geminiExtractResult {
 			if part == nil {
 				continue
 			}
+			// Skip thinking parts (Gemini 2.5+ and Gemma 4 thought output).
+			if isThoughtPart(part) {
+				continue
+			}
 			if txt, ok := part["text"].(string); ok && strings.TrimSpace(txt) != "" {
 				textParts = append(textParts, txt)
 			}
@@ -406,9 +435,10 @@ func extractToolCallsFromGeminiJSON(body []byte) geminiExtractResult {
 	}
 
 	usage := parseUsageMetadata(actual)
+	finalText := stripGemmaThinkingTokens(strings.Join(textParts, ""))
 
 	return geminiExtractResult{
-		Text:            strings.Join(textParts, ""),
+		Text:            finalText,
 		Calls:           calls,
 		Usage:           usage,
 		RawModelContent: rawModelContent,
