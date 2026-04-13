@@ -154,10 +154,31 @@ func (p *GeminiInternalProvider) GenerateToolTurn(ctx context.Context, req ToolT
 	}
 
 	systemInstruction, contents := toGeminiToolContents(req.Messages)
+
+	// Inject model-specific tool usage guidance into system instruction.
+	if guidance := getModelToolGuidance(p.ID(), modelID); guidance != "" {
+		if systemInstruction != "" {
+			systemInstruction += "\n\n" + guidance
+		} else {
+			systemInstruction = guidance
+		}
+	}
+
+	// Determine whether to use XML fallback for models without native
+	// function calling support.
+	useXMLTools := len(req.Tools) > 0 && !geminiModelSupportsNativeTools(modelID)
+
 	requestBody := map[string]any{
 		"contents": contents,
 	}
-	if tools := toGeminiFunctionDeclarations(req.Tools); len(tools) > 0 {
+	if useXMLTools {
+		xmlBlock := formatToolsXMLBlock(req.Tools)
+		if systemInstruction != "" {
+			systemInstruction += "\n\n" + xmlBlock
+		} else {
+			systemInstruction = xmlBlock
+		}
+	} else if tools := toGeminiFunctionDeclarations(req.Tools); len(tools) > 0 {
 		requestBody["tools"] = tools
 	}
 	if systemInstruction != "" {
@@ -226,6 +247,37 @@ func (p *GeminiInternalProvider) GenerateToolTurn(ctx context.Context, req ToolT
 			return ToolTurnResponse{}, lastErr
 		}
 
+		if useXMLTools {
+			// XML path: parse <tool_call> tags from text output.
+			result := extractToolCallsFromGeminiResponse(respBody)
+			responseText := ""
+			var usage core.UsageInfo
+			if result.OK {
+				responseText = result.Text
+				usage = result.Usage
+			} else {
+				text, ok := extractTextFromGeminiResponse(respBody)
+				if ok {
+					responseText = text
+				}
+				usage = extractUsageFromGeminiResponse(respBody)
+			}
+			cleanText, xmlCalls, hasXMLCalls := extractToolCallsFromXML(responseText)
+			stopReason := "end_turn"
+			if hasXMLCalls {
+				stopReason = "tool_calls"
+			}
+			return ToolTurnResponse{
+				Text:       cleanText,
+				Endpoint:   endpoint,
+				Raw:        respBody,
+				Usage:      usage,
+				StopReason: stopReason,
+				ToolCalls:  xmlCalls,
+			}, nil
+		}
+
+		// Native function calling path.
 		result := extractToolCallsFromGeminiResponse(respBody)
 		if !result.OK {
 			lastErr = &FailureError{

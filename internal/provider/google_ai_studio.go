@@ -136,10 +136,33 @@ func (p *GoogleAIStudioProvider) GenerateToolTurn(ctx context.Context, req ToolT
 	}
 
 	systemInstruction, contents := toGeminiToolContents(req.Messages)
+
+	// Inject model-specific tool usage guidance into system instruction.
+	if guidance := getModelToolGuidance(p.ID(), modelID); guidance != "" {
+		if systemInstruction != "" {
+			systemInstruction += "\n\n" + guidance
+		} else {
+			systemInstruction = guidance
+		}
+	}
+
+	// Determine whether to use XML fallback for models without native
+	// function calling (e.g. Llama, Mistral, Qwen via AI Studio).
+	useXMLTools := len(req.Tools) > 0 && !geminiModelSupportsNativeTools(modelID)
+
 	payload := map[string]any{
 		"contents": contents,
 	}
-	if tools := toGeminiFunctionDeclarations(req.Tools); len(tools) > 0 {
+	if useXMLTools {
+		// XML path: inject tool definitions into system instruction
+		// instead of sending the tools[] payload field.
+		xmlBlock := formatToolsXMLBlock(req.Tools)
+		if systemInstruction != "" {
+			systemInstruction += "\n\n" + xmlBlock
+		} else {
+			systemInstruction = xmlBlock
+		}
+	} else if tools := toGeminiFunctionDeclarations(req.Tools); len(tools) > 0 {
 		payload["tools"] = tools
 	}
 	if systemInstruction != "" {
@@ -191,6 +214,38 @@ func (p *GoogleAIStudioProvider) GenerateToolTurn(ctx context.Context, req ToolT
 		}
 	}
 
+	if useXMLTools {
+		// XML path: extract text from the response, then parse
+		// <tool_call> tags from the model's text output.
+		result := extractToolCallsFromGeminiResponse(body)
+		responseText := ""
+		var usage core.UsageInfo
+		if result.OK {
+			responseText = result.Text
+			usage = result.Usage
+		} else {
+			// Fallback: try extracting text directly even if
+			// the structured parser didn't find functionCalls.
+			text, u, _ := extractTextAndUsageFromAIStudio(body)
+			responseText = text
+			usage = u
+		}
+		cleanText, xmlCalls, hasXMLCalls := extractToolCallsFromXML(responseText)
+		stopReason := "end_turn"
+		if hasXMLCalls {
+			stopReason = "tool_calls"
+		}
+		return ToolTurnResponse{
+			Text:       cleanText,
+			Endpoint:   p.baseURL,
+			Raw:        body,
+			Usage:      usage,
+			StopReason: stopReason,
+			ToolCalls:  xmlCalls,
+		}, nil
+	}
+
+	// Native function calling path.
 	result := extractToolCallsFromGeminiResponse(body)
 	if !result.OK {
 		if blocked := aiStudioBlockedFailure(body, p.baseURL, resp.StatusCode); blocked != nil {

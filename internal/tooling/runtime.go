@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doeshing/nekoclaw/internal/core"
@@ -15,6 +16,7 @@ import (
 )
 
 const maxToolRounds = 8
+const maxParallelToolWorkers = 4
 
 // maxToolResultBytes is the upper bound on tool output stored in context
 // messages. Outputs exceeding this are head+tail truncated to preserve
@@ -153,6 +155,15 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		sessionMsgs = append(sessionMsgs, req.UserMessage)
 	}
 
+	// Build schema map for argument type coercion (open-source models
+	// frequently send wrong types, e.g. string "5" instead of int 5).
+	schemaMap := map[string]json.RawMessage{}
+	for _, def := range r.executor.Definitions() {
+		if len(def.InputSchema) > 0 {
+			schemaMap[def.Name] = def.InputSchema
+		}
+	}
+
 	lastReply := ""
 	recentFingerprints := make([]string, 0, doomLoopWindow)
 	warnedFingerprints := map[string]struct{}{}
@@ -286,6 +297,9 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			rawModelContent = nil
 			return v
 		}
+
+		// Pre-execute eligible read-only tools in parallel for performance.
+		prefetched := r.prefetchReadOnlyTools(ctx, req, pending)
 
 		for _, call := range pending {
 			if !r.executor.HasTool(call.Name) {
@@ -468,7 +482,18 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 					continue
 				}
 			}
-			content, err := r.executor.Run(ctx, call)
+			// Coerce argument types to match JSON Schema declarations.
+			if schema, ok := schemaMap[call.Name]; ok {
+				call.Arguments = coerceToolArguments(call.Arguments, schema)
+			}
+			// Use prefetched result if available (read-only tools executed in parallel).
+			var content string
+			var err error
+			if pf, ok := prefetched[call.ID]; ok {
+				content, err = pf.content, pf.err
+			} else {
+				content, err = r.executor.Run(ctx, call)
+			}
 			if err != nil {
 				content = "tool_error: " + err.Error()
 				failEvt := core.ToolEvent{
@@ -746,4 +771,62 @@ func (r *Runtime) toolAllowed(mode core.ToolMode, allowed []string, toolName str
 		}
 	}
 	return false
+}
+
+// prefetchResult holds the output of a prefetched read-only tool execution.
+type prefetchResult struct {
+	content string
+	err     error
+}
+
+// prefetchReadOnlyTools identifies eligible read-only tool calls from the
+// pending list and executes them concurrently. Returns a map from call ID
+// to result. Returns nil if fewer than 2 calls are eligible (no parallelism
+// benefit). The existing sequential loop uses prefetch results when available
+// instead of calling executor.Run again.
+func (r *Runtime) prefetchReadOnlyTools(
+	ctx context.Context,
+	req RunRequest,
+	pending []provider.ToolCall,
+) map[string]prefetchResult {
+	var eligible []provider.ToolCall
+	for _, call := range pending {
+		if !r.executor.HasTool(call.Name) {
+			continue
+		}
+		if !r.toolAllowed(req.ToolMode, req.AllowedTools, call.Name) {
+			continue
+		}
+		if !r.executor.IsReadOnlySafe(call.Name) {
+			continue
+		}
+		if r.executor.RequiresApproval(call) {
+			continue
+		}
+		eligible = append(eligible, call)
+	}
+	if len(eligible) < 2 {
+		return nil
+	}
+
+	results := make(map[string]prefetchResult, len(eligible))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxParallelToolWorkers)
+
+	for _, call := range eligible {
+		wg.Add(1)
+		go func(c provider.ToolCall) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			content, err := r.executor.Run(ctx, c)
+			mu.Lock()
+			results[c.ID] = prefetchResult{content: content, err: err}
+			mu.Unlock()
+		}(call)
+	}
+	wg.Wait()
+
+	return results
 }
