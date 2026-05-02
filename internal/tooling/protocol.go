@@ -48,6 +48,7 @@ type RunRequest struct {
 	Messages          []core.Message
 	UserMessage       core.Message
 	EnableTools       bool
+	ProviderTools     provider.ProviderTools
 	ToolMode          core.ToolMode
 	RunID             string
 	Approvals         []core.ToolApprovalDecision

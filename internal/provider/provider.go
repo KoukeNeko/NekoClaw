@@ -23,18 +23,30 @@ type GenerationParams struct {
 	ThinkingMode     *core.ThinkingMode
 }
 
+// ProviderTools carries flags for built-in, server-side tools that some
+// providers expose natively (e.g. Gemini's google_search grounding).
+// These are distinct from custom function-calling tools — the provider
+// runs them itself and returns enriched metadata in the response.
+type ProviderTools struct {
+	// EnableGoogleSearch turns on Gemini's built-in Google Search grounding.
+	// Only effective for Gemini family models; ignored otherwise.
+	EnableGoogleSearch bool
+}
+
 type GenerateRequest struct {
-	Model      string
-	Messages   []core.Message
-	Account    core.Account
-	Generation *GenerationParams // optional persona-driven sampling overrides
+	Model         string
+	Messages      []core.Message
+	Account       core.Account
+	Generation    *GenerationParams // optional persona-driven sampling overrides
+	ProviderTools ProviderTools     // optional built-in provider tools (e.g. google_search)
 }
 
 type GenerateResponse struct {
-	Text     string
-	Endpoint string
-	Raw      json.RawMessage
-	Usage    core.UsageInfo
+	Text      string
+	Endpoint  string
+	Raw       json.RawMessage
+	Usage     core.UsageInfo
+	Grounding *GroundingMetadata // populated when google_search grounding is active
 }
 
 type ToolDefinition struct {
@@ -50,11 +62,12 @@ type ToolCall struct {
 }
 
 type ToolTurnRequest struct {
-	Model      string
-	Messages   []core.Message
-	Account    core.Account
-	Tools      []ToolDefinition
-	Generation *GenerationParams // optional persona-driven sampling overrides
+	Model         string
+	Messages      []core.Message
+	Account       core.Account
+	Tools         []ToolDefinition
+	Generation    *GenerationParams // optional persona-driven sampling overrides
+	ProviderTools ProviderTools     // optional built-in provider tools (e.g. google_search)
 }
 
 type ToolTurnResponse struct {
@@ -64,7 +77,8 @@ type ToolTurnResponse struct {
 	Usage           core.UsageInfo
 	StopReason      string
 	ToolCalls       []ToolCall
-	RawModelContent json.RawMessage // raw model content block (e.g. Gemini candidate content with thought_signature)
+	RawModelContent json.RawMessage    // raw model content block (e.g. Gemini candidate content with thought_signature)
+	Grounding       *GroundingMetadata // populated when google_search grounding is active
 }
 
 type ToolCapabilities struct {
@@ -89,11 +103,12 @@ type ToolCallingProvider interface {
 
 // GenerateStreamChunk is a single piece of a streaming LLM response.
 type GenerateStreamChunk struct {
-	Text     string         // incremental text delta
-	Done     bool           // true on the final chunk
-	Endpoint string         // populated only when Done=true
-	Usage    core.UsageInfo // populated only when Done=true
-	Error    error          // non-nil signals a streaming error
+	Text      string             // incremental text delta
+	Done      bool               // true on the final chunk
+	Endpoint  string             // populated only when Done=true
+	Usage     core.UsageInfo     // populated only when Done=true
+	Grounding *GroundingMetadata // populated only when Done=true and search grounding active
+	Error     error              // non-nil signals a streaming error
 }
 
 // StreamingProvider optionally supports token-level streaming generation.

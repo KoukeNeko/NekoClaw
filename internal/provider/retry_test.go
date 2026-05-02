@@ -37,12 +37,12 @@ func TestComputeDelay(t *testing.T) {
 		attempt  int
 		expected time.Duration
 	}{
-		{0, 100 * time.Millisecond},  // 100ms × 2^0 = 100ms
-		{1, 200 * time.Millisecond},  // 100ms × 2^1 = 200ms
-		{2, 400 * time.Millisecond},  // 100ms × 2^2 = 400ms
-		{3, 800 * time.Millisecond},  // 100ms × 2^3 = 800ms
-		{4, 1 * time.Second},         // 100ms × 2^4 = 1600ms → capped at 1s
-		{10, 1 * time.Second},        // far exceeds cap
+		{0, 100 * time.Millisecond}, // 100ms × 2^0 = 100ms
+		{1, 200 * time.Millisecond}, // 100ms × 2^1 = 200ms
+		{2, 400 * time.Millisecond}, // 100ms × 2^2 = 400ms
+		{3, 800 * time.Millisecond}, // 100ms × 2^3 = 800ms
+		{4, 1 * time.Second},        // 100ms × 2^4 = 1600ms → capped at 1s
+		{10, 1 * time.Second},       // far exceeds cap
 	}
 	for _, tt := range tests {
 		got := computeDelay(cfg, tt.attempt)

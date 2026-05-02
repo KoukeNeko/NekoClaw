@@ -154,20 +154,21 @@ type FallbackEntry struct {
 }
 
 type ChatRequest struct {
-	SessionID         string                 `json:"session_id"`
-	DisableSession    bool                   `json:"disable_session,omitempty"`
-	EphemeralMessages []Message              `json:"ephemeral_messages,omitempty"`
-	Surface           Surface                `json:"surface"`
-	Provider          string                 `json:"provider"`
-	Model             string                 `json:"model"`
-	Message           string                 `json:"message"`
-	Images            []ImageData            `json:"images,omitempty"`
-	ClientTimezone    string                 `json:"client_timezone,omitempty"`
-	ClientSentAt      string                 `json:"client_sent_at,omitempty"`
-	EnableTools       bool                   `json:"enable_tools,omitempty"`
-	ToolMode          ToolMode               `json:"tool_mode,omitempty"`
-	RunID             string                 `json:"run_id,omitempty"`
-	ToolApprovals     []ToolApprovalDecision `json:"tool_approvals,omitempty"`
+	SessionID          string                 `json:"session_id"`
+	DisableSession     bool                   `json:"disable_session,omitempty"`
+	EphemeralMessages  []Message              `json:"ephemeral_messages,omitempty"`
+	Surface            Surface                `json:"surface"`
+	Provider           string                 `json:"provider"`
+	Model              string                 `json:"model"`
+	Message            string                 `json:"message"`
+	Images             []ImageData            `json:"images,omitempty"`
+	ClientTimezone     string                 `json:"client_timezone,omitempty"`
+	ClientSentAt       string                 `json:"client_sent_at,omitempty"`
+	EnableTools        bool                   `json:"enable_tools,omitempty"`
+	EnableGoogleSearch bool                   `json:"enable_google_search,omitempty"`
+	ToolMode           ToolMode               `json:"tool_mode,omitempty"`
+	RunID              string                 `json:"run_id,omitempty"`
+	ToolApprovals      []ToolApprovalDecision `json:"tool_approvals,omitempty"`
 }
 
 type ChatResponse struct {
@@ -186,6 +187,38 @@ type ChatResponse struct {
 	ToolEvents        []ToolEvent           `json:"tool_events,omitempty"`
 	Reminders         []ReminderEvent       `json:"reminders,omitempty"`
 	SubagentArtifacts []SubagentArtifact    `json:"subagent_artifacts,omitempty"`
+	Grounding         *GroundingMetadata    `json:"grounding,omitempty"`
+}
+
+// GroundingMetadata captures citation data returned by providers when a
+// built-in search grounding tool is active (e.g. Gemini google_search).
+// Sources are listed in the order returned by the provider; SourceIndices
+// in Supports refer to that order.
+type GroundingMetadata struct {
+	SearchQueries []string           `json:"search_queries,omitempty"`
+	Sources       []GroundingSource  `json:"sources,omitempty"`
+	Supports      []GroundingSupport `json:"supports,omitempty"`
+}
+
+// GroundingSource is one cited web source.
+type GroundingSource struct {
+	URI   string `json:"uri,omitempty"`
+	Title string `json:"title,omitempty"`
+}
+
+// GroundingSupport associates a span of the model's answer with the source
+// indices (into GroundingMetadata.Sources) that back it.
+type GroundingSupport struct {
+	Text          string `json:"text,omitempty"`
+	SourceIndices []int  `json:"source_indices,omitempty"`
+}
+
+// IsEmpty reports whether the metadata carries any usable citation data.
+func (g *GroundingMetadata) IsEmpty() bool {
+	if g == nil {
+		return true
+	}
+	return len(g.SearchQueries) == 0 && len(g.Sources) == 0 && len(g.Supports) == 0
 }
 
 // UsageInfo holds token usage from a single API call.
@@ -309,6 +342,7 @@ type SessionEntry struct {
 	MsgElapsedMs         int64              `json:"msg_elapsed_ms,omitempty"`
 	MsgReminders         []ReminderEvent    `json:"msg_reminders,omitempty"`
 	MsgSubagentArtifacts []SubagentArtifact `json:"msg_subagent_artifacts,omitempty"`
+	MsgGrounding         *GroundingMetadata `json:"msg_grounding,omitempty"`
 
 	// type=compaction
 	Summary          string `json:"summary,omitempty"`
@@ -417,6 +451,7 @@ type AssistantResponseMeta struct {
 	ElapsedMs         int64
 	Reminders         []ReminderEvent
 	SubagentArtifacts []SubagentArtifact
+	Grounding         *GroundingMetadata
 }
 
 // NewAssistantEntryWithMeta creates an assistant message entry with response metadata.
@@ -434,6 +469,9 @@ func NewAssistantEntryWithMeta(content string, meta AssistantResponseMeta) Sessi
 	}
 	if len(meta.SubagentArtifacts) > 0 {
 		e.MsgSubagentArtifacts = append([]SubagentArtifact(nil), meta.SubagentArtifacts...)
+	}
+	if !meta.Grounding.IsEmpty() {
+		e.MsgGrounding = meta.Grounding
 	}
 	return e
 }

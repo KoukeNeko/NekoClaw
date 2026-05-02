@@ -119,6 +119,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		mutatedFiles    = map[string]struct{}{}
 		snapshotID      string
 		rawModelContent json.RawMessage // raw model content from current tool turn (e.g. Gemini thought_signature)
+		grounding       *core.GroundingMetadata
 	)
 	if modelID == "" {
 		modelID = "default"
@@ -171,11 +172,12 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		if len(pending) == 0 {
 			toolDefs := r.filterDefinitions(req.AllowedTools)
 			turnResp, err := req.ToolProvider.GenerateToolTurn(ctx, provider.ToolTurnRequest{
-				Model:      modelID,
-				Messages:   messages,
-				Account:    account,
-				Tools:      toolDefs,
-				Generation: req.Generation,
+				Model:         modelID,
+				Messages:      messages,
+				Account:       account,
+				Tools:         toolDefs,
+				Generation:    req.Generation,
+				ProviderTools: req.ProviderTools,
 			})
 			if err != nil {
 				return RunResult{}, err
@@ -186,6 +188,11 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			usage.InputTokens = turnResp.Usage.InputTokens
 			usage.OutputTokens += turnResp.Usage.OutputTokens
 			usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+			// Accumulate grounding metadata across tool turns. The final
+			// turn (no more tool calls) typically carries the citations.
+			if !turnResp.Grounding.IsEmpty() {
+				grounding = turnResp.Grounding
+			}
 			if txt := strings.TrimSpace(turnResp.Text); txt != "" {
 				lastReply = txt
 				assistant := core.Message{
@@ -209,6 +216,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 						Compressed:  req.Compressed,
 						Compression: req.Compression,
 						ToolEvents:  events,
+						Grounding:   grounding,
 					},
 					SessionMessages: sessionMsgs,
 				}, nil
@@ -555,6 +563,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			Compressed:  req.Compressed,
 			Compression: req.Compression,
 			ToolEvents:  events,
+			Grounding:   grounding,
 		},
 		SessionMessages: sessionMsgs,
 	}, nil

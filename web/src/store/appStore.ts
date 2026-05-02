@@ -9,6 +9,7 @@ import type {
   ReminderEvent,
   SecurityStatus,
   SubagentArtifact,
+  GroundingMetadata,
 } from "@/api/types";
 import {
   detectBrowserTimeZone,
@@ -32,6 +33,7 @@ export interface ChatMessage {
   toolEvents?: ToolEvent[];
   reminders?: ReminderEvent[];
   subagentArtifacts?: SubagentArtifact[];
+  grounding?: GroundingMetadata;
   createdAt: string;
 }
 
@@ -88,6 +90,10 @@ interface AppState {
   setProvider: (p: string) => void;
   setModel: (m: string) => void;
   setThinkingMode: (mode: ThinkingMode) => void;
+
+  // Composer toggles
+  googleSearchEnabled: boolean;
+  setGoogleSearchEnabled: (enabled: boolean) => void;
 
   // Session
   sessionID: string;
@@ -190,6 +196,10 @@ export const useAppStore = create<AppState>((set) => ({
   setProvider: (p) => set({ provider: p }),
   setModel: (m) => set({ model: m }),
   setThinkingMode: (thinkingMode) => set({ thinkingMode }),
+
+  // Composer toggles
+  googleSearchEnabled: false,
+  setGoogleSearchEnabled: (enabled) => set({ googleSearchEnabled: enabled }),
 
   // Session
   sessionID: "main",

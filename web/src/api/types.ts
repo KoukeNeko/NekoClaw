@@ -114,8 +114,27 @@ export interface ChatRequest {
   client_timezone?: string;
   client_sent_at?: string;
   enable_tools?: boolean;
+  enable_google_search?: boolean;
   run_id?: string;
   tool_approvals?: ToolApprovalDecision[];
+}
+
+// GroundingMetadata mirrors core.GroundingMetadata (Go).
+// Populated when Gemini's google_search built-in tool produced citations.
+export interface GroundingSource {
+  uri?: string;
+  title?: string;
+}
+
+export interface GroundingSupport {
+  text?: string;
+  source_indices?: number[];
+}
+
+export interface GroundingMetadata {
+  search_queries?: string[];
+  sources?: GroundingSource[];
+  supports?: GroundingSupport[];
 }
 
 export interface ChatResponse {
@@ -134,6 +153,7 @@ export interface ChatResponse {
   tool_events?: ToolEvent[];
   reminders?: ReminderEvent[];
   subagent_artifacts?: SubagentArtifact[];
+  grounding?: GroundingMetadata;
 }
 
 export interface CreatePlanRequest {
@@ -1143,4 +1163,5 @@ export interface TranscriptEntry {
   elapsed_ms?: number;
   reminders?: ReminderEvent[];
   subagent_artifacts?: SubagentArtifact[];
+  grounding?: GroundingMetadata;
 }

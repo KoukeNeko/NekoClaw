@@ -18,6 +18,7 @@ export function useChat() {
   const model = useAppStore((s) => s.model);
   const effectiveTimezone = useAppStore((s) => s.effectiveTimezone);
   const isStreaming = useAppStore((s) => s.isStreaming);
+  const googleSearchEnabled = useAppStore((s) => s.googleSearchEnabled);
 
   const addMessage = useAppStore((s) => s.addMessage);
   const updateLastAssistant = useAppStore((s) => s.updateLastAssistant);
@@ -70,6 +71,7 @@ export function useChat() {
         client_timezone: effectiveTimezone,
         client_sent_at: new Date().toISOString(),
         enable_tools: true,
+        enable_google_search: googleSearchEnabled,
       };
 
       abortRef.current = chatStream(req, (chunk: StreamChunk) => {
@@ -82,6 +84,7 @@ export function useChat() {
       model,
       effectiveTimezone,
       isStreaming,
+      googleSearchEnabled,
       addMessage,
       setStreaming,
       setActiveToolName,
@@ -118,6 +121,7 @@ export function useChat() {
         message: "",
         client_timezone: effectiveTimezone,
         enable_tools: true,
+        enable_google_search: googleSearchEnabled,
         run_id: runID,
         tool_approvals: decisions,
       };
@@ -126,7 +130,7 @@ export function useChat() {
         handleChunk(chunk);
       });
     },
-    [sessionID, provider, model, currentRunProvider, currentRunModel, effectiveTimezone, setStreaming, addMessage],
+    [sessionID, provider, model, currentRunProvider, currentRunModel, effectiveTimezone, googleSearchEnabled, setStreaming, addMessage],
   );
 
   const createPlan = useCallback(
@@ -248,6 +252,7 @@ export function useChat() {
             toolEvents: resp.tool_events,
             reminders: resp.reminders,
             subagentArtifacts: resp.subagent_artifacts,
+            grounding: resp.grounding,
           }));
 
           // Track usage

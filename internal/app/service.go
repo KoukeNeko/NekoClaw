@@ -560,6 +560,7 @@ type TranscriptMessage struct {
 	ElapsedMs         int64                   `json:"elapsed_ms,omitempty"`
 	Reminders         []core.ReminderEvent    `json:"reminders,omitempty"`
 	SubagentArtifacts []core.SubagentArtifact `json:"subagent_artifacts,omitempty"`
+	Grounding         *core.GroundingMetadata `json:"grounding,omitempty"`
 }
 
 // GetSessionTranscript returns user and assistant messages for display.
@@ -598,6 +599,9 @@ func (s *Service) GetSessionTranscript(sessionID string) []TranscriptMessage {
 				}
 				if len(e.MsgSubagentArtifacts) > 0 {
 					tm.SubagentArtifacts = append([]core.SubagentArtifact(nil), e.MsgSubagentArtifacts...)
+				}
+				if !e.MsgGrounding.IsEmpty() {
+					tm.Grounding = e.MsgGrounding
 				}
 			}
 			display = append(display, tm)
@@ -3269,24 +3273,25 @@ func (s *Service) HandleChat(ctx context.Context, req core.ChatRequest) (core.Ch
 		}
 
 		resp, err := s.attemptSingleProvider(ctx, attemptSingleProviderParams{
-			providerID:        candidate.provider,
-			modelID:           candidateModel,
-			isDefaultModel:    candidateIsDefault,
-			thinkingMode:      candidate.thinkingMode,
-			sessionID:         sessionID,
-			disableSession:    disableSession,
-			isFallback:        isFallback,
-			ephemeralMessages: ephemeralMessages,
-			prompt:            prompt,
-			images:            req.Images,
-			clientTimezone:    req.ClientTimezone,
-			clientSentAt:      req.ClientSentAt,
-			surface:           surface,
-			enableTools:       req.EnableTools,
-			toolMode:          req.ToolMode,
-			runID:             runID,
-			toolApprovals:     req.ToolApprovals,
-			reminders:         requestReminders,
+			providerID:         candidate.provider,
+			modelID:            candidateModel,
+			isDefaultModel:     candidateIsDefault,
+			thinkingMode:       candidate.thinkingMode,
+			sessionID:          sessionID,
+			disableSession:     disableSession,
+			isFallback:         isFallback,
+			ephemeralMessages:  ephemeralMessages,
+			prompt:             prompt,
+			images:             req.Images,
+			clientTimezone:     req.ClientTimezone,
+			clientSentAt:       req.ClientSentAt,
+			surface:            surface,
+			enableTools:        req.EnableTools,
+			enableGoogleSearch: req.EnableGoogleSearch,
+			toolMode:           req.ToolMode,
+			runID:              runID,
+			toolApprovals:      req.ToolApprovals,
+			reminders:          requestReminders,
 		})
 		if err == nil {
 			if isFallback {
@@ -3470,24 +3475,25 @@ func (s *Service) HandleChatStream(ctx context.Context, req core.ChatRequest) <-
 			}
 
 			resp, err := s.attemptSingleProvider(ctx, attemptSingleProviderParams{
-				providerID:        candidate.provider,
-				modelID:           candidateModel,
-				isDefaultModel:    candidateIsDefault,
-				thinkingMode:      candidate.thinkingMode,
-				sessionID:         sessionID,
-				disableSession:    disableSession,
-				isFallback:        isFallback,
-				ephemeralMessages: ephemeralMessages,
-				prompt:            prompt,
-				images:            req.Images,
-				clientTimezone:    req.ClientTimezone,
-				clientSentAt:      req.ClientSentAt,
-				surface:           surface,
-				enableTools:       req.EnableTools,
-				toolMode:          req.ToolMode,
-				runID:             runID,
-				toolApprovals:     req.ToolApprovals,
-				reminders:         requestReminders,
+				providerID:         candidate.provider,
+				modelID:            candidateModel,
+				isDefaultModel:     candidateIsDefault,
+				thinkingMode:       candidate.thinkingMode,
+				sessionID:          sessionID,
+				disableSession:     disableSession,
+				isFallback:         isFallback,
+				ephemeralMessages:  ephemeralMessages,
+				prompt:             prompt,
+				images:             req.Images,
+				clientTimezone:     req.ClientTimezone,
+				clientSentAt:       req.ClientSentAt,
+				surface:            surface,
+				enableTools:        req.EnableTools,
+				enableGoogleSearch: req.EnableGoogleSearch,
+				toolMode:           req.ToolMode,
+				runID:              runID,
+				toolApprovals:      req.ToolApprovals,
+				reminders:          requestReminders,
 				onStreamRetry: func(status string) {
 					emit(core.StreamChunk{Type: core.ChunkRetryStatus, RetryStatus: status})
 				},
@@ -3541,24 +3547,25 @@ func (s *Service) HandleChatStream(ctx context.Context, req core.ChatRequest) <-
 }
 
 type attemptSingleProviderParams struct {
-	providerID        string
-	modelID           string
-	isDefaultModel    bool
-	thinkingMode      core.ThinkingMode
-	sessionID         string
-	disableSession    bool
-	isFallback        bool // true when this is a fallback provider, not the primary
-	ephemeralMessages []core.Message
-	prompt            string
-	images            []core.ImageData
-	clientTimezone    string
-	clientSentAt      string
-	surface           core.Surface
-	enableTools       bool
-	toolMode          core.ToolMode
-	runID             string
-	toolApprovals     []core.ToolApprovalDecision
-	reminders         []core.ReminderEvent
+	providerID         string
+	modelID            string
+	isDefaultModel     bool
+	thinkingMode       core.ThinkingMode
+	sessionID          string
+	disableSession     bool
+	isFallback         bool // true when this is a fallback provider, not the primary
+	ephemeralMessages  []core.Message
+	prompt             string
+	images             []core.ImageData
+	clientTimezone     string
+	clientSentAt       string
+	surface            core.Surface
+	enableTools        bool
+	enableGoogleSearch bool
+	toolMode           core.ToolMode
+	runID              string
+	toolApprovals      []core.ToolApprovalDecision
+	reminders          []core.ReminderEvent
 	// Streaming callbacks (all optional, nil = disabled).
 	onStreamRetry func(status string)
 	onStreamTool  func(evt core.ToolEvent)
@@ -3697,6 +3704,12 @@ func (s *Service) attemptSingleProvider(
 			compressedMessages = append([]core.Message{systemMsg}, compressedMessages...)
 		}
 		baseGenerationParams = s.personaGenerationParams(activePersona)
+		// Persona-level default for Google Search grounding: if the persona
+		// opts in, treat it as enabled even when the client request did not
+		// set the flag. The request flag still wins when explicitly true.
+		if activePersona.Config.EnableGoogleSearch {
+			params.enableGoogleSearch = true
+		}
 	} else if mergedMemoryPrompt != "" {
 		systemMsg := core.Message{
 			Role:    core.RoleSystem,
@@ -3967,6 +3980,9 @@ func (s *Service) attemptSingleProvider(
 				Messages:     modelMessages,
 				UserMessage:  userMessage,
 				EnableTools:  true,
+				ProviderTools: provider.ProviderTools{
+					EnableGoogleSearch: params.enableGoogleSearch,
+				},
 				ToolMode:     params.toolMode,
 				AllowedTools: allowedTools,
 				RunID:        params.runID,
@@ -4016,6 +4032,7 @@ func (s *Service) attemptSingleProvider(
 						ToolEvents: runResult.Response.ToolEvents,
 						ElapsedMs:  responseElapsedMs,
 						Reminders:  cloneReminderEvents(params.reminders),
+						Grounding:  runResult.Response.Grounding,
 					}
 					entries := make([]core.SessionEntry, 0, len(runResult.SessionMessages))
 					for _, msg := range runResult.SessionMessages {
@@ -4127,11 +4144,15 @@ func (s *Service) attemptSingleProvider(
 					Messages:   modelMessages,
 					Account:    account,
 					Generation: attemptGenerationParams,
+					ProviderTools: provider.ProviderTools{
+						EnableGoogleSearch: params.enableGoogleSearch,
+					},
 				})
 				if streamErr == nil {
 					var fullText strings.Builder
 					var streamUsage core.UsageInfo
 					var streamEndpoint string
+					var streamGrounding *core.GroundingMetadata
 					streamOK := true
 					for chunk := range streamCh {
 						if chunk.Error != nil {
@@ -4146,6 +4167,9 @@ func (s *Service) attemptSingleProvider(
 						if chunk.Done {
 							streamUsage = chunk.Usage
 							streamEndpoint = chunk.Endpoint
+							if !chunk.Grounding.IsEmpty() {
+								streamGrounding = chunk.Grounding
+							}
 						}
 					}
 					if streamOK {
@@ -4158,6 +4182,7 @@ func (s *Service) attemptSingleProvider(
 								Usage:     streamUsage,
 								ElapsedMs: responseElapsedMs,
 								Reminders: cloneReminderEvents(params.reminders),
+								Grounding: streamGrounding,
 							})
 							if !params.disableSession {
 								sessionEntries := make([]core.SessionEntry, 0, 2)
@@ -4203,6 +4228,7 @@ func (s *Service) attemptSingleProvider(
 								ElapsedMs:   responseElapsedMs,
 								Status:      core.ChatStatusCompleted,
 								Reminders:   cloneReminderEvents(params.reminders),
+								Grounding:   streamGrounding,
 							}, nil
 						}
 						// Empty stream with no error: fall through to non-streaming Generate.
@@ -4241,6 +4267,9 @@ func (s *Service) attemptSingleProvider(
 			Messages:   modelMessages,
 			Account:    account,
 			Generation: attemptGenerationParams,
+			ProviderTools: provider.ProviderTools{
+				EnableGoogleSearch: params.enableGoogleSearch,
+			},
 		})
 		if err == nil {
 			responseElapsedMs := elapsedMs()
@@ -4250,6 +4279,7 @@ func (s *Service) attemptSingleProvider(
 				Usage:     resp.Usage,
 				ElapsedMs: responseElapsedMs,
 				Reminders: cloneReminderEvents(params.reminders),
+				Grounding: resp.Grounding,
 			})
 			if !params.disableSession {
 				sessionEntries := make([]core.SessionEntry, 0, 2)
@@ -4296,6 +4326,7 @@ func (s *Service) attemptSingleProvider(
 				ElapsedMs:   responseElapsedMs,
 				Status:      core.ChatStatusCompleted,
 				Reminders:   cloneReminderEvents(params.reminders),
+				Grounding:   resp.Grounding,
 			}, nil
 		}
 

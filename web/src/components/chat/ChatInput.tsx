@@ -1,10 +1,25 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import { useAppStore } from "@/store/appStore";
 
 interface Props {
   onSend: (text: string, images?: { mime_type: string; data: string; file_name?: string }[]) => void;
   onPlan: (text: string) => void;
   onCancel: () => void;
   isStreaming: boolean;
+}
+
+// modelSupportsGoogleSearch mirrors Go's geminiModelSupportsGoogleSearch.
+// Only Gemini 1.5 / 2.x / 3.x accept the built-in tool.
+function modelSupportsGoogleSearch(model: string): boolean {
+  const id = (model ?? "").trim().toLowerCase().replace(/^models\//, "");
+  if (!id || !id.startsWith("gemini-")) return false;
+  return (
+    id.startsWith("gemini-1.5") ||
+    id.startsWith("gemini-2.") ||
+    id.startsWith("gemini-2-") ||
+    id.startsWith("gemini-3.") ||
+    id.startsWith("gemini-3-")
+  );
 }
 
 /**
@@ -16,6 +31,11 @@ export function ChatInput({ onSend, onPlan, onCancel, isStreaming }: Props) {
   const [text, setText] = useState("");
   const [images, setImages] = useState<{ mime_type: string; data: string; file_name: string }[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const model = useAppStore((s) => s.model);
+  const googleSearchEnabled = useAppStore((s) => s.googleSearchEnabled);
+  const setGoogleSearchEnabled = useAppStore((s) => s.setGoogleSearchEnabled);
+  const searchSupported = modelSupportsGoogleSearch(model);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -121,6 +141,45 @@ export function ChatInput({ onSend, onPlan, onCancel, isStreaming }: Props) {
             ))}
           </div>
         )}
+
+        {/* Composer toggles */}
+        <div className="flex flex-wrap gap-2 mb-2">
+          <button
+            type="button"
+            data-testid="google-search-toggle"
+            onClick={() => searchSupported && setGoogleSearchEnabled(!googleSearchEnabled)}
+            disabled={!searchSupported}
+            className={
+              "btn btn-xs gap-1 normal-case " +
+              (googleSearchEnabled && searchSupported
+                ? "btn-primary"
+                : "btn-ghost border-base-300")
+            }
+            title={
+              searchSupported
+                ? googleSearchEnabled
+                  ? "已啟用 Google Search Grounding"
+                  : "啟用 Google Search Grounding（AI Mode 風格）"
+                : "目前模型不支援 Google Search Grounding（限 Gemini）"
+            }
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+              stroke="currentColor"
+              className="w-3.5 h-3.5"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"
+              />
+            </svg>
+            <span>Search</span>
+          </button>
+        </div>
 
         <div className="flex gap-2 items-end">
           <textarea

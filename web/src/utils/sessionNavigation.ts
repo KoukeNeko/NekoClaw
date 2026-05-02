@@ -18,6 +18,7 @@ function transcriptToMessages(entries: TranscriptEntry[]): ChatMessage[] {
     toolEvents: entry.tool_events,
     reminders: entry.reminders,
     subagentArtifacts: entry.subagent_artifacts,
+    grounding: entry.grounding,
     elapsed: entry.elapsed_ms,
   }));
 }

@@ -171,6 +171,7 @@ func (p *GeminiInternalProvider) GenerateToolTurn(ctx context.Context, req ToolT
 	requestBody := map[string]any{
 		"contents": contents,
 	}
+	var geminiTools []map[string]any
 	if useXMLTools {
 		xmlBlock := formatToolsXMLBlock(req.Tools)
 		if systemInstruction != "" {
@@ -178,8 +179,14 @@ func (p *GeminiInternalProvider) GenerateToolTurn(ctx context.Context, req ToolT
 		} else {
 			systemInstruction = xmlBlock
 		}
-	} else if tools := toGeminiFunctionDeclarations(req.Tools); len(tools) > 0 {
-		requestBody["tools"] = tools
+	} else {
+		geminiTools = toGeminiFunctionDeclarations(req.Tools)
+	}
+	geminiTools = maybeInjectGoogleSearch(
+		geminiTools, req.ProviderTools.EnableGoogleSearch, useXMLTools, p.ID(), modelID,
+	)
+	if len(geminiTools) > 0 {
+		requestBody["tools"] = geminiTools
 	}
 	if systemInstruction != "" {
 		requestBody["systemInstruction"] = map[string]any{
@@ -274,6 +281,7 @@ func (p *GeminiInternalProvider) GenerateToolTurn(ctx context.Context, req ToolT
 				Usage:      usage,
 				StopReason: stopReason,
 				ToolCalls:  xmlCalls,
+				Grounding:  result.Grounding,
 			}, nil
 		}
 
@@ -301,6 +309,7 @@ func (p *GeminiInternalProvider) GenerateToolTurn(ctx context.Context, req ToolT
 			StopReason:      stopReason,
 			ToolCalls:       result.Calls,
 			RawModelContent: result.RawModelContent,
+			Grounding:       result.Grounding,
 		}, nil
 	}
 
@@ -476,14 +485,20 @@ func (p *GeminiInternalProvider) storeListCache(cacheKey string, models []string
 
 func (p *GeminiInternalProvider) Generate(ctx context.Context, req GenerateRequest) (GenerateResponse, error) {
 	endpointOrder := p.resolveEndpointOrder(req.Account)
+	modelID := strings.TrimSpace(req.Model)
 	requestBody := map[string]any{
 		"contents": toGeminiContents(req.Messages),
 	}
-	if genConfig := buildGeminiGenerationConfig(p.ID(), strings.TrimSpace(req.Model), req.Generation); genConfig != nil {
+	if tools := maybeInjectGoogleSearch(
+		nil, req.ProviderTools.EnableGoogleSearch, false, p.ID(), modelID,
+	); len(tools) > 0 {
+		requestBody["tools"] = tools
+	}
+	if genConfig := buildGeminiGenerationConfig(p.ID(), modelID, req.Generation); genConfig != nil {
 		requestBody["generationConfig"] = genConfig
 	}
 	payload := map[string]any{
-		"model":   strings.TrimSpace(req.Model),
+		"model":   modelID,
 		"request": requestBody,
 	}
 	if projectID := strings.TrimSpace(req.Account.Metadata["project_id"]); projectID != "" {
@@ -548,7 +563,13 @@ func (p *GeminiInternalProvider) Generate(ctx context.Context, req GenerateReque
 			continue
 		}
 		usage := extractUsageFromGeminiResponse(respBody)
-		return GenerateResponse{Text: text, Endpoint: endpoint, Raw: respBody, Usage: usage}, nil
+		return GenerateResponse{
+			Text:      text,
+			Endpoint:  endpoint,
+			Raw:       respBody,
+			Usage:     usage,
+			Grounding: extractGroundingFromBody(respBody),
+		}, nil
 	}
 
 	if lastErr == nil {
@@ -562,14 +583,20 @@ func (p *GeminiInternalProvider) Generate(ctx context.Context, req GenerateReque
 // the response is fully consumed or an error occurs.
 func (p *GeminiInternalProvider) GenerateStream(ctx context.Context, req GenerateRequest) (<-chan GenerateStreamChunk, error) {
 	endpointOrder := p.resolveEndpointOrder(req.Account)
+	modelID := strings.TrimSpace(req.Model)
 	requestBody := map[string]any{
 		"contents": toGeminiContents(req.Messages),
 	}
-	if genConfig := buildGeminiGenerationConfig(p.ID(), strings.TrimSpace(req.Model), req.Generation); genConfig != nil {
+	if tools := maybeInjectGoogleSearch(
+		nil, req.ProviderTools.EnableGoogleSearch, false, p.ID(), modelID,
+	); len(tools) > 0 {
+		requestBody["tools"] = tools
+	}
+	if genConfig := buildGeminiGenerationConfig(p.ID(), modelID, req.Generation); genConfig != nil {
 		requestBody["generationConfig"] = genConfig
 	}
 	payload := map[string]any{
-		"model":   strings.TrimSpace(req.Model),
+		"model":   modelID,
 		"request": requestBody,
 	}
 	if projectID := strings.TrimSpace(req.Account.Metadata["project_id"]); projectID != "" {
@@ -640,6 +667,7 @@ func (p *GeminiInternalProvider) readGeminiSSEStream(ctx context.Context, resp *
 	defer resp.Body.Close()
 
 	var usage core.UsageInfo
+	var grounding *GroundingMetadata
 	var eventData []string
 
 	// flushEvent parses the accumulated SSE data lines as a single JSON event,
@@ -673,6 +701,14 @@ func (p *GeminiInternalProvider) readGeminiSSEStream(ctx context.Context, resp *
 			case ch <- GenerateStreamChunk{Text: text}:
 			case <-ctx.Done():
 				return true
+			}
+		}
+
+		if candidates, ok := root["candidates"].([]any); ok {
+			for _, rawCandidate := range candidates {
+				if candidate, ok := rawCandidate.(map[string]any); ok {
+					grounding = mergeGrounding(grounding, extractGroundingMetadata(candidate))
+				}
 			}
 		}
 
@@ -716,7 +752,7 @@ func (p *GeminiInternalProvider) readGeminiSSEStream(ctx context.Context, resp *
 	}
 
 	// Send the final "done" chunk with accumulated usage and endpoint.
-	ch <- GenerateStreamChunk{Done: true, Endpoint: endpoint, Usage: usage}
+	ch <- GenerateStreamChunk{Done: true, Endpoint: endpoint, Usage: usage, Grounding: grounding}
 }
 
 func (p *GeminiInternalProvider) RetrieveQuota(ctx context.Context, account core.Account) (GeminiQuotaResponse, error) {

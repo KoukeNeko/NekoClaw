@@ -26,12 +26,20 @@ const reminderLabels: Record<string, string> = {
 export function MessageBubble({ message }: Props) {
   const isUser = message.role === "user";
   const isError = message.role === "error";
+  const hasGrounding =
+    message.role === "assistant" &&
+    Boolean(
+      message.grounding &&
+        ((message.grounding.sources?.length ?? 0) > 0 ||
+          (message.grounding.search_queries?.length ?? 0) > 0),
+    );
   const hasFooter =
     message.role === "assistant" &&
     (Boolean(message.usage) ||
       (message.toolEvents?.length ?? 0) > 0 ||
       (message.reminders?.length ?? 0) > 0 ||
       message.elapsed != null ||
+      hasGrounding ||
       Boolean(message.provider && message.model));
 
   const htmlContent = useMemo(() => {
@@ -116,6 +124,59 @@ export function MessageBubble({ message }: Props) {
               )}
               {message.provider && message.model && (
                 <span>{message.provider}/{message.model}</span>
+              )}
+            </div>
+          )}
+          {hasGrounding && message.grounding && (
+            <div className="space-y-1" data-testid="grounding-block">
+              {message.grounding.search_queries && message.grounding.search_queries.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1">
+                  <span className="opacity-60">🔍</span>
+                  {message.grounding.search_queries.map((query, i) => (
+                    <span
+                      key={`q-${i}`}
+                      className="badge badge-ghost badge-xs"
+                      data-testid="grounding-query"
+                    >
+                      {query}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {message.grounding.sources && message.grounding.sources.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1">
+                  <span className="opacity-60">Sources:</span>
+                  {message.grounding.sources.map((source, i) => {
+                    const host = (() => {
+                      try {
+                        return source.uri ? new URL(source.uri).hostname : source.title || "source";
+                      } catch {
+                        return source.title || source.uri || "source";
+                      }
+                    })();
+                    return source.uri ? (
+                      <a
+                        key={`s-${i}`}
+                        href={source.uri}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="badge badge-outline badge-xs hover:badge-primary"
+                        title={source.title || source.uri}
+                        data-testid="grounding-chip"
+                      >
+                        {i + 1}. {host}
+                      </a>
+                    ) : (
+                      <span
+                        key={`s-${i}`}
+                        className="badge badge-outline badge-xs"
+                        data-testid="grounding-chip"
+                      >
+                        {i + 1}. {host}
+                      </span>
+                    );
+                  })}
+                </div>
               )}
             </div>
           )}

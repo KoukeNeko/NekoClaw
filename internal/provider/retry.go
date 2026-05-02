@@ -42,7 +42,7 @@ const retryAfterCap = 60 * time.Second
 // the account pool and fallback chain level, not via HTTP-level retries.
 func isRetriableStatus(statusCode int) bool {
 	switch statusCode {
-	case http.StatusRequestTimeout,      // 408
+	case http.StatusRequestTimeout, // 408
 		http.StatusInternalServerError, // 500
 		http.StatusBadGateway,          // 502
 		http.StatusServiceUnavailable,  // 503

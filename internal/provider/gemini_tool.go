@@ -265,8 +265,30 @@ type geminiExtractResult struct {
 	Text            string
 	Calls           []ToolCall
 	Usage           core.UsageInfo
-	RawModelContent json.RawMessage // raw candidate content (preserves thought_signature)
+	RawModelContent json.RawMessage    // raw candidate content (preserves thought_signature)
+	Grounding       *GroundingMetadata // populated when google_search grounding is active
 	OK              bool
+}
+
+// mergeGrounding combines grounding metadata across SSE events. The Gemini
+// streaming API typically sends one consolidated groundingMetadata block in
+// the final event, but multi-turn responses may emit incremental fragments.
+func mergeGrounding(existing, incoming *GroundingMetadata) *GroundingMetadata {
+	if incoming.IsEmpty() {
+		return existing
+	}
+	if existing.IsEmpty() {
+		return incoming
+	}
+	merged := &GroundingMetadata{
+		SearchQueries: append([]string(nil), existing.SearchQueries...),
+		Sources:       append([]GroundingSource(nil), existing.Sources...),
+		Supports:      append([]GroundingSupport(nil), existing.Supports...),
+	}
+	merged.SearchQueries = append(merged.SearchQueries, incoming.SearchQueries...)
+	merged.Sources = append(merged.Sources, incoming.Sources...)
+	merged.Supports = append(merged.Supports, incoming.Supports...)
+	return merged
 }
 
 // extractToolCallsFromGeminiResponse parses a Gemini generateContent response
@@ -300,6 +322,7 @@ func extractToolCallsFromGeminiSSE(raw string) geminiExtractResult {
 	var calls []ToolCall
 	var usage core.UsageInfo
 	var rawModelContent json.RawMessage
+	var grounding *GroundingMetadata
 	var eventData []string
 
 	flush := func() {
@@ -326,6 +349,7 @@ func extractToolCallsFromGeminiSSE(raw string) geminiExtractResult {
 		if len(r.Calls) > 0 && len(r.RawModelContent) > 0 {
 			rawModelContent = r.RawModelContent
 		}
+		grounding = mergeGrounding(grounding, r.Grounding)
 	}
 
 	for _, line := range lines {
@@ -341,7 +365,7 @@ func extractToolCallsFromGeminiSSE(raw string) geminiExtractResult {
 	}
 	flush()
 
-	if len(textParts) == 0 && len(calls) == 0 {
+	if len(textParts) == 0 && len(calls) == 0 && grounding.IsEmpty() {
 		return geminiExtractResult{}
 	}
 	return geminiExtractResult{
@@ -349,6 +373,7 @@ func extractToolCallsFromGeminiSSE(raw string) geminiExtractResult {
 		Calls:           calls,
 		Usage:           usage,
 		RawModelContent: rawModelContent,
+		Grounding:       grounding,
 		OK:              true,
 	}
 }
@@ -374,12 +399,14 @@ func extractToolCallsFromGeminiJSON(body []byte) geminiExtractResult {
 	var textParts []string
 	var calls []ToolCall
 	var rawModelContent json.RawMessage
+	var grounding *GroundingMetadata
 
 	for _, rawCandidate := range candidates {
 		candidate, _ := rawCandidate.(map[string]any)
 		if candidate == nil {
 			continue
 		}
+		grounding = mergeGrounding(grounding, extractGroundingMetadata(candidate))
 		content, _ := candidate["content"].(map[string]any)
 		if content == nil {
 			continue
@@ -430,7 +457,7 @@ func extractToolCallsFromGeminiJSON(body []byte) geminiExtractResult {
 		}
 	}
 
-	if len(textParts) == 0 && len(calls) == 0 {
+	if len(textParts) == 0 && len(calls) == 0 && grounding.IsEmpty() {
 		return geminiExtractResult{}
 	}
 
@@ -442,6 +469,7 @@ func extractToolCallsFromGeminiJSON(body []byte) geminiExtractResult {
 		Calls:           calls,
 		Usage:           usage,
 		RawModelContent: rawModelContent,
+		Grounding:       grounding,
 		OK:              true,
 	}
 }

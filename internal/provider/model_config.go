@@ -8,29 +8,29 @@ package provider
 // before "gemini-2.5". This allows specific overrides for variants.
 var modelContextWindows = map[string]int{
 	// Gemini models
-	"gemini-3.1-pro":       2_000_000,
-	"gemini-3-pro":         1_000_000,
-	"gemini-3-flash":       1_000_000,
-	"gemini-2.5-pro":       1_000_000,
-	"gemini-2.5-flash":     1_000_000,
-	"gemini-2.0-flash":     1_000_000,
-	"gemini-1.5-pro":       2_000_000,
-	"gemini-1.5-flash":     1_000_000,
+	"gemini-3.1-pro":   2_000_000,
+	"gemini-3-pro":     1_000_000,
+	"gemini-3-flash":   1_000_000,
+	"gemini-2.5-pro":   1_000_000,
+	"gemini-2.5-flash": 1_000_000,
+	"gemini-2.0-flash": 1_000_000,
+	"gemini-1.5-pro":   2_000_000,
+	"gemini-1.5-flash": 1_000_000,
 
 	// Anthropic models
-	"claude-opus-4":        200_000,
-	"claude-sonnet-4":      200_000,
-	"claude-haiku-3":       200_000,
+	"claude-opus-4":   200_000,
+	"claude-sonnet-4": 200_000,
+	"claude-haiku-3":  200_000,
 
 	// OpenAI models
-	"gpt-5":                200_000,
-	"gpt-5.1":              200_000,
-	"gpt-5.3":              200_000,
-	"gpt-4.1":              1_000_000,
-	"gpt-4o":               128_000,
-	"gpt-4-turbo":          128_000,
-	"o3":                   200_000,
-	"o4-mini":              200_000,
+	"gpt-5":       200_000,
+	"gpt-5.1":     200_000,
+	"gpt-5.3":     200_000,
+	"gpt-4.1":     1_000_000,
+	"gpt-4o":      128_000,
+	"gpt-4-turbo": 128_000,
+	"o3":          200_000,
+	"o4-mini":     200_000,
 }
 
 // lookupModelContextWindow returns the context window for a known model,

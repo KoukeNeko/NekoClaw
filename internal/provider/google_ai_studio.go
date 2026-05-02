@@ -153,6 +153,7 @@ func (p *GoogleAIStudioProvider) GenerateToolTurn(ctx context.Context, req ToolT
 	payload := map[string]any{
 		"contents": contents,
 	}
+	var geminiTools []map[string]any
 	if useXMLTools {
 		// XML path: inject tool definitions into system instruction
 		// instead of sending the tools[] payload field.
@@ -162,8 +163,14 @@ func (p *GoogleAIStudioProvider) GenerateToolTurn(ctx context.Context, req ToolT
 		} else {
 			systemInstruction = xmlBlock
 		}
-	} else if tools := toGeminiFunctionDeclarations(req.Tools); len(tools) > 0 {
-		payload["tools"] = tools
+	} else {
+		geminiTools = toGeminiFunctionDeclarations(req.Tools)
+	}
+	geminiTools = maybeInjectGoogleSearch(
+		geminiTools, req.ProviderTools.EnableGoogleSearch, useXMLTools, p.ID(), modelID,
+	)
+	if len(geminiTools) > 0 {
+		payload["tools"] = geminiTools
 	}
 	if systemInstruction != "" {
 		payload["systemInstruction"] = map[string]any{
@@ -274,6 +281,7 @@ func (p *GoogleAIStudioProvider) GenerateToolTurn(ctx context.Context, req ToolT
 		StopReason:      stopReason,
 		ToolCalls:       result.Calls,
 		RawModelContent: result.RawModelContent,
+		Grounding:       result.Grounding,
 	}, nil
 }
 
@@ -294,6 +302,11 @@ func (p *GoogleAIStudioProvider) Generate(ctx context.Context, req GenerateReque
 
 	payload := map[string]any{
 		"contents": toAIStudioContents(req.Messages),
+	}
+	if tools := maybeInjectGoogleSearch(
+		nil, req.ProviderTools.EnableGoogleSearch, false, p.ID(), modelID,
+	); len(tools) > 0 {
+		payload["tools"] = tools
 	}
 	if genConfig := buildGeminiGenerationConfig(p.ID(), modelID, req.Generation); genConfig != nil {
 		payload["generationConfig"] = genConfig
@@ -354,10 +367,11 @@ func (p *GoogleAIStudioProvider) Generate(ctx context.Context, req GenerateReque
 		}
 	}
 	return GenerateResponse{
-		Text:     text,
-		Endpoint: p.baseURL,
-		Raw:      body,
-		Usage:    usage,
+		Text:      text,
+		Endpoint:  p.baseURL,
+		Raw:       body,
+		Usage:     usage,
+		Grounding: extractGroundingFromBody(body),
 	}, nil
 }
 
@@ -381,6 +395,11 @@ func (p *GoogleAIStudioProvider) GenerateStream(ctx context.Context, req Generat
 	// Build the same payload as Generate().
 	payload := map[string]any{
 		"contents": toAIStudioContents(req.Messages),
+	}
+	if tools := maybeInjectGoogleSearch(
+		nil, req.ProviderTools.EnableGoogleSearch, false, p.ID(), modelID,
+	); len(tools) > 0 {
+		payload["tools"] = tools
 	}
 	if genConfig := buildGeminiGenerationConfig(p.ID(), modelID, req.Generation); genConfig != nil {
 		payload["generationConfig"] = genConfig
@@ -439,6 +458,7 @@ func (p *GoogleAIStudioProvider) GenerateStream(ctx context.Context, req Generat
 		defer resp.Body.Close()
 
 		var accumulatedUsage core.UsageInfo
+		var accumulatedGrounding *GroundingMetadata
 		scanner := bufio.NewScanner(resp.Body)
 		// Increase buffer size for large SSE data lines.
 		scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
@@ -463,6 +483,19 @@ func (p *GoogleAIStudioProvider) GenerateStream(ctx context.Context, req Generat
 				case ch <- GenerateStreamChunk{Text: text}:
 				case <-ctx.Done():
 					return
+				}
+			}
+
+			// Accumulate grounding metadata from every chunk; Gemini sends
+			// the consolidated block in the final event but may emit fragments.
+			if candidates, ok := root["candidates"].([]any); ok {
+				for _, rawCandidate := range candidates {
+					if candidate, ok := rawCandidate.(map[string]any); ok {
+						accumulatedGrounding = mergeGrounding(
+							accumulatedGrounding,
+							extractGroundingMetadata(candidate),
+						)
+					}
 				}
 			}
 
@@ -509,9 +542,10 @@ func (p *GoogleAIStudioProvider) GenerateStream(ctx context.Context, req Generat
 		// Send the final done chunk with accumulated usage.
 		select {
 		case ch <- GenerateStreamChunk{
-			Done:     true,
-			Endpoint: p.baseURL,
-			Usage:    accumulatedUsage,
+			Done:      true,
+			Endpoint:  p.baseURL,
+			Usage:     accumulatedUsage,
+			Grounding: accumulatedGrounding,
 		}:
 		case <-ctx.Done():
 		}
