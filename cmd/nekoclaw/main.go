@@ -472,6 +472,14 @@ func buildService(opts buildServiceOptions) (*app.Service, error) {
 	})
 	svc.RegisterProvider(gitHubModelsProvider)
 
+	// Claude Code CLI provider — local, personal use only. Auth comes from
+	// the user's existing `claude` login; no token in accounts.json is needed.
+	claudeCLIProvider := provider.NewClaudeCLIProvider(provider.ClaudeCLIOptions{})
+	svc.RegisterProvider(claudeCLIProvider)
+	svc.RegisterPool(core.NewAccountPool("claude-cli", []core.Account{
+		{ID: "claude-cli-default", Provider: "claude-cli", Type: core.AccountAPIKey, Token: "local"},
+	}, nil, core.DefaultCooldownConfig()))
+
 	accounts, err := loadAccounts(opts.AccountsPath)
 	if err != nil {
 		return nil, err

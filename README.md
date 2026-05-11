@@ -170,6 +170,33 @@ API endpoints:
 
 Credentials are managed through Web UI Settings > Auth and persisted in the auth store.
 
+## Claude Code CLI Provider (personal use)
+
+Wraps the locally installed `claude` binary so you can chat against your existing Claude Code subscription without supplying an API key. Authentication is whatever your `claude` install already uses (OAuth subscription, CLI token, etc.).
+
+> ⚠️ **Personal local use only.** Anthropic's terms forbid reselling or proxying a Claude Code subscription to third parties — do not expose this provider over the public internet or share it with other users. For shared/commercial use, use the Anthropic API instead.
+
+Setup:
+
+1. Install Claude Code and run `claude auth login` (or `claude /login`) once.
+2. (Optional) override the binary path with `NEKOCLAW_CLAUDE_CLI_BIN=/abs/path/to/claude`.
+3. Start NekoClaw with `--provider claude-cli --model sonnet` (or `opus` / `haiku` / a full model id like `claude-sonnet-4-6`).
+
+No `accounts.json` entry is required — a placeholder pool is registered automatically.
+
+Verify the install before starting the server:
+
+```bash
+./scripts/verify_claude_cli.sh        # smoke-test the CLI directly
+./scripts/verify_claude_cli_e2e.sh    # boots the API server and POSTs /v1/chat
+```
+
+Limitations (v1):
+
+- chat only — no tool calling, no streaming, no image input
+- each request spawns a fresh `claude -p` process (~1–3 s cold-start overhead)
+- conversation history is replayed on every turn (stateless; not using `--resume`)
+
 ## Accounts File (optional)
 
 Create `accounts.json` in repo root:
